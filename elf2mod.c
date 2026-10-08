@@ -75,6 +75,17 @@ int opt_revs = -1;
 int opt_edit = -1;
 int opt_stb = 0; // 1: as Microware C 3.2's l68, 2: as Ultra C's l68
 const char *opt_owner = NULL;
+// The module's layout (this fork), as a front end such as m68k-os9-l68 asks
+// for it: elf2mod has no notion of module types, only of these settings.
+int opt_perms = -1; // -p: the header's permissions, default 0x0555
+int opt_sticky = 0; // -S: the sticky bit (bit 6 of M$Attr) on top of __os9_attrev
+int opt_namelast = 0; // -N: the name after the code, not after the header
+int opt_typelang = -1; // --typelang: overrides __os9_typelang
+int opt_header = 0x48; // --header: 0x30 (no fields), 0x3C (M$Exec, M$Excpt, M$Mem), 0x48
+int opt_xalign = 0; // -x: the code's start in the module aligned to this, zero fill
+int opt_raw = 0; // --raw: the module's body only, no header, name or CRC
+int opt_noentry = 0; // --entry=none: no entry point, whatever __os9_entry says
+int opt_namepad = 0; // --name-pad: zero bytes after the name (l68 -x on a trap library)
 #define DEFAULT_STACK 0x00000C00
 #define DEFAULT_REVS 1
 #define DEFAULT_EDIT 0
@@ -276,14 +287,67 @@ int opt(int *argc, char ***argv) {
 		{ "edit",  required_argument, NULL, 'e' },
 		{ "stb",   optional_argument, NULL, 'g' },
 		{ "owner", required_argument, NULL, 'u' },
+		{ "perms", required_argument, NULL, 'p' },
+		{ "sticky", no_argument,      NULL, 'S' },
+		{ "name-last", optional_argument, NULL, 'N' },
+		{ "code-align", required_argument, NULL, 'x' },
+		{ "typelang", required_argument, NULL, 'T' + 0x100 },
+		{ "header", required_argument, NULL, 'H' + 0x100 },
+		{ "raw",   no_argument,       NULL, 'R' + 0x100 },
+		{ "entry", required_argument, NULL, 'E' + 0x100 },
+		{ "name-pad", required_argument, NULL, 'P' + 0x100 },
 		{ "help",  no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 },
 	};
 
 	for(;;) {
-		switch(getopt_long(*argc, *argv, "n:s:r:e:gu:h", options, NULL)) {
+		switch(getopt_long(*argc, *argv, "n:s:r:e:gu:p:SN::x:h", options, NULL)) {
 		case 'n':
 			opt_name = optarg;
+			break;
+		case 'p':
+			opt_perms = strtol(optarg + (*optarg == '$'), NULL, 16);
+			break;
+		case 'S':
+			opt_sticky = 1;
+			break;
+		case 'N':
+			opt_namelast = 1;
+			if(optarg) opt_name = optarg;
+			break;
+		case 'x':
+			opt_xalign = strtol(optarg, NULL, 0);
+			if(opt_xalign != 2 && opt_xalign != 4 && opt_xalign != 8 && opt_xalign != 16) {
+				printf("code alignment %s: 2, 4, 8 or 16\n", optarg);
+				return 0;
+			}
+			break;
+		case 'T' + 0x100:
+			opt_typelang = strtol(optarg + (*optarg == '$'), NULL, 16);
+			break;
+		case 'H' + 0x100:
+			opt_header = strtol(optarg + (*optarg == '$'), NULL, *optarg == '$' ? 16 : 0);
+			if(opt_header != 0x30 && opt_header != 0x3C && opt_header != 0x48) {
+				printf("header size %s: 0x30, 0x3C or 0x48\n", optarg);
+				return 0;
+			}
+			break;
+		case 'R' + 0x100:
+			opt_raw = 1;
+			break;
+		case 'E' + 0x100:
+			if(strcmp(optarg, "none")) {
+				printf("--entry=%s: only none\n", optarg);
+				return 0;
+			}
+			opt_noentry = 1;
+			break;
+		case 'P' + 0x100:
+			opt_namepad = strtol(optarg, NULL, 0);
+			if(opt_namepad < 0 || opt_namepad > 64 || opt_namepad % 2) {
+				printf("--name-pad=%s: an even number of bytes up to 64\n", optarg);
+				return 0;
+			}
 			break;
 		case 's':
 			opt_stack = strtol(optarg, NULL, 0);
@@ -317,6 +381,18 @@ int opt(int *argc, char ***argv) {
 			printf("  -g, --stb[=STYLE]      also write a symbol module OUTFILE.stb for the debugger,\n");
 			printf("                         as Microware C 3.2's l68 (c32, default) or Ultra C's (ucc)\n");
 			printf("  -u, --owner=GROUP.USER set module owner, default $GRPUSER or 0.0\n");
+			printf("  -p, --perms=HEX        set the header's permissions, default 555\n");
+			printf("  -S, --sticky           set the sticky bit (M$Attr bit 6) on top of __os9_attrev\n");
+			printf("  -N, --name-last[=NAME] put the module name after the code, not after the header\n");
+			printf("  -x, --code-align=N     align the code's start in the module to N (2, 4, 8, 16)\n");
+			printf("      --typelang=HEX     set type and language, default __os9_typelang or 0101\n");
+			printf("      --header=SIZE      0x48 (program header, default), 0x3C (M$Exec, M$Excpt,\n");
+			printf("                         M$Mem; name last) or 0x30 (no fields; name last)\n");
+			printf("      --raw              write the module's body only: no header, name or CRC\n");
+			printf("      --entry=none       no entry point, whatever __os9_entry says\n");
+			printf("      --name-pad=BYTES   zero bytes after the name (as l68 -x= pads a trap library)\n");
+			printf("  A stack, entry point, data area, initialized data or trap entry that is\n");
+			printf("  nonzero but has no field in the chosen header is an error.\n");
 			printf("  -h, --help             show this help\n");
 			return 0;
 		case -1:
@@ -465,10 +541,10 @@ int main(int argc, char *argv[]) {
 	long nsyms = bfd_canonicalize_symtab(abfd, syms);
 
 	// Module header values from a mainline ROF converted by rof2elf.
-	asymbol *s_tylan = NULL, *s_attrev = NULL, *s_edition = NULL, *s_stack = NULL, *s_entry = NULL, *s_trapent = NULL;
+	asymbol *s_typelang = NULL, *s_attrev = NULL, *s_edition = NULL, *s_stack = NULL, *s_entry = NULL, *s_trapent = NULL;
 	for(long i = 0; i < nsyms; i++) {
 		const char *n = bfd_asymbol_name(syms[i]);
-		if(!strcmp(n, "__os9_tylan")) s_tylan = syms[i];
+		if(!strcmp(n, "__os9_typelang")) s_typelang = syms[i];
 		else if(!strcmp(n, "__os9_attrev")) s_attrev = syms[i];
 		else if(!strcmp(n, "__os9_edition")) s_edition = syms[i];
 		else if(!strcmp(n, "__os9_stack")) s_stack = syms[i];
@@ -585,26 +661,67 @@ int main(int argc, char *argv[]) {
 	}
 	qsort(drefs, ndrefs, sizeof(IdRef), cmp_idref);
 
+	// The module's values, and whether the chosen header has a field for
+	// each (this fork): a value that is missing or zero needs none; a
+	// nonzero one without a field is an error, whatever its source (a
+	// symbol from the root psect, an option or a default). --raw has no
+	// header, so nothing needs a field.
+	int has_fields = opt_raw || opt_header >= 0x3C; // M$Exec, M$Excpt, M$Mem
+	int has_prog = opt_raw || opt_header >= 0x48; // M$Stack, M$IData, M$IRefs
+	int64_t stack = opt_stack >= 0 ? opt_stack : s_stack ? (int)bfd_asymbol_value(s_stack) : has_prog ? DEFAULT_STACK : 0;
+	int64_t entryoff = opt_noentry ? 0 : (int64_t)(int32_t)(entry - tvma);
+	{
+		const char *missing = NULL;
+		if(!has_prog && stack != 0) missing = "a stack (M$Stack)";
+		else if(!has_prog && (idsize != 0 || ndrefs != 0)) missing = "initialized data (M$IData, M$IRefs)";
+		else if(!has_fields && entryoff != 0) missing = "an entry point (M$Exec)";
+		else if(!has_fields && s_trapent) missing = "a trap entry (M$Excpt)";
+		else if(!has_fields && dend != 0) missing = "a data area (M$Mem)";
+		if(missing) {
+			printf("the module has %s, but its header (size 0x%X) has no field for it\n", missing, opt_header);
+			return 1;
+		}
+	}
+	// The name follows the code when the header has no program fields, as
+	// with Microware's linkers.
+	int namelast = opt_namelast || !has_prog;
+
 	// generate
 	Vec *vec = vec_new(0x1000);
 
-	vec_zero(vec, sizeof(struct modheader));
+	if(!opt_raw) {
+		vec_zero(vec, opt_header);
+	}
 
-	size_t iname = vec_append(vec, opt_name, strlen(opt_name) + 1);
-	// pad to align to word
-	vec_zero(vec, (strlen(opt_name) + 1) % 2);
+	size_t iname = 0;
+	if(!opt_raw && !namelast) {
+		iname = vec_append(vec, opt_name, strlen(opt_name) + 1);
+		// pad to align to word
+		vec_zero(vec, (strlen(opt_name) + 1) % 2);
+		vec_zero(vec, opt_namepad);
+	}
+	if(!opt_raw && opt_xalign > 1) {
+		vec_zero(vec, (opt_xalign - vec->len % opt_xalign) % opt_xalign);
+	}
 
 	size_t itext = vec_space(vec, tsize);
 	if(!bfd_get_section_contents(abfd, text, vec->buf + itext, 0, tsize)) {
 		bfd_perror("could not read .text");
 		return 1;
 	}
+	if(opt_raw) {
+		iname = itext; // no name: bname is the code's start
+	} else if(namelast) {
+		iname = vec_append(vec, opt_name, strlen(opt_name) + 1);
+		vec_zero(vec, (strlen(opt_name) + 1) % 2);
+		vec_zero(vec, opt_namepad);
+	}
 
 	struct {
 		uint32_t off;
 		uint32_t len;
 	} idatahdr = { BE32(idstart), BE32(idsize) };
-	size_t iidatahdr = vec_append(vec, &idatahdr, sizeof(idatahdr));
+	size_t iidatahdr = has_prog ? vec_append(vec, &idatahdr, sizeof(idatahdr)) : 0;
 	size_t iidata = vec_zero(vec, idsize);
 	if(!bfd_get_section_contents(abfd, data, vec->buf + iidata + DOFF(bfd_section_vma(data)) - idstart, 0, dsize)) {
 		bfd_perror("could not read .data");
@@ -643,7 +760,7 @@ int main(int argc, char *argv[]) {
 		// entries), then the CRC. A reference to etext is near only if it
 		// reaches even that far.
 		size_t jtcap = have_jt && have_ejt && (int32_t)(ejt - jt) >= 0 ? (size_t)(int32_t)(ejt - jt) / 6 : 0;
-		uint64_t maxend = vec->len + 8 + 6 * (uint64_t)(ndrefs + jtcap) + 4;
+		uint64_t maxend = vec->len + 8 + 6 * (uint64_t)(ndrefs + jtcap) + 4 + 4; // + 4: etext (see below)
 		for(long i = 0; i < ntrels; i++) {
 			arelent *rel = trels[i];
 			if(rel->howto->type != 5 /* R_68K_PC16 */ && rel->howto->type != 14 /* R_68K_PLT16 */) {
@@ -758,24 +875,28 @@ int main(int argc, char *argv[]) {
 	}
 
 	// idrefs
-	size_t iidrefs = make_idrefs(vec, drefs, ndrefs, 1);
-	make_idrefs(vec, drefs, ndrefs, 0);
+	size_t iidrefs = has_prog ? make_idrefs(vec, drefs, ndrefs, 1) : 0;
+	if(has_prog) make_idrefs(vec, drefs, ndrefs, 0);
 
 	// crc, with pad on head
-	size_t icrc = vec_zero(vec, 4);
+	size_t icrc = opt_raw ? 0 : vec_zero(vec, 4);
 
-	struct modheader *mh = (void*)(vec->buf + 0);
+	// The header, as far as it reaches (--header), into a separate buffer:
+	// a short header's fields would otherwise land on the code.
+	struct modheader mhbuf;
+	struct modheader *mh = &mhbuf;
+	memset(mh, 0, sizeof(*mh));
 	mh->magic = BE16(0x4AFC);
 	mh->sysrev = BE16(0x0001);
 	mh->size = BE32(vec->len);
 	mh->owner = BE32(owner);
 	mh->name = BE32(iname);
-	mh->accs = BE16(0x0555); // r-xr-xr-x
-	uint16_t tylan = s_tylan ? bfd_asymbol_value(s_tylan) : 0x0101;
+	mh->accs = BE16(opt_perms >= 0 ? opt_perms : 0x0555); // r-xr-xr-x by default
+	uint16_t typelang = opt_typelang >= 0 ? (uint16_t)opt_typelang : s_typelang ? (uint16_t)bfd_asymbol_value(s_typelang) : 0x0101;
 	uint16_t attrev = s_attrev ? bfd_asymbol_value(s_attrev) : 0x8000 | DEFAULT_REVS;
-	mh->type = tylan >> 8; // prgm by default
-	mh->lang = tylan & 0xFF; // objct by default
-	mh->attr = attrev >> 8; // reentrant by default
+	mh->type = typelang >> 8; // prgm by default
+	mh->lang = typelang & 0xFF; // objct by default
+	mh->attr = (attrev >> 8) | (opt_sticky ? 0x40 : 0); // reentrant by default
 	mh->revs = opt_revs >= 0 ? opt_revs : (attrev & 0xFF);
 	mh->edit = BE16(opt_edit >= 0 ? opt_edit : s_edition ? (int)bfd_asymbol_value(s_edition) : DEFAULT_EDIT); // any
 	mh->usage = BE32(0); // reserved
@@ -786,12 +907,23 @@ int main(int argc, char *argv[]) {
 	}
 	mh->parity = parity; // don't BE16, already swapped
 
-	mh->exec = BE32(itext + entry - tvma);
+	mh->exec = BE32(itext + entryoff);
 	mh->excpt = BE32(s_trapent ? itext + bfd_asymbol_value(s_trapent) - tvma : 0); // uninitialized trap entry
 	mh->mem = BE32(dend);
-	mh->stack = BE32(opt_stack >= 0 ? opt_stack : s_stack ? (int)bfd_asymbol_value(s_stack) : DEFAULT_STACK);
+	mh->stack = BE32((uint32_t)stack);
 	mh->idata = BE32(iidatahdr);
 	mh->irefs = BE32(iidrefs);
+	if(!opt_raw) {
+		memcpy(vec->buf, mh, opt_header);
+	}
+
+	// etext, as both Microware linkers define it (Ultra C's and C 3.2's l68,
+	// checked 2026-10-08): the module's size, plus 4 when exactly one of the
+	// two initialized data reference tables (pointers to code, pointers to
+	// data) has entries; exact when both or neither have.
+	size_t ncoderefs = 0;
+	for(size_t i = 0; i < ndrefs; i++) ncoderefs += drefs[i].text != 0;
+	size_t etextoff = vec->len + ((ncoderefs > 0) != (ndrefs - ncoderefs > 0) ? 4 : 0);
 
 	// References to btext, bname and etext (see linker_symbol), now that
 	// the module's layout and size are known.
@@ -800,7 +932,7 @@ int main(int argc, char *argv[]) {
 		if(r->kind == LSYM_NONE) {
 			continue; // a far one, through the jump table
 		}
-		int64_t off = r->kind == LSYM_BTEXT ? 0 : r->kind == LSYM_BNAME ? (int64_t)iname : (int64_t)vec->len;
+		int64_t off = r->kind == LSYM_BTEXT ? 0 : r->kind == LSYM_BNAME ? (int64_t)iname : (int64_t)etextoff;
 		if(i < ntls) {
 			// PC-relative: from the field itself, as GNU ld computes it.
 			int64_t v = off + r->addend - (int64_t)(itext + r->addr);
@@ -823,14 +955,20 @@ int main(int argc, char *argv[]) {
 	}
 	if(etext_entry >= 0) {
 		uint32_t *p = (void*)(vec->buf + iidata + etext_entry - idstart);
-		*p = BE32((uint32_t)vec->len);
+		*p = BE32((uint32_t)etextoff);
 	}
 	free(tls);
 	free(dls);
 
 	// update crc
-	uint32_t crc = module_crc(vec->buf, vec->len - 3);
-	*(uint32_t*)(vec->buf + icrc) = BE32(crc);
+	uint32_t crc = 0;
+	if(opt_raw) {
+		// What l68 -r reports.
+		printf("Code size: %lu\nData area size: %lu\n", (unsigned long)tsize, (unsigned long)dend);
+	} else {
+		crc = module_crc(vec->buf, vec->len - 3);
+		*(uint32_t*)(vec->buf + icrc) = BE32(crc);
+	}
 
 	// Symbol module (this fork, -g): an OS-9 data module named after the
 	// program module plus ".stb", as Microware's linker writes with -g
@@ -854,21 +992,27 @@ int main(int argc, char *argv[]) {
 			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 4 },
 			{ 0, 0x2004, "_btext", 5 }, { 0, 0x2004, "btext", 6 },
 			{ (int32_t)iname, 0x2004, "_bname", 7 }, { (int32_t)iname, 0x2004, "bname", 8 },
-			{ (int32_t)vec->len, 0x2004, "_etext", 9 }, { (int32_t)vec->len, 0x2004, "etext", 10 },
+			{ (int32_t)etextoff, 0x2004, "_etext", 9 }, { (int32_t)etextoff, 0x2004, "etext", 10 },
 		};
 		const StbSym c32linker[] = {
 			{ (int32_t)(dvma + dend), 0x2001, "end", 0 },
 			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 1 },
 			{ 0, 0x2004, "btext", 2 },
 			{ (int32_t)iname, 0x2004, "bname", 3 },
-			{ (int32_t)vec->len, 0x2004, "etext", 4 },
+			{ (int32_t)etextoff, 0x2004, "etext", 4 },
 		};
 		const StbSym *linker = opt_stb == 2 ? ucclinker : c32linker;
 		const size_t nlinker = opt_stb == 2 ? sizeof(ucclinker) / sizeof(ucclinker[0]) : sizeof(c32linker) / sizeof(c32linker[0]);
-		const char *const reserved[] = { "_bdata", "bdata", "_enddata", "end", "_jmptbl", "_btext", "btext", "_bname", "bname", "_etext", "etext", "_ejmptbl" };
+		const char *const reserved[] = { "_bdata", "bdata", "_enddata", "end", "_jmptbl", "_btext", "btext", "_bname", "bname", "_etext", "etext", "_ejmptbl", "__jmptbl_size" };
 		stb_reverse = opt_stb == 1;
 		StbSym *ss = malloc((nsyms + nlinker) * sizeof(StbSym));
 		memcpy(ss, linker, nlinker * sizeof(StbSym));
+		// Ultra C's l68 lists the program's symbols before its own at the same
+		// value (a variable at the data area's start before _bdata; checked
+		// 2026-10-08): its own rank after them.
+		if(opt_stb == 2) {
+			for(size_t k = 0; k < nlinker; k++) ss[k].rank += 1;
+		}
 		size_t nss = nlinker;
 		for(long i = 0; i < nsyms; i++) {
 			asymbol *s = syms[i];
@@ -888,7 +1032,7 @@ int main(int argc, char *argv[]) {
 			ss[nss].value = type == 4 ? (int32_t)(itext + bfd_asymbol_value(s) - tvma) : (int32_t)bfd_asymbol_value(s);
 			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0);
 			ss[nss].name = bfd_asymbol_name(s);
-			ss[nss].rank = nlinker;
+			ss[nss].rank = opt_stb == 2 ? 0 : nlinker;
 			nss++;
 		}
 		qsort(ss, nss, sizeof(StbSym), cmp_stbsym);

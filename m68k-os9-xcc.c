@@ -11,6 +11,7 @@
  */
 
 #include "hostsys.h"
+#include "os9conv.h"
 #include "os9link.h"
 
 #include <ctype.h>
@@ -23,29 +24,9 @@
 
 #define GCC	"m68k-elfos9-gcc"
 #define NM	"m68k-elfos9-nm"
-#define RANLIB	"m68k-elfos9-ranlib"
-#define ROF2ELF	"rof2elf"
 #define ELF2ROF	"elf2rof"
 #define ELF2MOD	"elf2mod"
 
-static const char *who = "m68k-os9-xcc";
-
-/* Case-insensitive comparisons (strcasecmp isn't everywhere). */
-static int ci_eq(const char *a, const char *b)
-{
-	for (; *a != '\0' && *b != '\0'; a++, b++)
-		if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
-			return 0;
-	return *a == *b;
-}
-
-static int ci_prefix(const char *s, const char *prefix)
-{
-	for (; *prefix != '\0'; s++, prefix++)
-		if (tolower((unsigned char)*s) != tolower((unsigned char)*prefix))
-			return 0;
-	return 1;
-}
 
 /* ----- Options ----- */
 
@@ -116,8 +97,6 @@ static const struct option options[] = {
 
 /* ----- State ----- */
 
-enum save { SAVE_BESIDE, SAVE_SUBDIR, SAVE_CACHE };
-
 static struct {
 	/* Compiling. */
 	struct args flags;	/* -D/-U/-I, in order */
@@ -128,7 +107,7 @@ static struct {
 	struct args vdirs;	/* -v */
 
 	/* What to do. */
-	int asm_only, rel_only, quiet;
+	int asm_only, rel_only;
 	const char *reldir;
 
 	/* Linking. */
@@ -144,37 +123,11 @@ static struct {
 	/* Files, in order. */
 	struct args files;
 
-	/* Converted files. */
-	enum save save;
-	const char *elfdir, *cache;
-	int rof;		/* -obj=rof */
-} st = { .opt = 2, .elfdir = "m68k-os9-elf" };
+} st = { .opt = 2 };
 
-static void error(const char *format, ...)
-{
-	va_list ap;
-
-	fprintf(stderr, "%s: ", who);
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	fputc('\n', stderr);
-	os9_cleanup();
-	exit(1);
-}
-
-static void note(const char *format, ...)
-{
-	va_list ap;
-
-	if (st.quiet)
-		return;
-	fprintf(stderr, "%s: ", who);
-	va_start(ap, format);
-	vfprintf(stderr, format, ap);
-	va_end(ap);
-	fputc('\n', stderr);
-}
+#define OBJ_KINDS ((1u << OBJ_ELF) | (1u << OBJ_ROF) | (1u << OBJ_UCC))
+#define error os9_error
+#define note os9_note
 
 /* ----- Usage ----- */
 
@@ -195,7 +148,7 @@ static void usage_line(const char *left, const char *text)
 
 static void usage(void)
 {
-	printf("%s [opts] [files] [opts]\n", who);
+	printf("%s [opts] [files] [opts]\n", os9_who);
 	printf("Options of Microware C 3.2's xcc/cc (Ultra C's -mode=compat), run with GCC:\n");
 	for (size_t i = 0; i < NOPTIONS; i++) {
 		const struct option *o = &options[i];
@@ -215,7 +168,7 @@ static void usage(void)
 	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
-	usage_line("-obj=<kind>", "what -r writes into .r files: elf (default) or rof (for Microware's l68)");
+	usage_line("-obj=<kind>", "what -r writes into .r files: elf (default), rof or ucc (ROF, for Microware's l68)");
 	printf("Files, by suffix, in any case:\n");
 	usage_line(".c", "C source");
 	usage_line(".r, .o", "object, ROF or ELF (ROF is converted; see -elf-save=)");
@@ -235,61 +188,6 @@ static void targets(void)
 	printf("   68k            68000/68010/68070 (-k=0)\n");
 	printf("   020            68020/68030, with the 68881 (-k=2f; -k=2 without)\n");
 	printf("   cpu32          CPU32\n");
-}
-
-/* ----- Settings for converted files ----- */
-
-static void set_save(const char *value)
-{
-	if (ci_eq(value, "beside"))
-		st.save = SAVE_BESIDE;
-	else if (ci_eq(value, "subdir"))
-		st.save = SAVE_SUBDIR;
-	else if (ci_eq(value, "cache"))
-		st.save = SAVE_CACHE;
-	else
-		error("unknown -elf-save=%s (beside, subdir or cache)", value);
-}
-
-static void set_obj(const char *value)
-{
-	if (ci_eq(value, "elf"))
-		st.rof = 0;
-	else if (ci_eq(value, "rof"))
-		st.rof = 1;
-	else
-		error("unknown -obj=%s (elf or rof)", value);
-}
-
-/* M68K_OS9_ELF: save=...,dir=...,cache=...,obj=... */
-static void elf_environment(void)
-{
-	const char *env = getenv("M68K_OS9_ELF");
-	if (env == NULL || *env == '\0')
-		return;
-	char *copy = xstrdup(env), *next;
-	for (char *item = copy; item != NULL; item = next) {
-		next = strchr(item, ',');
-		if (next != NULL)
-			*next++ = '\0';
-		if (*item == '\0')
-			continue;
-		char *value = strchr(item, '=');
-		if (value == NULL)
-			error("M68K_OS9_ELF: %s: expected name=value", item);
-		*value++ = '\0';
-		if (ci_eq(item, "save"))
-			set_save(value);
-		else if (ci_eq(item, "dir"))
-			st.elfdir = xstrdup(value);
-		else if (ci_eq(item, "cache"))
-			st.cache = xstrdup(value);
-		else if (ci_eq(item, "obj"))
-			set_obj(value);
-		else
-			error("M68K_OS9_ELF: unknown setting %s", item);
-	}
-	free(copy);
 }
 
 /* ----- Parsing ----- */
@@ -368,7 +266,7 @@ static void read_z(const char *path)
 	if (fp == NULL)
 		error("cannot read %s", path);
 	struct args words = { 0 };
-	args_add(&words, who);
+	args_add(&words, os9_who);
 	char word[1024];
 	while (fscanf(fp, "%1023s", word) == 1)
 		args_add(&words, word);
@@ -417,7 +315,7 @@ static void apply(const struct option *o, const char *value)
 		else
 			error("-o=%s: the level must be 0, 1 or 2", value);
 		break;
-	case O_Q: st.quiet = 1; break;
+	case O_Q: os9_quiet = 1; break;
 	case O_R: st.rel_only = 1; st.reldir = value; break;
 	case O_S: st.nostack = 1; break;
 	case O_T: os9_set_tempdir(value); break;
@@ -429,7 +327,7 @@ static void apply(const struct option *o, const char *value)
 	case O_TP: set_tp(value); break;
 	case O_U: args_addf(&st.flags, "-U%s", value); break;
 	case O_V: args_add(&st.vdirs, value); break;
-	case O_W: st.libdir = value; break;
+	case O_W: st.libdir = value; os9conv.libdir = value; break;
 	case O_X: st.math = 1; break;
 	case O_Z: read_z(value); break;
 	}
@@ -438,27 +336,15 @@ static void apply(const struct option *o, const char *value)
 /* This program's own options; returns whether ARG was one. */
 static int own_option(const char *arg)
 {
-	static const char *const names[] = { "mode=", "elf-save=", "elf-dir=", "elf-cache=", "obj=" };
-	size_t i;
-	for (i = 0; i < sizeof names / sizeof names[0]; i++)
-		if (ci_prefix(arg + 1, names[i]))
-			break;
-	if (i == sizeof names / sizeof names[0])
-		return 0;
-	const char *value = arg + 1 + strlen(names[i]);
-	switch (i) {
-	case 0:
+	if (ci_prefix(arg + 1, "mode=")) {
+		const char *value = arg + 1 + strlen("mode=");
 		if (ci_eq(value, "ucc") || ci_eq(value, "c89"))
 			error("-mode=%s: Ultra C's own options aren't implemented yet", value);
 		if (!ci_eq(value, "compat"))
 			error("unknown -mode=%s (compat, c89 or ucc)", value);
-		break;
-	case 1: set_save(value); break;
-	case 2: st.elfdir = value; break;
-	case 3: st.cache = value; break;
-	case 4: set_obj(value); break;
+		return 1;
 	}
-	return 1;
+	return os9conv_option(arg, OBJ_KINDS);
 }
 
 /* Matches option ARG (with its '-'); the longest name that fits wins. */
@@ -509,7 +395,7 @@ static void option(const char *arg)
 		value = candidate;
 	}
 	if (best == NULL)
-		error("unknown option %s (%s -? for the usage)", arg, who);
+		error("unknown option %s (%s -? for the usage)", arg, os9_who);
 	apply(best, value);
 }
 
@@ -523,193 +409,11 @@ static void parse(int argc, char **argv)
 	}
 }
 
-/* ----- Paths ----- */
+/* ----- Paths and converted files ----- */
 
-static const char *suffix(const char *path)
-{
-	const char *base = lbasename(path);
-	const char *dot = strrchr(base, '.');
-	return dot != NULL ? dot : base + strlen(base);
-}
-
-/* PATH's base name without its suffix (allocated); lowercase if LOWER. */
-static char *stem(const char *path, int lower)
-{
-	const char *base = lbasename(path);
-	const char *dot = strrchr(base, '.');
-	size_t length = dot != NULL ? (size_t)(dot - base) : strlen(base);
-	char *s = xmalloc(length + 1);
-	memcpy(s, base, length);
-	s[length] = '\0';
-	if (lower)
-		for (char *p = s; *p != '\0'; p++)
-			*p = tolower((unsigned char)*p);
-	return s;
-}
-
-/* The directory part of absolute path PATH (allocated). */
-static char *dirpart(const char *path)
-{
-	const char *base = lbasename(path);
-	size_t length = base - path;
-	while (length > 1 && host_is_sep(path[length - 1]))
-		length--;
-	char *d = xmalloc(length + 1);
-	memcpy(d, path, length);
-	d[length] = '\0';
-	return d;
-}
-
-/* Whether file PATH starts with BYTES. */
-static int starts_with(const char *path, const char *bytes, size_t length)
-{
-	FILE *fp = fopen(path, "rb");
-	if (fp == NULL)
-		return 0;
-	char buffer[16];
-	size_t got = fread(buffer, 1, length, fp);
-	fclose(fp);
-	return got == length && memcmp(buffer, bytes, length) == 0;
-}
-
-/* ----- Converting Microware files ----- */
-
-/* The cache's directory for absolute directory DIR (allocated). */
-static char *cache_dir(const char *dir)
-{
-	const char *root = st.cache;
-	char *home = NULL;
-	if (root == NULL) {
-		const char *xdg = getenv("XDG_CACHE_HOME");
-		if (xdg != NULL && *xdg != '\0')
-			root = xdg;
-		else {
-			const char *h = getenv("HOME");
-			if (h == NULL)
-				h = getenv("USERPROFILE");
-			if (h == NULL)
-				h = ".";
-			root = home = concat(h, "/.cache", NULL);
-		}
-	}
-	/* The directory's path below it, without a drive's colon. */
-	char *below = xstrdup(dir);
-	for (char *p = below; *p != '\0'; p++)
-		if (*p == ':')
-			*p = '_';
-	const char *start = below;
-	while (host_is_sep(*start))
-		start++;
-	char *path = concat(root, "/", st.elfdir, "/", start, NULL);
-	free(below);
-	free(home);
-	return path;
-}
-
-/* Where the ELF form of ROF object or library INPUT goes (allocated). */
-static char *converted_path(const char *input, int library)
-{
-	char *abs = host_abspath(input);
-	char *dir = dirpart(abs);
-	char *name = stem(abs, 1);
-	char *file = library ? concat(st.save == SAVE_BESIDE ? "lib" : "", name, ".a", NULL)
-		: concat(name, ".o", NULL);
-	char *target = NULL;
-
-	if (st.save == SAVE_BESIDE && host_writable_dir(dir)) {
-		target = concat(dir, "/", file, NULL);
-		/* A ROF object some makefile named .o would be its own target. */
-		if (ci_eq(target, abs)) {
-			free(target);
-			target = NULL;
-		}
-	}
-	else if (st.save == SAVE_SUBDIR) {
-		char *sub = concat(dir, "/", st.elfdir, NULL);
-		if ((host_mtime(sub) != (time_t)-1 || (host_writable_dir(dir) && host_mkdirs(sub) == 0)) &&
-			host_writable_dir(sub))
-			target = concat(sub, "/", file, NULL);
-		free(sub);
-	}
-	if (target == NULL) {
-		char *cache = cache_dir(dir);
-		if (st.save == SAVE_SUBDIR || (st.save == SAVE_BESIDE && !host_writable_dir(dir)))
-			note("%s isn't writable; converting %s into %s", dir, lbasename(input), cache);
-		if (host_mkdirs(cache) != 0)
-			error("cannot create %s", cache);
-		if (library && st.save == SAVE_BESIDE) {
-			free(file);
-			file = concat(name, ".a", NULL);
-		}
-		target = concat(cache, "/", file, NULL);
-		free(cache);
-	}
-	free(abs);
-	free(dir);
-	free(name);
-	free(file);
-	return target;
-}
-
-/* The library directory's sys.l, whose equates rof2elf folds into the code
- * (-e); null if there's no library directory or no sys.l in it. */
-static const char *sys_l(void)
-{
-	static int looked;
-	static char *path;
-
-	if (!looked) {
-		looked = 1;
-		const char *dir = st.libdir != NULL ? st.libdir : getenv("CLIB");
-		if (dir != NULL && *dir != '\0')
-			path = host_find_nocase(dir, "sys.l");
-	}
-	return path;
-}
-
-/* INPUT as ELF: itself if it is (an object, or an ar archive), else its
- * conversion, made or remade when older than INPUT or sys.l (allocated). */
-static char *as_elf(const char *input, int library)
-{
-	if (host_mtime(input) == (time_t)-1)
-		error("cannot find %s", input);
-	if (starts_with(input, "\177ELF", 4) || starts_with(input, "!<arch>\n", 8))
-		return xstrdup(input);
-
-	char *target = converted_path(input, library);
-	time_t made = host_mtime(target);
-	if (made != (time_t)-1 && made >= host_mtime(input) &&
-		(sys_l() == NULL || made >= host_mtime(sys_l())))
-		return target;
-
-	/* Convert into a temporary file beside the target, then rename it, so
-	 * that parallel runs never see half a file. */
-	char *temp = xmalloc(strlen(target) + 32);
-	sprintf(temp, "%s.%ld.tmp", target, host_pid());
-	struct args argv = { 0 };
-	args_add(&argv, ROF2ELF);
-	if (sys_l() != NULL) {
-		args_add(&argv, "-e");
-		args_add(&argv, sys_l());
-	}
-	args_add(&argv, "-o");
-	args_add(&argv, temp);
-	args_add(&argv, input);
-	int status = os9_run(&argv, NULL, NULL);
-	args_free(&argv);
-	if (status == 0 && library) {
-		args_add(&argv, RANLIB);
-		args_add(&argv, temp);
-		status = os9_run(&argv, NULL, NULL);
-		args_free(&argv);
-	}
-	if (!os9_dry_run && (status != 0 || host_replace(temp, target) != 0)) {
-		remove(temp);
-		error("cannot convert %s", input);
-	}
-	free(temp);
-	return target;
-}
+#define suffix path_suffix
+#define stem path_stem
+#define as_elf os9conv_as_elf
 
 /* ----- Microware's libraries ----- */
 
@@ -806,7 +510,7 @@ static void compile(const char *source, const char *output, int assembler, int r
 	char *object = rof ? os9_temp(".o") : (char *)output;
 	args_add(&argv, object);
 	args_add(&argv, source);
-	if (!st.quiet && !os9_show)
+	if (!os9_quiet && !os9_show)
 		printf("'%s'\n", source);
 	if (os9_run(&argv, NULL, NULL) != 0)
 		error("compiling %s failed", source);
@@ -900,7 +604,7 @@ static void add_input(struct args *link, const char *path)
 
 static void link_module(struct args *objects, const char *output)
 {
-	struct os9link l = { .gcc = GCC, .elf2mod = ELF2MOD, .who = who };
+	struct os9link l = { .gcc = GCC, .elf2mod = ELF2MOD, .who = os9_who };
 	char *root = as_elf(st.root != NULL ? st.root : libfile("cstart.r"), 0);
 
 	struct args libs = { 0 };
@@ -944,7 +648,7 @@ static void link_module(struct args *objects, const char *output)
 	if (st.debug)
 		args_add(&l.mod, "-g");
 
-	if (!st.quiet && !os9_show)
+	if (!os9_quiet && !os9_show)
 		printf("linking %s\n", output);
 	if (os9_link(&l) != 0)
 		error("linking %s failed", output);
@@ -962,17 +666,18 @@ static void link_module(struct args *objects, const char *output)
 int main(int argc, char **argv)
 {
 	const char *base = lbasename(argv[0]);
+	os9_who = strstr(base, "ucc") != NULL ? "m68k-os9-ucc" : "m68k-os9-xcc";
 	if (strstr(base, "ucc") != NULL)
 		error("Ultra C's own options (m68k-os9-ucc, -mode=ucc) aren't implemented yet");
 
-	elf_environment();
+	os9conv_environment(OBJ_KINDS);
 	if (argc < 2) {
 		usage();
 		return 0;
 	}
 	parse(argc, argv);
 	if (st.files.n == 0)
-		error("no files (%s -? for the usage)", who);
+		error("no files (%s -? for the usage)", os9_who);
 
 	struct args objects = { 0 };
 	const char *first = NULL;
@@ -990,7 +695,7 @@ int main(int argc, char **argv)
 			} else if (st.rel_only) {
 				const char *dir = st.reldir != NULL ? st.reldir : ".";
 				char *out = concat(dir, "/", name, ".r", NULL);
-				compile(file, out, 0, st.rof);
+				compile(file, out, 0, os9conv.obj != OBJ_ELF);
 				free(out);
 			} else {
 				char *out = os9_temp(".o");

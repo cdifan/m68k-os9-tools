@@ -23,7 +23,9 @@ suitably linked ELF file (see "The ELF input").
 | `-p`, `--perms=HEX` | the header's permissions; default 555 |
 | `-S`, `--sticky` | the sticky bit (`M$Attr` bit 6), on top of `__os9_attrev` |
 | `-N`, `--name-last[=NAME]` | the module name after the code, not after the header |
+| `-x`, `--code-align=N` | the code's start in the module aligned to N (2, 4, 8, 16) |
 | `--typelang=HEX` | type and language; default `__os9_typelang`, else `0101` |
+| `--header=SIZE` | `0x48` (the program header, the default), `0x3C` (`M$Exec`, `M$Excpt`, `M$Mem`; name last) or `0x30` (no fields; name last) |
 | `--raw` | the module's body only: no header, name or CRC (see "Raw output") |
 | `--entry=none` | no entry point, whatever `__os9_entry` says |
 

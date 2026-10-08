@@ -27,8 +27,8 @@ EXE_ROF2ELF=rof2elf
 EXE_ELF2ROF=elf2rof
 # xcc's options (Microware C 3.2) for GCC; libiberty runs the programs
 EXE_XCC=m68k-os9-xcc
-XCC_SRCS=m68k-os9-xcc.c os9link.c hostsys.c
-XCC_HDRS=os9link.h hostsys.h
+XCC_SRCS=m68k-os9-xcc.c os9conv.c os9link.c hostsys.c
+XCC_HDRS=os9conv.h os9link.h hostsys.h
 LIBIBERTY_CFLAGS=-I/usr/include/libiberty
 # m68k-os9-gcc, with these binutils of m68k-elfos9 as m68k-os9- too, so that
 # build systems find a complete toolchain (./configure --host=m68k-os9)
