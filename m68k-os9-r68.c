@@ -24,6 +24,8 @@
 #define READELF	"m68k-elfos9-readelf"
 #define R68TOGAS "r68togas"
 #define ELF2ROF	"elf2rof"
+#define NM	"m68k-elfos9-nm"
+#define OBJCOPY	"m68k-elfos9-objcopy"
 
 #define error os9_error
 
@@ -261,6 +263,48 @@ static char *psect_name(const char *path, const char *fallback)
 	return xstrdup(fallback);
 }
 
+/* Symbols named like a GNU as register (val, tc, ...) are NAME__r68 in
+ * r68togas's output, since as can't have a symbol of that name; the
+ * object's global and undefined ones get their names back. */
+static void register_names(const char *object)
+{
+	struct args argv = { 0 };
+	args_add(&argv, NM);
+	args_add(&argv, "-g");
+	args_add(&argv, object);
+	char *out = os9_temp(".out");
+	int show = os9_show;
+	os9_show = 0;
+	int status = os9_run(&argv, out, NULL);
+	os9_show = show;
+	args_free(&argv);
+	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
+	if (fp == NULL)
+		error("%s %s failed", NM, object);
+	struct args renames = { 0 };
+	char line[1024];
+	while (fgets(line, sizeof line, fp) != NULL) {
+		char *name = strrchr(line, ' ');
+		name = name != NULL ? name + 1 : line;
+		name[strcspn(name, "\r\n")] = '\0';
+		size_t n = strlen(name);
+		if (n > 5 && strcmp(name + n - 5, "__r68") == 0 && strncmp(name, "r68__", 5) != 0) {
+			args_add(&renames, "--redefine-sym");
+			args_addf(&renames, "%s=%.*s", name, (int)(n - 5), name);
+		}
+	}
+	fclose(fp);
+	if (renames.n == 0)
+		return;
+	args_add(&argv, OBJCOPY);
+	args_append(&argv, &renames);
+	args_add(&argv, object);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("renaming symbols in %s failed", object);
+	args_free(&argv);
+	args_free(&renames);
+}
+
 /* GNU as's options for r68's -m<n>: the CPU, with the FPU (r68 takes its
  * instructions for any CPU). */
 static void cpu_options(struct args *argv)
@@ -340,6 +384,8 @@ static void assemble(const char *source)
 	if (os9_run(&argv, NULL, NULL) != 0)
 		error("assembling %s failed", source);
 	args_free(&argv);
+
+	register_names(object);
 
 	/* 3. A ROF, named for the psect. */
 	if (out != NULL && rof) {
