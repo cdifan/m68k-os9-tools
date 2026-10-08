@@ -856,6 +856,8 @@ struct state {
 	const char *rest_of_file;	/* the text after the current line */
 	char **sets;		/* the names defined by set (scan_labels) */
 	int nsets;
+	char **set_done;	/* names set so far outside macro definitions */
+	int nset_done;
 	char **finals;		/* those referred to before their first set */
 	int nfinals;
 	char **folded;		/* the names of -e (sys.l's equates) */
@@ -956,8 +958,8 @@ static int forward_set(const char *s, size_t n)
 		is_set = strlen(st.sets[i]) == n && strncmp(st.sets[i], s, n) == 0;
 	if (!is_set)
 		return 0;
-	for (int i = 0; i < st.nequates; i++)
-		if (strlen(st.equates[i]) == n && strncmp(st.equates[i], s, n) == 0)
+	for (int i = 0; i < st.nset_done; i++)
+		if (strlen(st.set_done[i]) == n && strncmp(st.set_done[i], s, n) == 0)
 			return 0;
 	for (int i = 0; i < st.nfinals; i++)
 		if (strlen(st.finals[i]) == n && strncmp(st.finals[i], s, n) == 0)
@@ -992,6 +994,16 @@ static int uses_length(const char *text)
 	return 0;
 }
 
+/* strcasestr, which isn't everywhere */
+static const char *strcasestr_(const char *s, const char *t)
+{
+	size_t n = strlen(t);
+	for (; *s; s++)
+		if (strncasecmp(s, t, n) == 0)
+			return s;
+	return NULL;
+}
+
 /* The CPU an instruction needs (10 for the 68010 ... 60), 0 for any:
  * r68 takes every instruction whatever its -m, as doesn't. */
 static int cpu_needed(const char *base, char size, const char *args)
@@ -1016,14 +1028,19 @@ static int cpu_needed(const char *base, char size, const char *args)
 		level = 20;
 	if (strncmp(base, "trap", 4) == 0 && base[4] != '\0' && strcmp(base, "trapv") != 0)
 		level = 20;
-	/* the 68040's MMU and transparent translation registers */
+	/* movec's 68020 and 68040 control registers */
 	if (strcmp(base, "movec") == 0) {
-		static const char *const regs040[] = { "itt0", "itt1", "dtt0", "dtt1", "urp", "srp", "tc", "mmusr",
-			NULL };
-		for (int i = 0; regs040[i]; i++) {
-			const char *f = strstr(args, regs040[i]);
-			if (f != NULL && (f == args || !isalnum((unsigned char)f[-1])) && !isalnum((unsigned char)f[strlen(regs040[i])]))
-				level = 40;
+		static const struct { const char *reg; int level; } regs[] = {
+			{ "cacr", 20 }, { "caar", 20 }, { "msp", 20 }, { "isp", 20 }, { "itt0", 40 }, { "itt1", 40 },
+			{ "dtt0", 40 }, { "dtt1", 40 }, { "urp", 40 }, { "srp", 40 }, { "tc", 40 }, { "mmusr", 40 },
+			{ NULL, 0 },
+		};
+		for (int i = 0; regs[i].reg; i++) {
+			size_t rn = strlen(regs[i].reg);
+			for (const char *f = args; (f = strcasestr_(f, regs[i].reg)) != NULL; f += rn)
+				if ((f == args || !isalnum((unsigned char)f[-1])) && !isalnum((unsigned char)f[rn]) &&
+				    regs[i].level > level)
+					level = regs[i].level;
 		}
 	}
 	return level > st.cpu_level ? level : 0;
@@ -1516,8 +1533,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (l.label && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0 || strcmp(base, "do") == 0 ||
-			strcmp(base, "lo") == 0))
+			strcmp(base, "lo") == 0)) {
 		add_equate(l.label);
+		/* set where it is assembled: not in a macro definition, whose
+		 * lines run where it is called */
+		if (!st.in_macro) {
+			st.set_done = xrealloc(st.set_done, (st.nset_done + 1) * sizeof *st.set_done);
+			st.set_done[st.nset_done++] = xstrdup(l.label);
+		}
+	}
 	if (strcmp(base, "do") == 0 || strcmp(base, "lo") == 0) {
 		int bytes = size == 'b' ? 1 : size == 'l' ? 4 : 2;
 		struct buf nm = { 0 };
@@ -1670,7 +1694,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	{
 		/* The caches of cinv and cpush (bc, dc, ic, nc) aren't symbols. */
 		/* movec's control registers too (itt0 isn't a symbol there). */
-		if (strncmp(base, "cinv", 4) == 0 || strncmp(base, "cpush", 5) == 0 || strcmp(base, "movec") == 0) {
+		if (strncmp(base, "cinv", 4) == 0 || strncmp(base, "cpush", 5) == 0 || strcmp(base, "movec") == 0 ||
+		    strcmp(base, "pmove") == 0 || strcmp(base, "pmovefd") == 0 || strncmp(base, "pflush", 6) == 0 ||
+		    strncmp(base, "ptest", 5) == 0 || strncmp(base, "pload", 5) == 0) {
 			int need = cpu_needed(base, size, l.args);
 			if (need)
 				bprintf(out, "%s r68chip %s,<%s %s>%s", labs, chip_name(need), l.op, l.args, rest);
@@ -1737,9 +1763,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputc(out, ',');
 				int abs_here = absolute && i == 0 && pieces[i][0] != '#' && strchr(pieces[i], '(') == NULL &&
 					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
-				if (lens[i] > 0 && pieces[i][0] == '"')
-					string_operand(out, pieces[i], lens[i]);
-				else if (byte_imm && i == 0 && known_value(pieces[i] + 1, lens[i] - 1)) {
+				if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
+					/* No instruction takes a string: a call of a macro
+					 * defined later (SBFDesc ...,"sbgiga" in a macro body),
+					 * whose quoted argument r68 passes without quotes. */
+					bputc(out, '<');
+					bput(out, pieces[i] + 1, lens[i] - 2);
+					bputc(out, '>');
+				} else if (byte_imm && i == 0 && known_value(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "#(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputs(out, ")&$ff");
