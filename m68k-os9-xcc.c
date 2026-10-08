@@ -632,7 +632,7 @@ static void link_module(struct args *objects, const char *output)
 	args_add(&l.link, "-Wl,--end-group");
 
 	char *elf = concat(output, ".elf", NULL);
-	char *name = st.name != NULL ? xstrdup(st.name) : stem(output, 0);
+	char *name = st.name != NULL ? xstrdup(st.name) : os9_module_name(output);
 	l.elf = elf;
 	l.module = output;
 	l.name = name;

@@ -52,6 +52,10 @@ if [ $link = 0 ]; then
 fi
 
 elf=$out.elf
+# The module name: the output file's name, with only a final lower-case .mod
+# dropped (the rule of all the m68k-os9 front ends; see m68k-os9-xcc.md).
+name=$(basename "$out")
+name=${name%.mod}
 log=$(mktemp) || exit 1
 trap 'rm -f "$log"' EXIT
 
@@ -69,7 +73,7 @@ else
 		exit $status
 	fi
 	"$cc" -specs=os9.specs "${gccargs[@]}" -o "$elf" -Wl,--noinhibit-exec 2> /dev/null
-	need=$("$elf2mod" -n "$(basename "$out")" "$elf" "$out" 2>&1 |
+	need=$("$elf2mod" -n "$name" "$elf" "$out" 2>&1 |
 		sed -n 's/.*jump table of [0-9]* entries (\([0-9]*\) bytes).*/\1/p')
 	if [ -z "$need" ]; then
 		cat "$log" >&2
@@ -79,4 +83,4 @@ else
 		-Wl,--defsym,__jmptbl_size="$need" 2> /dev/null || exit
 fi
 
-exec "$elf2mod" -n "$(basename "$out")" "${modargs[@]}" "$elf" "$out"
+exec "$elf2mod" -n "$name" "${modargs[@]}" "$elf" "$out"
