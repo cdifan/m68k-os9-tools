@@ -4,6 +4,9 @@
 libraries: it takes `libgen`'s options and writes an `ar` archive, concatenated ROFs, or
 `libgen`'s own format, and gives `libgen`'s listings, also of libraries `libgen` can't read.
 
+    m68k-os9-libgen -c a.r b.o old.l -o=new.l    # an ar archive (-obj=rof: ROFs)
+    m68k-os9-libgen -lu clib.l                   # its psects, one per line
+
 Microware C 3.2 has no librarian: its libraries are ROFs concatenated (`merge a.r b.r >lib.l` on
 OS-9, `copy /b` on DOS), so C 3.2 makefiles need no front end for them. GCC users make archives
 with `ar rcs lib.a a.o b.o`, through `m68k-os9-ar`.

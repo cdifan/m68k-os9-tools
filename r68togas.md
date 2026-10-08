@@ -10,11 +10,20 @@ stops after the translation. The reverse, for GCC's output, is [gastor68](gastor
 
 ## Usage
 
+    r68togas [-a <sym>[=<val>]]... [-m <n>] [-d ucc|c32|ucc95] [-b [-B] | -bt] [-r] [-y] [-s]
+             [-x <ext>] [-u <dir>]... [-o <output>] <source>
+
 | Option | Meaning |
 |---|---|
+| `-a <sym>[=<val>]` | define a symbol (1 without a value), as r68's `-a=`; written into the output as a `set` line |
+| `-m <n>` | the CPU, as r68's `-m` (0 the 68000 ... 6 the 68060); written as an `.arch` directive; it also chooses the padding (see "Dialects") |
 | `-b` | r68's `-b`: branches to the source's own labels sized by `gas`; `-B` also those to its global labels |
 | `-r` | r68's `-r`: registers only with `%` (`%d0`); a plain `d0` is a symbol |
 | `-u <dir>` | a directory to search for `use` files, as r68's `-u` |
+
+`-b`, `-bt`, `-r` and `-y` are options of Ultra C's `r68` only; C 3.2's `r68` has none of them.
+With `-a` and `-m` in the output, it needs no options: `m68k-os9-as <output>` assembles it, and
+so does the GCC driver (`m68k-elfos9-gcc -c x.s`).
 
 **No overwriting:** writing over an input file is an error, and so is writing over any other
 existing file that `-o` doesn't name, `-s`'s outputs included. So the round trip `gastor68

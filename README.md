@@ -30,6 +30,11 @@ tools do, converting them as needed. Microware's files are not included.
 - [m68k-os9-libgen](m68k-os9-libgen.md): a drop-in for Ultra C's librarian `libgen`, writing
   `ar` archives, concatenated ROFs or `libgen`'s format, and its listings.
 
+      m68k-os9-libgen -c a.r b.o old.l -o=new.l    # an ar archive (-obj=rof: ROFs)
+
+- [m68k-os9-gcc](m68k-os9-gcc.md): GCC's own options, compiling and linking a module in one step
+  with newlib's OS-9 runtime.
+
       m68k-os9-gcc -Os -o hello hello.c -Wm,-g     # hello and hello.stb
 
 Each prints its options with `-?`. Under the short names `xcc`, `cc`, `ucc`, `l68`, `r68` and
