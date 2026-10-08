@@ -68,6 +68,8 @@ source back. Annotated, among others:
 - `move.l #n,Dn` with `+r68__0` in the immediate, `move.b` with a negative immediate masked `&$ff`;
 - a number or constant before `(pc)`, written `(*+2+n)(pc)`, and `*` in a `dc` list's later
   elements, written `(*-offset)`;
+- `psect`, whose fields are spread over the output; `fail` and a `use` file not found;
+  `label equ *`, written as a label alone; a folded `rept` of one `dc` line;
 
 ## Dialects
 
@@ -157,6 +159,7 @@ Most instruction lines need no change. Where the same text means something else 
 - **A label followed by `:` is global** (r68 has no `xdef`/`xref`), others local; the global ones
   get an `xdef` in the epilogue. Outside a psect (in definition files used before it) no label is
   exported. References to undefined names are external, as in r68.
+- **`label equ *`** is a plain label.
 - **A macro defined with a colon** (`Mac: macro`): both Microware assemblers export the name as a
   global symbol of value 0; written as `NAME equ 0`.
 - **`set` symbols used before their first `set`** take the value they had at the end of r68's
@@ -252,6 +255,8 @@ differ, the assemblers are followed.
 
 ## Differences and limitations
 
+- **`@` and `_at_` in one source:** where a source has names with `@`, a global name with `_at_`
+  of its own comes out with `@` too.
 - **Unreferenced externals:** an external named only by an `equ` (`A equ Ext`), or by the twin of
   a label a conditional leaves out, stays in `gas`'s object as an undefined symbol no relocation
   uses, which would make a link take in a library member for it. `m68k-os9-r68` removes such

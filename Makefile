@@ -25,6 +25,8 @@ DESTDIR=/usr
 EXE=elf2mod
 EXE_ROF2ELF=rof2elf
 EXE_ELF2ROF=elf2rof
+# Source translators between Microware's r68 and GNU as
+TRANSLATORS=r68togas
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
 # libiberty runs the programs
 FRONTENDS=m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen
@@ -44,18 +46,18 @@ RM=rm
 
 .PHONY: all clean
 
-all: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(FRONTENDS)
+all: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 
-install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(FRONTENDS)
+install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 	$(INSTALL) -s $(EXE) $(DESTDIR)/bin/$(EXE)
 	$(INSTALL) -s $(EXE_ROF2ELF) $(DESTDIR)/bin/$(EXE_ROF2ELF)
 	$(INSTALL) -s $(EXE_ELF2ROF) $(DESTDIR)/bin/$(EXE_ELF2ROF)
-	for t in $(FRONTENDS); do $(INSTALL) -s $$t $(DESTDIR)/bin/$$t; done
+	for t in $(TRANSLATORS) $(FRONTENDS); do $(INSTALL) -s $$t $(DESTDIR)/bin/$$t; done
 	$(INSTALL) m68k-os9-gcc $(DESTDIR)/bin/m68k-os9-gcc
 	for t in $(OS9_TOOLS); do ln -sf m68k-elfos9-$$t $(DESTDIR)/bin/m68k-os9-$$t; done
 
 clean:
-	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(FRONTENDS)
+	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 
 $(EXE): elf2mod.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
@@ -65,6 +67,9 @@ $(EXE_ROF2ELF): rof2elf.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 $(EXE_ELF2ROF): elf2rof.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+$(TRANSLATORS): %: %.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 $(FRONTENDS): %: %.c $(FE_SRCS) $(FE_HDRS)
