@@ -597,7 +597,9 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 		  store (o, p, size, v - (int32_t) lo, 1, y->name, lo);
 		  continue;
 		}
-	      if (la == A_CODE && y->area == A_CODE)
+	      /* A 16-bit one is a module offset (r68's dc.w Init,Read,...
+		 in a driver's entry table), as l68 resolves it.  */
+	      if (la == A_CODE && y->area == A_CODE && size != 2)
 		die ("%s: %s+0x%x: absolute reference to code from code "
 		     "(not position-independent)", o->file, s->name,
 		     (unsigned) roff);

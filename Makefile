@@ -29,7 +29,7 @@ EXE_ELF2ROF=elf2rof
 TRANSLATORS=r68togas
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
 # libiberty runs the programs
-FRONTENDS=m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen
+FRONTENDS=m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen m68k-os9-r68
 FE_SRCS=os9conv.c os9link.c hostsys.c
 FE_HDRS=os9conv.h os9link.h hostsys.h
 LIBIBERTY_CFLAGS=-I/usr/include/libiberty

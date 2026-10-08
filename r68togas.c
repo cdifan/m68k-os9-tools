@@ -1501,6 +1501,7 @@ int main(int argc, char **argv)
 {
 	const char *output = NULL, *source = NULL;
 	struct buf defs = { 0 };
+	const char *arch = NULL;
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
 			output = argv[++i];
@@ -1519,10 +1520,15 @@ int main(int argc, char **argv)
 			bputc(&defs, '\n');
 		} else if (strncmp(argv[i], "-m", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
-			static const char *const chips[] = { "68000", "68010", "68020", "68030", "68040", NULL, "68060" };
-			if (d == NULL || d[0] < '0' || d[0] > '6' || d[1] || chips[d[0] - '0'] == NULL)
+			/* With the FPU: r68 takes its instructions for any CPU.
+			 * As .arch (before .mri 1 and any instruction), the
+			 * same as m68k-os9-as's -m68000 -m68881: MRI's chip
+			 * can't give a 68000 the FPU. */
+			static const char *const archs[] = { "68000,68881", "68010,68881", "68020,68881", "68030,68881", "68040",
+				NULL, "68060" };
+			if (d == NULL || d[0] < '0' || d[0] > '6' || d[1] || archs[d[0] - '0'] == NULL)
 				die("-m takes 0, 1, 2, 3, 4 or 6");
-			bprintf(&defs, " chip %s\n", chips[d[0] - '0']);
+			arch = archs[d[0] - '0'];
 		}
 		else if (strncmp(argv[i], "-u", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
@@ -1552,7 +1558,10 @@ int main(int argc, char **argv)
 		if (out == NULL)
 			die("cannot write %s", temp);
 	}
-	fprintf(out, "# 1 \"r68.prelude\"\n%s", prelude);
+	fprintf(out, "# 1 \"r68.prelude\"\n");
+	if (arch != NULL)
+		fprintf(out, " .arch %s\n", arch);
+	fputs(prelude, out);
 	fputs(defs.s ? defs.s : "", out);
 	translate_file(source, out, 0);
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
