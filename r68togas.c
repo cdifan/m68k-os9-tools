@@ -10,6 +10,7 @@
  */
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -345,6 +346,12 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		lx->p++;
 		return;
 	}
+	if (*p == '=' && symstart((unsigned char)p[1])) {
+		/* Ultra C's label designator, not part of the name. */
+		lx->p++;
+		parse_unary(lx, b);
+		return;
+	}
 	if (symstart((unsigned char)*p) || *p == '.') {
 		const char *q = p;
 		while (symchar((unsigned char)*q))
@@ -543,8 +550,11 @@ static int split_commas(const char *s, size_t n, const char **piece, size_t *len
 	size_t start = 0;
 	for (size_t i = 0; i <= n; i++) {
 		char c = i < n ? s[i] : ',';
-		if (quote) {
-			if (c == quote)
+		if (quote && i < n) {
+			/* In "...", a backslash takes the next character. */
+			if (c == '\\' && quote == '"' && i + 1 < n)
+				i++;
+			else if (c == quote)
 				quote = 0;
 			continue;
 		}
@@ -740,6 +750,9 @@ static int split_line(const char *text, struct line *l)
 	if (*p == '\0' || *p == '*' || *p == ';')
 		return 0;
 	if (!isspace((unsigned char)*p)) {
+		/* "=" before a label only says it is one (Ultra C). */
+		if (*p == '=')
+			p++;
 		const char *q = p;
 		while (*q && !isspace((unsigned char)*q) && *q != ':')
 			q++;
@@ -774,7 +787,9 @@ static int split_line(const char *text, struct line *l)
 	char quote = 0;
 	while (*q) {
 		if (quote) {
-			if (*q == quote)
+			if (*q == '\\' && quote == '"' && q[1])
+				q++;
+			else if (*q == quote)
 				quote = 0;
 		} else if (*q == '"' || *q == '\'') {
 			quote = *q;
@@ -878,6 +893,121 @@ static void expression_list(struct buf *b, const char *args, int chars)
 
 static void translate_file(const char *path, FILE *out, int depth);
 
+/* PATH if it exists, found with each component's case ignored (a kit's
+ * DEFS are in upper case, sources name them in lower case); null if not. */
+static char *find_ci(const char *path)
+{
+	FILE *t = fopen(path, "rb");
+	if (t != NULL) {
+		fclose(t);
+		return xstrdup(path);
+	}
+	struct buf done = { 0 };
+	const char *p = path;
+	if (*p == '/') {
+		bputc(&done, '/');
+		p++;
+	}
+	while (*p) {
+		const char *slash = strchr(p, '/');
+		size_t n = slash ? (size_t)(slash - p) : strlen(p);
+		DIR *d = opendir(done.n ? done.s : ".");
+		struct dirent *e;
+		char *match = NULL;
+		while (d != NULL && (e = readdir(d)) != NULL)
+			if (strlen(e->d_name) == n && strncasecmp(e->d_name, p, n) == 0) {
+				match = xstrdup(e->d_name);
+				break;
+			}
+		if (d != NULL)
+			closedir(d);
+		if (match == NULL) {
+			free(done.s);
+			return NULL;
+		}
+		if (done.n && done.s[done.n - 1] != '/')
+			bputc(&done, '/');
+		bputs(&done, match);
+		free(match);
+		p += n;
+		while (*p == '/')
+			p++;
+	}
+	t = done.s ? fopen(done.s, "rb") : NULL;
+	if (t == NULL) {
+		free(done.s);
+		return NULL;
+	}
+	fclose(t);
+	return done.s;
+}
+
+static char *join(const char *dir, size_t n, const char *name)
+{
+	char *r = xmalloc(n + strlen(name) + 2);
+	sprintf(r, "%.*s/%s", (int)n, dir, name);
+	return r;
+}
+
+/* The file of "use ARG" in the file FROM, by r68's rules: use x from the
+ * working directory, use "x" from FROM's directory, use <x> from the -u
+ * directories, then $MWOS/OS9/SRC/DEFS (Ultra C's r68 has \mwos there);
+ * the others are tried after these, and names are matched ignoring case. A
+ * DOS path's backslashes are slashes. Null if not found. */
+static char *use_file(const char *arg, const char *from)
+{
+	size_t n = strlen(arg);
+	char kind = 0;
+	char *name;
+	if (n >= 2 && ((arg[0] == '"' && arg[n - 1] == '"') || (arg[0] == '<' && strchr(">)", arg[n - 1])))) {
+		/* r68 takes <name) too. */
+		kind = arg[0];
+		name = xstrndup(arg + 1, n - 2);
+	} else {
+		name = xstrdup(arg);
+	}
+	for (char *c = name; *c; c++)
+		if (*c == '\\')
+			*c = '/';
+	char *found = NULL;
+	if (name[0] == '/') {
+		found = find_ci(name);
+		free(name);
+		return found;
+	}
+	const char *slash = strrchr(from, '/');
+	char *local = slash ? join(from, slash - from, name) : xstrdup(name);
+	const char *mwos = getenv("MWOS");
+	char *defs = mwos ? join(mwos, strlen(mwos), "OS9/SRC/DEFS") : NULL;
+	/* In the order of the kind, then the rest. */
+	const char *order[3];
+	order[0] = kind == '"' ? "source" : kind == '<' ? "search" : "cwd";
+	order[1] = kind == '"' ? "cwd" : "source";
+	order[2] = kind == '<' ? "cwd" : "search";
+	for (int o = 0; o < 3 && found == NULL; o++) {
+		if (strcmp(order[o], "cwd") == 0) {
+			found = find_ci(name);
+		} else if (strcmp(order[o], "source") == 0) {
+			found = find_ci(local);
+		} else {
+			for (int i = 0; i < st.nsearch && found == NULL; i++) {
+				char *f = join(st.search[i], strlen(st.search[i]), name);
+				found = find_ci(f);
+				free(f);
+			}
+			if (found == NULL && defs != NULL) {
+				char *f = join(defs, strlen(defs), name);
+				found = find_ci(f);
+				free(f);
+			}
+		}
+	}
+	free(local);
+	free(defs);
+	free(name);
+	return found;
+}
+
 /* Whether OP calls a macro defined so far (names in any case, as r68's
  * mnemonics). */
 static int is_macro(const char *op)
@@ -974,7 +1104,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		op_parts(l.op, base, sizeof base, &size);
 	else
 		base[0] = '\0', size = 0;
-	if (l.label && l.global)
+	/* Outside a psect (definition files used before it) r68 exports
+	 * nothing. */
+	if (l.label && l.global && st.in_psect)
 		add_global(l.label);
 
 	struct buf lab = { 0 };
@@ -1029,7 +1161,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		}
 		goto done;
 	}
-	if (strcmp(base, "nam") == 0 || strcmp(base, "pag") == 0 || strcmp(base, "opt") == 0 || strcmp(base, "end") == 0) {
+	/* spanreg: Ultra C's scratch register for r68's branch sizing. */
+	if (strcmp(base, "nam") == 0 || strcmp(base, "pag") == 0 || strcmp(base, "opt") == 0 || strcmp(base, "end") == 0 ||
+	    strcmp(base, "spanreg") == 0) {
 		bprintf(out, "*%s", text);
 		goto done;
 	}
@@ -1040,53 +1174,20 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	if (strcmp(base, "use") == 0) {
 		/* The used file, translated inline behind its own linemarker; the
 		 * source's numbering resumes after it. */
-		const char *name = l.args;
-		char *path2 = NULL;
-		size_t n = strlen(name);
-		int local = 0;
-		if (n >= 2 && (name[0] == '"' || name[0] == '<')) {
-			local = name[0] == '"';
-			path2 = xstrndup(name + 1, n - 2);
-		} else {
-			path2 = xstrdup(name);
-		}
-		char *found = NULL;
-		FILE *t = NULL;
-		if (local) {
-			const char *slash = strrchr(path, '/');
-			if (slash) {
-				found = xmalloc(slash - path + strlen(path2) + 2);
-				sprintf(found, "%.*s/%s", (int)(slash - path), path, path2);
-				t = fopen(found, "rb");
-			}
-		}
-		if (!t) {
-			free(found);
-			found = xstrdup(path2);
-			t = fopen(found, "rb");
-		}
-		for (int i = 0; !t && i < st.nsearch; i++) {
-			free(found);
-			found = xmalloc(strlen(st.search[i]) + strlen(path2) + 2);
-			sprintf(found, "%s/%s", st.search[i], path2);
-			t = fopen(found, "rb");
-		}
-		if (!t) {
-			fprintf(stderr, "%s:%d: use %s: not found\n", path, lineno, path2);
+		char *found = use_file(l.args, path);
+		bprintf(out, "*%s", text);
+		if (found == NULL) {
+			fprintf(stderr, "%s:%d: use %s: not found\n", path, lineno, l.args);
 			st.errors++;
-			bprintf(out, "*%s", text);
 		} else {
-			fclose(t);
-			bprintf(out, "*%s", text);
 			fprintf(fp, "%s\n", out->s);
 			out->n = 0;
 			out->s[0] = '\0';
 			translate_file(found, fp, depth + 1);
+			/* The next line is the including file's next. */
 			bprintf(out, "# %d \"%s\"", lineno + 1, path);
-			bputs(out, "\n*");
 		}
 		free(found);
-		free(path2);
 		goto done;
 	}
 	if (strcmp(base, "fail") == 0) {
@@ -1237,9 +1338,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		}
 		/* move.l #n,Dn: r68 doesn't make it moveq, as would. */
 		int no_moveq = strcmp(base, "move") == 0 && size == 'l';
-		/* A negative byte immediate: r68 writes the extension word
-		 * $00nn, as $FFnn. */
-		int byte_imm = size == 'b' && l.args[0] == '#' && l.args[1] == '-';
+		/* move.b with a negative immediate: r68 writes the extension
+		 * word $00nn, as $FFnn (both $FFnn for andi.b and the others). */
+		int byte_imm = strcmp(base, "move") == 0 && size == 'b' && l.args[0] == '#' && l.args[1] == '-';
 		pc_ext_offset = strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0 ||
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
 			  strcmp(base, "bset") == 0) && l.args[0] == '#') ? 4 : 2;
@@ -1365,6 +1466,9 @@ static const char prelude[] =
 	" endm\n"
 	"r68lo macro\n"
 	"r68__ofs set r68__ofs-\\2*(\\3)\n"
+	" ifne \\2-1\n"
+	"r68__ofs set r68__ofs&~1\n"
+	" endc\n"
 	"\\1 equ r68__ofs\n"
 	" endm\n"
 	"r68dox macro\n"
@@ -1375,8 +1479,12 @@ static const char prelude[] =
 	" endm\n"
 	"r68lox macro\n"
 	"r68__ofs set r68__ofs-\\1*(\\2)\n"
+	" ifne \\1-1\n"
+	"r68__ofs set r68__ofs&~1\n"
+	" endc\n"
 	" endm\n"
-	" section .text\n";
+	" section .text\n"
+	"r68__btext\n";
 
 static void usage(void)
 {
@@ -1466,7 +1574,10 @@ int main(int argc, char **argv)
 			for (int i = 1; i < k && i < 7; i++) {
 				struct buf e = { 0 };
 				expression(&e, pieces[i], lens[i]);
-				fprintf(out, " xdef %s\n%s equ %s\n", names[i], names[i], e.s);
+				/* The entry points are code offsets: a number is one
+				 * from the start of the code, as in rof2elf's object. */
+				int code = (i == 5 || i == 6) && is_number(pieces[i], lens[i]);
+				fprintf(out, " xdef %s\n%s equ %s%s\n", names[i], names[i], code ? "r68__btext+" : "", e.s);
 				free(e.s);
 			}
 			fprintf(out, " endc\n");
