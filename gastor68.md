@@ -56,6 +56,10 @@ only what GCC writes.
 
 - **Registers** lose their `%`. To `gas`, `%fp` is a6 and `%sp` a7; `%fp0`-`%fp7` are 68881
   registers and stay `fp0`-`fp7`.
+- **Operands:** GCC's `(8,%a5)`, `(%pc)` and `(4,%a0,%d1.l)` forms become r68's `8(a5)`,
+  `x(pc)` and `4(a0,d1.l)`; MIT syntax (switch code: `jmp %pc@(2,%d0:w)`) becomes the same forms,
+  with the index register's size kept (`2(pc,d0.w)`, `d0.l*4`), since r68 takes an index without
+  a size as `.l`. Bit fields: `d0{#30:#2}` is `d0{30:2}`.
 - **`movem` and `fmovem` masks become register lists** (`d2-d7/a2`, `fp0-fp1`). GCC writes
   masks as numbers in the order of the addressing mode; r68 reads a numeric mask in normal
   register order and reverses it itself for `-(An)`, so a number would select other registers.
@@ -75,6 +79,10 @@ GCC writes `jbsr`, `jra` and `j<cc>`, which `gas` sizes itself; r68 has no such 
 - Names pass through unchanged where r68 allows them (`CSWTCH.11`, `buf.0` are legal); a name r68
   can't take is an error. `.globl` labels get r68's `:` (global); undefined ones need no
   declaration in r68 and are dropped.
+- GCC's `.L` and `.LC` local labels are renamed into a collision-free r68 form, and GNU's numeric
+  local labels (`1:`, `1f`, `1b`, in inline assembly) into `g<n>.<k>`.
+- A label alone on a line in a data section goes onto the next data line (`zero: ds.b 4`): in
+  r68 a lone label in a vsect takes the initialized data's counter, not that of the `ds` after it.
 
 ### Data
 
@@ -124,3 +132,8 @@ been checked for either.
   `gas` assembles GCC's output, `ld` can keep one copy of a string that several files share.
   gastor68's output has them as `dc.b` lines in the code, like any other read-only data, so each
   file keeps its own copy: the code is a few bytes longer where strings repeat across files.
+
+## Tests
+
+- **`make check-gastor68`** in `test/abi-exec`: each test's C side compiled with `-S`, translated by
+  gastor68, translated back by r68togas, assembled by `gas`, linked and run, at `-O0` and `-O2`.
