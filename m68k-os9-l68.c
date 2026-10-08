@@ -196,8 +196,8 @@ static void read_z(const char *path)
 	}
 	if (fp != stdin)
 		fclose(fp);
+	/* The words stay: the options keep pointers into them. */
 	parse(words.n, words.v);
-	args_free(&words);
 }
 
 static long number(const char *option, const char *value, int base)
@@ -524,7 +524,8 @@ int main(int argc, char **argv)
 	}
 	args_add(&l.link, "-T");
 	char *base = st.raw ? concat("0x", st.base != NULL ? st.base : "0", NULL) : xstrdup("0x400000");
-	int biased = type == 0x01 || type == 0x0B;
+	/* Raw output (-r) isn't biased either, whatever the type (as l68). */
+	int biased = !st.raw && (type == 0x01 || type == 0x0B);
 	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0"));
 	free(base);
 	for (int i = 0; i < objects.n; i++) {

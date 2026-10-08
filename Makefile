@@ -25,10 +25,11 @@ DESTDIR=/usr
 EXE=elf2mod
 EXE_ROF2ELF=rof2elf
 EXE_ELF2ROF=elf2rof
-# xcc's options (Microware C 3.2) for GCC; libiberty runs the programs
-EXE_XCC=m68k-os9-xcc
-XCC_SRCS=m68k-os9-xcc.c os9conv.c os9link.c hostsys.c
-XCC_HDRS=os9conv.h os9link.h hostsys.h
+# The front ends for Microware's tools (xcc, l68, ...), on code they share;
+# libiberty runs the programs
+FRONTENDS=m68k-os9-xcc m68k-os9-l68
+FE_SRCS=os9conv.c os9link.c hostsys.c
+FE_HDRS=os9conv.h os9link.h hostsys.h
 LIBIBERTY_CFLAGS=-I/usr/include/libiberty
 # m68k-os9-gcc, with these binutils of m68k-elfos9 as m68k-os9- too, so that
 # build systems find a complete toolchain (./configure --host=m68k-os9)
@@ -43,18 +44,18 @@ RM=rm
 
 .PHONY: all clean
 
-all: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(EXE_XCC)
+all: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(FRONTENDS)
 
-install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(EXE_XCC)
+install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(FRONTENDS)
 	$(INSTALL) -s $(EXE) $(DESTDIR)/bin/$(EXE)
 	$(INSTALL) -s $(EXE_ROF2ELF) $(DESTDIR)/bin/$(EXE_ROF2ELF)
 	$(INSTALL) -s $(EXE_ELF2ROF) $(DESTDIR)/bin/$(EXE_ELF2ROF)
-	$(INSTALL) -s $(EXE_XCC) $(DESTDIR)/bin/$(EXE_XCC)
+	for t in $(FRONTENDS); do $(INSTALL) -s $$t $(DESTDIR)/bin/$$t; done
 	$(INSTALL) m68k-os9-gcc $(DESTDIR)/bin/m68k-os9-gcc
 	for t in $(OS9_TOOLS); do ln -sf m68k-elfos9-$$t $(DESTDIR)/bin/m68k-os9-$$t; done
 
 clean:
-	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(EXE_XCC)
+	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(FRONTENDS)
 
 $(EXE): elf2mod.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
@@ -66,5 +67,5 @@ $(EXE_ROF2ELF): rof2elf.c
 $(EXE_ELF2ROF): elf2rof.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-$(EXE_XCC): $(XCC_SRCS) $(XCC_HDRS)
-	$(CC) $(CFLAGS) $(LIBIBERTY_CFLAGS) $(LDFLAGS) -o $@ $(XCC_SRCS) -liberty
+$(FRONTENDS): %: %.c $(FE_SRCS) $(FE_HDRS)
+	$(CC) $(CFLAGS) $(LIBIBERTY_CFLAGS) $(LDFLAGS) -o $@ $< $(FE_SRCS) -liberty

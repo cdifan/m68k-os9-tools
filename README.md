@@ -21,6 +21,8 @@ tools do, converting them as needed. Microware's files are not included.
 - [m68k-os9-l68](m68k-os9-l68.md): a drop-in for Microware's linker `l68`, for every
   module type.
 
+      m68k-os9-l68 cstart.r prog.r -l=clib.l -l=sys.l -o=prog -g    # prog and prog.stb
+
 - [m68k-os9-r68](m68k-os9-r68.md): a drop-in for Microware's assembler `r68`.
 
       m68k-os9-r68 drv.a -a=TARGET -o=drv.r     # an ELF object (-obj=rof: a ROF)

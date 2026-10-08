@@ -124,6 +124,7 @@ every reference to them:
 |---|---|
 | `btext`, `_btext` | the module's start (offset 0) |
 | `bname`, `_bname` | the module's name |
+| `etext`, `_etext` | the module's end (its size; plus 4 when exactly one of the two pointer tables has entries, as both Microware linkers write it) |
 
 The linker script only has to define them, with any value, so that `ld` accepts the references;
 `PROVIDE` defines them only where something refers to them:

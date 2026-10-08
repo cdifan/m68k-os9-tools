@@ -272,8 +272,8 @@ static void read_z(const char *path)
 		args_add(&words, word);
 	if (fp != stdin)
 		fclose(fp);
+	/* The words stay: the options keep pointers into them. */
 	parse(words.n, words.v);
-	args_free(&words);
 }
 
 /* Sets option O with VALUE (null without one). */
