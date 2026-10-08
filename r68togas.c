@@ -170,7 +170,11 @@ static int is_r68_register(const char *s, size_t n)
 static void put_symbol(struct buf *b, const char *s, size_t n)
 {
 	for (size_t i = 0; i < n; i++) {
-		if (s[i] == '@')
+		if (s[i] == '\\' && i + 1 < n) {
+			/* a macro parameter in the name (Name\@) */
+			bput(b, s + i, 2);
+			i++;
+		} else if (s[i] == '@')
 			bputs(b, "_at_");
 		else
 			bputc(b, s[i]);
@@ -209,6 +213,7 @@ struct lexer {
 static int expr_chars;
 
 static void parse_binary(struct lexer *lx, struct buf *b, int prec, int top);
+static int forward_set(const char *s, size_t n);
 
 static void skipsp(struct lexer *lx)
 {
@@ -258,6 +263,9 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			q++;
 		if (p[1] == '#')
 			bputs(b, "NARG");
+		else if ((p[1] == 'L' || p[1] == 'l') && isdigit((unsigned char)p[2]))
+			/* \Ln: the length of argument n, counted by r68L */
+			bprintf(b, "r68__L%c", p[2]);
 		else
 			bput(b, p, q - p);
 		lx->p = q;
@@ -357,6 +365,8 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		while (symchar((unsigned char)*q))
 			q++;
 		put_symbol(b, p, q - p);
+		if (forward_set(p, q - p))
+			bputs(b, "__final");
 		lx->p = q;
 		return;
 	}
@@ -689,12 +699,22 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 
 /* An r68 string operand "..." or '...' as an MRI one: single quotes, a
  * quote inside doubled; r68's backslash takes the next character as it is. */
+/* In a macro body, where \1 ... \9, \@, \# in a string are the macro's
+ * (r68 substitutes them first; MRI does inside quotes too). */
+static int string_params;
+
 static void string_operand(struct buf *b, const char *s, size_t n)
 {
 	char q = s[0];
 	bputc(b, '\'');
 	for (size_t i = 1; i < n; i++) {
 		char c = s[i];
+		if (string_params && c == '\\' && i + 1 < n && (isdigit((unsigned char)s[i + 1]) || s[i + 1] == '@' ||
+								 s[i + 1] == '#')) {
+			bput(b, s + i, 2);
+			i++;
+			continue;
+		}
 		if (c == q) {
 			if (i + 1 < n && s[i + 1] == q) {
 				i++;
@@ -825,6 +845,21 @@ static void free_line(struct line *l)
 
 struct state {
 	int in_psect, in_vsect, remote;
+	int used_remote;	/* a vsect remote seen */
+	int in_macro, macro_ifs;	/* in a macro definition; its open conditionals */
+	int branch_sizing;	/* -b: r68's -b/-bt */
+	int cpu_level;		/* -m: 0, 10, 20, 30, 40, 60 */
+	char **locals;		/* -b: labels defined without ':' (scan_labels) */
+	int nlocals;
+	char **lmacros;		/* macros whose body uses \Ln: called through r68L */
+	int nlmacros;
+	const char *rest_of_file;	/* the text after the current line */
+	char **sets;		/* the names defined by set (scan_labels) */
+	int nsets;
+	char **finals;		/* those referred to before their first set */
+	int nfinals;
+	char **folded;		/* the names of -e (sys.l's equates) */
+	int nfolded;
 	const char *section;	/* the current section, null if not known */
 	char *psect;		/* the psect line's fields */
 	char *psect_args;
@@ -908,6 +943,196 @@ static void expression_list(struct buf *b, const char *args, int chars)
 }
 
 static void translate_file(const char *path, FILE *out, int depth);
+
+/* Whether name S (N chars), in an expression, is a set symbol not set yet
+ * (outside macro bodies, which expand later): r68 takes its final value
+ * there, as must as (NAME__final, defined at the end). */
+static int forward_set(const char *s, size_t n)
+{
+	if (st.in_macro)
+		return 0;
+	int is_set = 0;
+	for (int i = 0; i < st.nsets && !is_set; i++)
+		is_set = strlen(st.sets[i]) == n && strncmp(st.sets[i], s, n) == 0;
+	if (!is_set)
+		return 0;
+	for (int i = 0; i < st.nequates; i++)
+		if (strlen(st.equates[i]) == n && strncmp(st.equates[i], s, n) == 0)
+			return 0;
+	for (int i = 0; i < st.nfinals; i++)
+		if (strlen(st.finals[i]) == n && strncmp(st.finals[i], s, n) == 0)
+			return 1;
+	st.finals = xrealloc(st.finals, (st.nfinals + 1) * sizeof *st.finals);
+	st.finals[st.nfinals++] = xstrndup(s, n);
+	return 1;
+}
+
+/* Whether the macro body in TEXT (up to its endm line) uses \Ln. */
+static int uses_length(const char *text)
+{
+	if (text == NULL)
+		return 0;
+	for (const char *p = text; *p;) {
+		const char *e = p + strcspn(p, "\r\n");
+		const char *w = p;
+		if (!isspace((unsigned char)*w))
+			while (w < e && !isspace((unsigned char)*w))
+				w++;
+		while (w < e && isspace((unsigned char)*w))
+			w++;
+		if (e - w >= 4 && strncasecmp(w, "endm", 4) == 0 && (e - w == 4 || isspace((unsigned char)w[4])))
+			return 0;
+		for (const char *c = p; c + 2 < e; c++)
+			if (c[0] == '\\' && (c[1] == 'L' || c[1] == 'l') && isdigit((unsigned char)c[2]))
+				return 1;
+		p = e;
+		while (*p == '\r' || *p == '\n')
+			p++;
+	}
+	return 0;
+}
+
+/* The CPU an instruction needs (10 for the 68010 ... 60), 0 for any:
+ * r68 takes every instruction whatever its -m, as doesn't. */
+static int cpu_needed(const char *base, char size, const char *args)
+{
+	static const struct { const char *name; int level; } table[] = {
+		{ "movec", 10 }, { "moves", 10 }, { "rtd", 10 }, { "bkpt", 10 },
+		{ "extb", 20 }, { "cas", 20 }, { "cas2", 20 }, { "chk2", 20 }, { "cmp2", 20 }, { "pack", 20 },
+		{ "unpk", 20 }, { "callm", 20 }, { "rtm", 20 }, { "bfchg", 20 }, { "bfclr", 20 }, { "bfexts", 20 },
+		{ "bfextu", 20 }, { "bfffo", 20 }, { "bfins", 20 }, { "bfset", 20 }, { "bftst", 20 }, { "divsl", 20 },
+		{ "divul", 20 }, { "pmove", 30 }, { "pflush", 30 }, { "pflusha", 30 }, { "ploadr", 30 },
+		{ "ploadw", 30 }, { "ptestr", 30 }, { "ptestw", 30 }, { "pmovefd", 30 }, { "cinva", 40 },
+		{ "cinvl", 40 }, { "cinvp", 40 }, { "cpusha", 40 }, { "cpushl", 40 }, { "cpushp", 40 },
+		{ "move16", 40 }, { "pflushn", 40 }, { "pflushan", 40 }, { "ptest", 40 }, { "plpar", 60 },
+		{ "plpaw", 60 }, { "lpstop", 60 }, { NULL, 0 },
+	};
+	int level = 0;
+	for (int i = 0; table[i].name; i++)
+		if (strcmp(base, table[i].name) == 0)
+			level = table[i].level;
+	if ((strcmp(base, "muls") == 0 || strcmp(base, "mulu") == 0 || strcmp(base, "divs") == 0 ||
+	     strcmp(base, "divu") == 0 || strcmp(base, "link") == 0) && size == 'l')
+		level = 20;
+	if (strncmp(base, "trap", 4) == 0 && base[4] != '\0' && strcmp(base, "trapv") != 0)
+		level = 20;
+	/* the 68040's MMU and transparent translation registers */
+	if (strcmp(base, "movec") == 0) {
+		static const char *const regs040[] = { "itt0", "itt1", "dtt0", "dtt1", "urp", "srp", "tc", "mmusr",
+			NULL };
+		for (int i = 0; regs040[i]; i++) {
+			const char *f = strstr(args, regs040[i]);
+			if (f != NULL && (f == args || !isalnum((unsigned char)f[-1])) && !isalnum((unsigned char)f[strlen(regs040[i])]))
+				level = 40;
+		}
+	}
+	return level > st.cpu_level ? level : 0;
+}
+
+static const char *chip_name(int level)
+{
+	switch (level) {
+	case 0: return "68000/68881";
+	case 10: return "68010/68881";
+	case 20: return "68020/68881";
+	case 30: return "68030/68881";
+	case 40: return "68040";
+	default: return "68060";
+	}
+}
+
+static int is_lmacro(const char *op)
+{
+	for (int i = 0; i < st.nlmacros; i++)
+		if (ci_eq(st.lmacros[i], op))
+			return 1;
+	return 0;
+}
+
+/* Whether TARGET (a branch operand) is a label this source defines
+ * without ':' (scan_labels), or one made in a macro (\@). */
+static int local_label(const char *target)
+{
+	if (strchr(target, '\\') != NULL)
+		return 1;
+	for (int i = 0; i < st.nlocals; i++)
+		if (strcmp(st.locals[i], target) == 0)
+			return 1;
+	return 0;
+}
+
+static char *use_file(const char *arg, const char *from);
+
+/* Collects the labels PATH and the files it uses define without ':' (for
+ * -b), conditionals not considered; a name also defined with ':' is left
+ * out (global). */
+static void scan_labels(const char *path, int depth, char ***globals, int *nglobals)
+{
+	if (depth > 16)
+		return;
+	FILE *fp = fopen(path, "rb");
+	if (fp == NULL)
+		return;
+	char line[1024];
+	while (fgets(line, sizeof line, fp) != NULL) {
+		line[strcspn(line, "\r\n")] = '\0';
+		char *p = line;
+		if (*p == '\0' || *p == '*' || *p == ';')
+			continue;
+		if (!isspace((unsigned char)*p)) {
+			if (*p == '=')
+				p++;
+			size_t n = 0;
+			while (p[n] && !isspace((unsigned char)p[n]) && p[n] != ':')
+				n++;
+			{
+				/* defined by set? */
+				const char *o = p + n + (p[n] == ':');
+				while (*o == ' ' || *o == '\t')
+					o++;
+				if (strncasecmp(o, "set", 3) == 0 && (o[3] == '\0' || isspace((unsigned char)o[3]))) {
+					st.sets = xrealloc(st.sets, (st.nsets + 1) * sizeof *st.sets);
+					st.sets[st.nsets++] = xstrndup(p, n);
+				}
+			}
+			char **list = p[n] == ':' ? *globals : st.locals;
+			int *count = p[n] == ':' ? nglobals : &st.nlocals;
+			list = xrealloc(list, (*count + 1) * sizeof *list);
+			list[(*count)++] = xstrndup(p, n);
+			if (p[n] == ':')
+				*globals = list;
+			else
+				st.locals = list;
+			p += n;
+		}
+		while (*p && (isspace((unsigned char)*p) || *p == ':'))
+			p++;
+		if (strncasecmp(p, "use", 3) == 0 && isspace((unsigned char)p[3])) {
+			char *a = p + 3;
+			while (isspace((unsigned char)*a))
+				a++;
+			a[strcspn(a, " \t")] = '\0';
+			char *f = use_file(a, path);
+			if (f != NULL)
+				scan_labels(f, depth + 1, globals, nglobals);
+			free(f);
+		}
+	}
+	fclose(fp);
+}
+
+/* Whether BASE (lower case) is bra, bsr or a b<cc>. */
+static int is_branch(const char *base)
+{
+	static const char *const cc[] = { "ra", "sr", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge",
+		"lt", "gt", "le", "hs", "lo", NULL };
+	if (base[0] != 'b' || strlen(base) != 3)
+		return 0;
+	for (const char *const *c = cc; *c; c++)
+		if (strcmp(base + 1, *c) == 0)
+			return 1;
+	return 0;
+}
 
 static void add_equate(const char *name)
 {
@@ -1158,6 +1383,7 @@ static void movem_operands(struct buf *b, const char *args)
 static void translate_line(const char *text, struct buf *out, const char *path, int lineno, FILE *fp, int depth)
 {
 	struct line l;
+	string_params = st.in_macro;
 	if (!split_line(text, &l)) {
 		bputs(out, text);
 		return;
@@ -1206,6 +1432,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	if (strcmp(base, "vsect") == 0) {
 		st.in_vsect = 1;
 		st.remote = ci_eq(l.args, "remote");
+		st.used_remote |= st.remote;
 		bprintf(out, "*%s", text);
 		goto done;
 	}
@@ -1380,6 +1607,49 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	    strncmp(base, "if", 2) == 0 || strcmp(base, "align") == 0 || strcmp(base, "else") == 0 ||
 	    strcmp(base, "endc") == 0 || strcmp(base, "macro") == 0 || strcmp(base, "endm") == 0 ||
 	    strcmp(base, "endr") == 0 || strcmp(base, "os9") == 0 || strcmp(base, "tcall") == 0) {
+		/* A macro whose body uses \Ln: defined as NAME__r68, called
+		 * through r68L. */
+		if (strcmp(base, "macro") == 0 && l.label != NULL && uses_length(st.rest_of_file)) {
+			st.lmacros = xrealloc(st.lmacros, (st.nlmacros + 1) * sizeof *st.lmacros);
+			st.lmacros[st.nlmacros++] = xstrdup(l.label);
+			struct buf nm = { 0 };
+			put_symbol(&nm, l.label, strlen(l.label));
+			free(lab.s);
+			lab.s = NULL;
+			lab.n = lab.size = 0;
+			bprintf(&lab, "%s__r68", nm.s);
+			labs = lab.s;
+			free(nm.s);
+		}
+		/* r68 takes an endc in a macro body that closes nothing (a
+		 * board's definitions file), as doesn't: dropped. */
+		if (strcmp(base, "macro") == 0) {
+			st.in_macro = 1;
+			st.macro_ifs = 0;
+		} else if (strcmp(base, "endm") == 0) {
+			st.in_macro = 0;
+		} else if (st.in_macro && strncmp(base, "if", 2) == 0) {
+			st.macro_ifs++;
+		} else if (st.in_macro && strcmp(base, "endc") == 0) {
+			if (st.macro_ifs == 0) {
+				bprintf(out, "*%s", text);
+				goto done;
+			}
+			st.macro_ifs--;
+		}
+		/* An equ of a name set from sys.l (-e): a set, as MRI's equ
+		 * won't define a name again. */
+		if (strcmp(base, "equ") == 0 && l.label != NULL) {
+			int folded = 0;
+			for (int i = 0; i < st.nfolded && !folded; i++)
+				folded = strcmp(st.folded[i], l.label) == 0;
+			if (folded) {
+				bprintf(out, "%s set ", labs);
+				expression_list(out, l.args, 0);
+				bputs(out, rest);
+				goto done;
+			}
+		}
 		/* Where a conditional or macro leaves the section isn't known. */
 		if (strcmp(base, "equ") != 0 && strcmp(base, "set") != 0 && strcmp(base, "ds") != 0 &&
 		    strcmp(base, "os9") != 0 && strcmp(base, "tcall") != 0 && strcmp(base, "align") != 0)
@@ -1399,8 +1669,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	/* An instruction (or a macro call): its operands. */
 	{
 		/* The caches of cinv and cpush (bc, dc, ic, nc) aren't symbols. */
-		if (strncmp(base, "cinv", 4) == 0 || strncmp(base, "cpush", 5) == 0) {
-			bprintf(out, "%s %s %s%s", labs, l.op, l.args, rest);
+		/* movec's control registers too (itt0 isn't a symbol there). */
+		if (strncmp(base, "cinv", 4) == 0 || strncmp(base, "cpush", 5) == 0 || strcmp(base, "movec") == 0) {
+			int need = cpu_needed(base, size, l.args);
+			if (need)
+				bprintf(out, "%s r68chip %s,<%s %s>%s", labs, chip_name(need), l.op, l.args, rest);
+			else
+				bprintf(out, "%s %s %s%s", labs, l.op, l.args, rest);
 			goto done;
 		}
 		int absolute = strcmp(base, "jsr") == 0 || strcmp(base, "jmp") == 0 || strcmp(base, "lea") == 0 ||
@@ -1412,6 +1687,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		    an > 4 && strcasecmp(l.args + an - 4, ",ccr") == 0) {
 			/* r68 takes the word size for ccr (the byte operation's code). */
 			snprintf(opb, sizeof opb, "%s.b", base);
+			op = opb;
+		} else if (st.branch_sizing && size != 'w' && size != 'l' && is_branch(base) &&
+			   local_label(l.args)) {
+			/* r68 -b sizes branches (a bra.s that doesn't reach becomes
+			 * a bra.w); in MRI mode as sizes only jbra and jb<cc>. Only
+			 * to a local label of this source: to an external one, as
+			 * would make an absolute jmp on the 68000. */
+			/* as has no jblo, jbhs */
+			snprintf(opb, sizeof opb, "j%s", strcmp(base, "blo") == 0 ? "bcs" : strcmp(base, "bhs") == 0 ? "bcc" : base);
 			op = opb;
 		} else if (strcmp(base, "addi") == 0 || strcmp(base, "subi") == 0) {
 			/* r68 makes addi/subi #1..8 addq/subq; as does that for
@@ -1427,7 +1711,19 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		pc_ext_offset = strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0 ||
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
 			  strcmp(base, "bset") == 0) && l.args[0] == '#') ? 4 : 2;
+		if (is_lmacro(l.op)) {
+			/* through r68L, which counts the arguments' lengths */
+			bprintf(out, "%s r68L %s", labs, l.op);
+			if (*l.args) {
+				bputc(out, ',');
+				macro_arguments(out, l.args);
+			}
+			bputs(out, rest);
+			goto done;
+		}
+		size_t start = out->n;
 		bprintf(out, "%s %s ", labs, op);
+		int need = cpu_needed(base, size, l.args);
 		if (is_macro(l.op)) {
 			macro_arguments(out, l.args);
 		} else if (strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0) {
@@ -1452,6 +1748,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				if (no_moveq && i == 0 && pieces[i][0] == '#')
 					bputs(out, "+r68__0");
 			}
+		}
+		if (need) {
+			/* the line as r68chip <cpu>,<instruction>: the label first */
+			char *ins = xstrdup(out->s + start);
+			out->n = start;
+			out->s[start] = '\0';
+			size_t ln = strlen(labs);
+			bprintf(out, "%s r68chip %s,<%s>", labs, chip_name(need), ins + ln + 1);
+			free(ins);
 		}
 		bputs(out, rest);
 	}
@@ -1488,6 +1793,7 @@ static void translate_file(const char *path, FILE *out, int depth)
 		line.n = 0;
 		if (line.s)
 			line.s[0] = '\0';
+		st.rest_of_file = text.s + j;
 		translate_line(raw, &line, path, lineno, out, depth);
 		fprintf(out, "%s\n", line.s ? line.s : "");
 		free(raw);
@@ -1577,11 +1883,13 @@ static const char prelude[] =
 
 static void usage(void)
 {
-	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
+	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-e FILE] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
 	printf("  Translates a Microware r68 source to a GNU as source for as --mri\n");
 	printf("  (\".mri 1\" inside), keeping its line numbers; see r68togas.md.\n");
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
 	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060)\n");
+	printf("  -e FILE    equates (NAME VALUE lines, as sys.l's) set in the prelude\n");
+	printf("  -b         r68's -b/-bt: short branches that don't reach get longer\n");
 	printf("  -u DIR     search DIR for use files (r68's -u)\n");
 	printf("  -o OUTPUT  write to OUTPUT (default: standard output)\n");
 }
@@ -1607,6 +1915,22 @@ int main(int argc, char **argv)
 			else
 				bputs(&defs, "1");
 			bputc(&defs, '\n');
+		} else if (strcmp(argv[i], "-b") == 0) {
+			st.branch_sizing = 1;
+		} else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
+			/* NAME VALUE lines (sys.l's equates): set lines, which the
+			 * source may define again. */
+			FILE *ef = fopen(argv[++i], "r");
+			if (ef == NULL)
+				die("cannot read %s", argv[i]);
+			char name[512], value[64];
+			while (fscanf(ef, "%511s %63s", name, value) == 2) {
+				st.folded = xrealloc(st.folded, (st.nfolded + 1) * sizeof *st.folded);
+				st.folded[st.nfolded++] = xstrdup(name);
+				put_symbol(&defs, name, strlen(name));
+				bprintf(&defs, " set %s\n", value);
+			}
+			fclose(ef);
 		} else if (strncmp(argv[i], "-m", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
 			/* With the FPU: r68 takes its instructions for any CPU.
@@ -1618,6 +1942,7 @@ int main(int argc, char **argv)
 			if (d == NULL || d[0] < '0' || d[0] > '6' || d[1] || archs[d[0] - '0'] == NULL)
 				die("-m takes 0, 1, 2, 3, 4 or 6");
 			arch = archs[d[0] - '0'];
+			st.cpu_level = (d[0] - '0') * 10;
 		}
 		else if (strncmp(argv[i], "-u", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
@@ -1657,12 +1982,50 @@ int main(int argc, char **argv)
 	if (arch != NULL)
 		fprintf(out, " .arch %s\n", arch);
 	fputs(prelude, out);
+	/* r68chip CPU,<instruction>: one instruction of a later CPU than -m's */
+	fprintf(out, "r68chip macro\n chip \\1\n \\2\n chip %s\n endm\n", chip_name(st.cpu_level));
+	/* r68L NAME,args: r68__L1..8 set to the arguments' lengths (\Ln in
+	 * r68), then NAME__r68 called with the same arguments */
+	fputs("r68L macro\n", out);
+	for (int a = 1; a <= 8; a++)
+		fprintf(out, "r68__L%d set 0\n ifnc '\\%d',''\n irpc r68__ch,\\%d\nr68__L%d set r68__L%d+1\n endr\n endc\n",
+			a, a + 1, a + 1, a, a);
+	for (int n = 1; n <= 9; n++) {
+		fprintf(out, " ifeq NARG-%d\n \\1__r68", n);
+		for (int a = 2; a <= n; a++)
+			fprintf(out, "%s<\\%d>", a == 2 ? " " : ",", a);
+		fputs("\n endc\n", out);
+	}
+	fputs(" endm\n", out);
 	fputs(defs.s ? defs.s : "", out);
+	{
+		char **globals = NULL;
+		int nglobals = 0;
+		scan_labels(source, 0, &globals, &nglobals);
+		/* a name defined global anywhere isn't local */
+		int k = 0;
+		for (int i = 0; i < st.nlocals; i++) {
+			int g = 0;
+			for (int j = 0; j < nglobals && !g; j++)
+				g = strcmp(st.locals[i], globals[j]) == 0;
+			if (!g)
+				st.locals[k++] = st.locals[i];
+		}
+		st.nlocals = k;
+	}
 	translate_file(source, out, 0);
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
 	fputs(st.globals.s ? st.globals.s : "", out);
 	fputs(st.epilogue_more.s ? st.epilogue_more.s : "", out);
 	fputs("r68__0 equ 0\n", out);
+	/* set symbols referred to before their first set: their final value,
+	 * as r68 (two passes) takes it */
+	for (int i = 0; i < st.nfinals; i++) {
+		struct buf nm = { 0 };
+		put_symbol(&nm, st.finals[i], strlen(st.finals[i]));
+		fprintf(out, "%s__final equ %s\n", nm.s, nm.s);
+		free(nm.s);
+	}
 	if (st.psect_args != NULL) {
 		/* psect name,type/lang,attr/rev,edition,stack,entry[,trap entry]:
 		 * the module header symbols, as rof2elf makes them. */
@@ -1693,6 +2056,11 @@ int main(int argc, char **argv)
 	fprintf(final, "# 1 \"r68.prelude\"\n");
 	if (psect_name != NULL)
 		fprintf(final, " .file \"%s\"\n", psect_name);
+	if (st.used_remote)
+		/* The remote data's sections with their ELF flags (MRI's section
+		 * has none to give): allocated, writable, .remote.bss without
+		 * contents, as GCC's. */
+		fprintf(final, " .section .remote.data,\"aw\"\n .section .remote.bss,\"aw\",@nobits\n .text\n");
 	rewind(out);
 	char chunk[8192];
 	size_t got;

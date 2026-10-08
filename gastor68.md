@@ -89,6 +89,13 @@ GCC writes `jbsr`, `jra` and `j<cc>`, which `gas` sizes itself; r68 has no such 
 - Switch tables (at `-O0`): `.swbeg` (a hint for `gas`) is dropped; `.word .L11-.L4` becomes
   `dc.w` with the renamed labels.
 
+### Dropped
+
+`.type`, `.size`, `.ident`, `.file` (read for the psect's name), `.loc` and the other debug and
+CFI directives, `.swbeg`, and the DWARF sections. Inline assembly arrives between `#APP` and
+`#NO_APP`, with `| <line> "<file>"` comments; it is translated like the rest, and
+`.pushsection`/`.popsection` keep a section stack.
+
 ## Microware compatibility
 
 The output assembles with Ultra C's `r68` and with `m68k-os9-r68` to the same code and data as

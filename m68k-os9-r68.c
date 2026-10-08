@@ -80,6 +80,7 @@ static struct {
 	struct args defs;	/* -a=, as r68togas -a */
 	struct args dirs;	/* -u=, as r68togas -u */
 	int cpu;		/* -m */
+	int branch_sizing;	/* -b, -bt */
 	int listing, symbols, conditionals, all_bytes, macros;
 	const char *out;	/* -o= ("output.r" for a bare -o); null: none */
 	struct args files;
@@ -112,6 +113,8 @@ static void usage(void)
 		free(text);
 	}
 	printf("Options of this program:\n");
+	usage_line("-sysl=<lib>", "the library whose equates are folded in (default CLIB's sys.l;\n"
+		"                      none: none), as rof2elf -e folds them into ROFs");
 	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
 		"                      translated source, for m68k-os9-as; standard output\n"
 		"                      without -o)");
@@ -119,6 +122,10 @@ static void usage(void)
 	usage_line("M68K_OS9_ELF", "obj=elf, rof or ucc as -obj= (gas only on the command line)");
 	usage_line("MWOS", "use <file> also looks in $MWOS/OS9/SRC/DEFS");
 }
+
+/* -sysl=: the library whose equates are folded in ("none": none; default
+ * the sys.l of CLIB). */
+static const char *sysl;
 
 /* ----- Parsing ----- */
 
@@ -150,7 +157,7 @@ static void apply(const struct option *o, const char *value)
 {
 	switch (o->id) {
 	case O_A: args_add(&st.defs, "-a"); args_add(&st.defs, value); break;
-	case O_B: case O_BT: break;
+	case O_B: case O_BT: st.branch_sizing = 1; break;
 	case O_C: st.conditionals = 1; break;
 	case O_D: case O_E: case O_F: case O_N: case O_P: note_ignored(o, value); break;
 	case O_G: st.all_bytes = 1; break;
@@ -188,6 +195,10 @@ static void option(const char *arg)
 		os9_cleanup();
 		exit(0);
 	}
+	if (ci_prefix(text, "sysl=")) {
+		sysl = text + 5;
+		return;
+	}
 	if (ci_prefix(text, "obj=") && ci_eq(text + 4, "r68"))
 		error("-obj=r68: the input is r68 already");
 	if (os9conv_option(arg, OBJ_KINDS | (1u << OBJ_GAS)))
@@ -218,22 +229,24 @@ static void option(const char *arg)
 		value = candidate;
 	}
 	if (best == NULL) {
-		/* Single-letter flags together, as r68 takes them (-qb in the
-		 * SDK's makefiles). */
-		for (const char *c = text; *c; c++) {
+		/* Single-letter flags together, as r68 takes them (-qb). */
+		/* the flags at its start; the rest named in the note (Ultra
+		 * C's r68 takes -qXYZ123) */
+		const char *c;
+		for (c = text; *c; c++) {
 			const struct option *o = NULL;
 			for (size_t i = 0; i < NOPTIONS; i++)
 				if (options[i].kind == FLAG && options[i].name[1] == '\0' &&
 				    options[i].name[0] == tolower((unsigned char)*c))
 					o = &options[i];
-			if (o == NULL || text[1] == '\0')
-				error("unknown option %s (%s -? for the usage)", arg, os9_who);
+			if (o == NULL)
+				break;
+			apply(o, NULL);
 		}
-		for (const char *c = text; *c; c++)
-			for (size_t i = 0; i < NOPTIONS; i++)
-				if (options[i].kind == FLAG && options[i].name[1] == '\0' &&
-				    options[i].name[0] == tolower((unsigned char)*c))
-					apply(&options[i], NULL);
+		if (c == text)
+			error("unknown option %s (%s -? for the usage)", arg, os9_who);
+		if (*c)
+			args_addf(&st.notes, "%s (from %s)", c, arg);
 		return;
 	}
 	apply(best, value);
@@ -323,6 +336,43 @@ static void register_names(const char *object)
 	args_free(&renames);
 }
 
+/* The equates of sys.l (or -sysl=) as NAME VALUE lines in a temporary
+ * file, for r68togas -e; null if there is no library. r68 leaves them
+ * external and l68 takes them from sys.l at link time; as can't add two
+ * externals (F_ONE+F_TWO) or test one in a conditional, so they are
+ * folded in here, as rof2elf -e folds them into a ROF's code. */
+static char *equates(void)
+{
+	const char *lib = sysl != NULL ? (ci_eq(sysl, "none") ? NULL : sysl) : os9conv_sys_l();
+	if (lib == NULL)
+		return NULL;
+	char *elf = os9conv_as_elf(lib, 1);
+	struct args argv = { 0 };
+	args_add(&argv, NM);
+	args_add(&argv, elf);
+	char *out = os9_temp(".out");
+	int show = os9_show;
+	os9_show = 0;
+	int status = os9_run(&argv, out, NULL);
+	os9_show = show;
+	args_free(&argv);
+	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
+	if (fp == NULL)
+		error("%s %s failed", NM, elf);
+	char *file = os9_temp(".equ");
+	FILE *eq = fopen(file, "w");
+	if (eq == NULL)
+		error("cannot write %s", file);
+	char line[1024], value[64], type[8], name[512];
+	while (fgets(line, sizeof line, fp) != NULL)
+		if (sscanf(line, "%63s %7s %511s", value, type, name) == 3 && strcmp(type, "A") == 0)
+			fprintf(eq, "%s $%s\n", name, value);
+	fclose(fp);
+	fclose(eq);
+	free(elf);
+	return file;
+}
+
 /* GNU as's options for r68's -m<n>: the CPU, with the FPU (r68 takes its
  * instructions for any CPU). */
 static void cpu_options(struct args *argv)
@@ -373,7 +423,14 @@ static void assemble(const char *source)
 	args_add(&argv, R68TOGAS);
 	args_append(&argv, &st.defs);
 	args_addf(&argv, "-m%d", st.cpu);
+	if (st.branch_sizing)
+		args_add(&argv, "-b");
 	args_append(&argv, &st.dirs);
+	char *eqf = equates();
+	if (eqf != NULL) {
+		args_add(&argv, "-e");
+		args_add(&argv, eqf);
+	}
 	char *translated = NULL;
 	if (!gas || out != NULL) {
 		translated = gas ? (char *)out : os9_temp(".s");

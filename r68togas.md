@@ -216,6 +216,8 @@ sets the alias to an expression of the outer macro's alias.
 ### Macros
 
 - `\1` ... `\9` work as they are; `\#` (the argument count) is `NARG`.
+- **`\L<n>`** (an argument's length) has no MRI equivalent: a macro using it is called through the
+  prelude's `r68L`, which passes the lengths (counting a renamed `@`, `_at_`, as one character).
 - **Macro names** are case-sensitive in r68, not in `gas`: a macro whose name only the case tells
   from another (a macro `OS9` beside r68's `os9`) is defined and called as `NAME__r68m<n>`. A
   macro whose name has a dot (`DO_IT.w`) is called by that name, not as `DO_IT` with a size.
