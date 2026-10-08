@@ -28,6 +28,16 @@ with `ar rcs lib.a a.o b.o`, through `m68k-os9-ar`.
 | `-z[=<path>]` | file names from standard input or `<path>` | the same; options in the list are taken too, as `libgen` takes them |
 | `-obj=elf\|rof\|ucc` | ours | the output format (below); also `M68K_OS9_ELF`'s `obj=` |
 
+Options are case-insensitive (`-C -O=`), as in `libgen`. `-obj=` and `-elf…` are read before
+`-o=` and `-e=`. `-?` prints the usage in `libgen`'s order, each option with what differs in
+square brackets, generated from the parser's own table of options.
+
+As `libgen` does: of several listing options only the last counts (`-ln -lu` lists as `-lu`);
+`-c` together with a listing lists the inputs and writes no library; neither `-c` nor a listing
+gives a warning ("to create library, use the -c option") and the usage; `-c` writes over an
+existing file; a symbol defined twice is an error, for each such symbol, and no library is
+written.
+
 ## Inputs
 
 ELF objects, ROF objects (converted with [rof2elf](rof2elf.md) for an ELF archive, with the
@@ -42,15 +52,22 @@ an ELF member the file symbol `rof2elf` writes, else its member name without `.o
 - **`-obj=elf`** (the default): an `ar` archive with its index, under the name the makefile gives
   (`lib.l`). Our tools tell `ar` from ROF by the first bytes, so it links as it is. Member names
   are made unique (`d1/a.r` and `d2/a.r` don't replace each other, as plain `ar r` would).
+- **`-obj=rof`:** concatenated ROFs, which both Microware linkers read. ROF inputs are copied byte
+  for byte (`a.r b.r` gives the bytes of `cat a.r b.r`); ELF members and `libgen` libraries go
+  through [elf2rof](elf2rof.md).
 
 ## libgen's format
 
 `rof2elf` reads the format (see [rof2elf.md](rof2elf.md)); writing it needs what the manual
 (*Using Ultra C/C++*, chapter 9) leaves out:
 
+- **The hash table** of the global definitions always has 378 buckets; a name's bucket is the sum
+  of its bytes modulo 377, and each bucket's chain lists its definitions in reverse order.
+
 ## Differences and limitations
 
 - `-le`, `-ll` and `-p=` aren't supported.
+- `-e=` and `-mts` have no effect on `ar` archives and concatenated ROFs, which have no such fields.
 - The listings and the inputs take `ar` archives, concatenated ROFs and `libgen` libraries alike,
   where `libgen`'s listings read only its own libraries ("not made with libgen, try using rdump")
   and `libgen -c` refuses `libgen` libraries as inputs.
