@@ -102,7 +102,7 @@ static void usage(void)
 	}
 	printf("Options of this program:\n");
 	usage_line("-obj=<kind>", "what -c writes: elf (an ar archive, default), rof (concatenated ROFs),\n"
-		"                      ucc (libgen's format; not yet)");
+		"                      ucc (libgen's format)");
 	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
@@ -484,6 +484,26 @@ static void append_file(FILE *fp, const char *path)
 	fclose(in);
 }
 
+/* Member I as a ROF file: a ROF input as it is, an ELF member through
+ * elf2rof, named for its psect. */
+static const char *member_rof(int i)
+{
+	if (members[i].rof != NULL)
+		return members[i].rof;
+	char *made = os9_temp(".r");
+	struct args argv = { 0 };
+	args_add(&argv, ELF2ROF);
+	args_add(&argv, "-n");
+	args_add(&argv, members[i].psect);
+	args_add(&argv, "-o");
+	args_add(&argv, made);
+	args_add(&argv, members[i].elf);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("converting %s to ROF failed", members[i].elf);
+	args_free(&argv);
+	return made;
+}
+
 /* Writes the members as concatenated ROFs to OUT: ROF inputs as they are,
  * ELF members through elf2rof. */
 static void write_rof(const char *out)
@@ -492,24 +512,350 @@ static void write_rof(const char *out)
 	FILE *fp = fopen(temp, "wb");
 	if (fp == NULL)
 		error("cannot write %s", temp);
-	for (int i = 0; i < nmembers; i++) {
-		const char *rof = members[i].rof;
-		char *made = NULL;
-		if (rof == NULL) {
-			made = os9_temp(".r");
-			struct args argv = { 0 };
-			args_add(&argv, ELF2ROF);
-			args_add(&argv, "-o");
-			args_add(&argv, made);
-			args_add(&argv, members[i].elf);
-			if (os9_run(&argv, NULL, NULL) != 0)
-				error("converting %s to ROF failed", members[i].elf);
-			args_free(&argv);
-			rof = made;
-		}
-		append_file(fp, rof);
-	}
+	for (int i = 0; i < nmembers; i++)
+		append_file(fp, member_rof(i));
 	if (fclose(fp) != 0)
+		error("cannot write %s", temp);
+	if (host_replace(temp, out) != 0)
+		error("cannot write %s", out);
+}
+
+/* ----- libgen's format (-obj=ucc) ----- */
+
+/* A ROF psect, read for -obj=ucc. */
+struct rref { unsigned type; unsigned long offset; };
+struct rext { char *name; struct rref *refs; int nrefs; };
+struct rdef { char *name; unsigned type; unsigned long value; };
+struct rpsect {
+	unsigned series;
+	unsigned long statics, idata, code, stack, rstatics, ridata, debug;
+	char *name;
+	struct rdef *defs;
+	int ndefs;
+	const unsigned char *body;	/* code, idata, ridata, debug */
+	struct rext *exts;
+	int nexts;
+	struct rref *locals;
+	int nlocals;
+};
+
+struct rin { const unsigned char *p, *end; const char *file; };
+
+static unsigned long rget(struct rin *in, int n)
+{
+	if (in->end - in->p < n)
+		error("%s: truncated ROF", in->file);
+	unsigned long v = 0;
+	for (int i = 0; i < n; i++)
+		v = v << 8 | *in->p++;
+	return v;
+}
+
+static char *rname(struct rin *in)
+{
+	const unsigned char *z = memchr(in->p, 0, in->end - in->p);
+	if (z == NULL)
+		error("%s: truncated ROF", in->file);
+	char *s = xstrdup((const char *)in->p);
+	in->p = z + 1;
+	return s;
+}
+
+static struct rref *rrefs(struct rin *in, int wide, int *count)
+{
+	*count = (int)rget(in, wide ? 4 : 2);
+	struct rref *r = xmalloc((*count ? *count : 1) * sizeof *r);
+	for (int i = 0; i < *count; i++) {
+		r[i].type = rget(in, 2);
+		r[i].offset = rget(in, 4);
+	}
+	return r;
+}
+
+/* Reads the ROFs of file PATH (one, or several concatenated). */
+static void read_rofs(const char *path, struct rpsect **ps, int *nps)
+{
+	FILE *fp = fopen(path, "rb");
+	if (fp == NULL)
+		error("cannot read %s", path);
+	unsigned char *data = NULL;
+	size_t size = 0, cap = 0, n;
+	unsigned char buf[8192];
+	while ((n = fread(buf, 1, sizeof buf, fp)) > 0) {
+		if (size + n > cap)
+			data = xrealloc(data, cap = (size + n) * 2);
+		memcpy(data + size, buf, n);
+		size += n;
+	}
+	fclose(fp);
+	struct rin in = { data, data + size, path };
+	while (in.p < in.end) {
+		if (rget(&in, 4) != 0xDEADFACE)
+			error("%s: not a ROF", path);
+		*ps = xrealloc(*ps, (*nps + 1) * sizeof **ps);
+		struct rpsect *r = &(*ps)[(*nps)++];
+		memset(r, 0, sizeof *r);
+		rget(&in, 2);		/* type/language */
+		rget(&in, 2);		/* attributes/revision */
+		if (rget(&in, 2) != 0)
+			error("%s: ROF has assembly errors", path);
+		r->series = rget(&in, 2);
+		if (r->series != 9 && r->series != 0xF9)
+			error("%s: unsupported ROF series 0x%04X", path, r->series);
+		int wide = r->series == 0xF9;
+		in.p += 6;		/* date */
+		rget(&in, 2);		/* edition */
+		r->statics = rget(&in, 4);
+		r->idata = rget(&in, 4);
+		r->code = rget(&in, 4);
+		r->stack = rget(&in, 4);
+		if (rget(&in, 4) != 0 || rget(&in, 4) != 0)
+			;		/* entry points: libgen doesn't keep them */
+		r->rstatics = rget(&in, 4);
+		r->ridata = rget(&in, 4);
+		r->debug = rget(&in, 4);
+		r->name = rname(&in);
+		r->ndefs = (int)rget(&in, wide ? 4 : 2);
+		r->defs = xmalloc((r->ndefs ? r->ndefs : 1) * sizeof *r->defs);
+		for (int i = 0; i < r->ndefs; i++) {
+			r->defs[i].name = rname(&in);
+			r->defs[i].type = rget(&in, 2);
+			r->defs[i].value = rget(&in, 4);
+		}
+		unsigned long body = r->code + r->idata + r->ridata + r->debug;
+		if ((unsigned long)(in.end - in.p) < body)
+			error("%s: truncated ROF", path);
+		r->body = in.p;
+		in.p += body;
+		r->nexts = (int)rget(&in, wide ? 4 : 2);
+		r->exts = xmalloc((r->nexts ? r->nexts : 1) * sizeof *r->exts);
+		for (int i = 0; i < r->nexts; i++) {
+			r->exts[i].name = rname(&in);
+			r->exts[i].refs = rrefs(&in, wide, &r->exts[i].nrefs);
+		}
+		r->locals = rrefs(&in, wide, &r->nlocals);
+		while (in.p < in.end && *in.p == 0)
+			in.p++;
+	}
+	/* the data stays: the bodies point into it */
+}
+
+struct wbuf { unsigned char *s; size_t n, cap; };
+
+static void wput(struct wbuf *b, unsigned long v, int bytes)
+{
+	if (b->n + bytes > b->cap)
+		b->s = xrealloc(b->s, b->cap = (b->n + bytes) * 2 + 64);
+	for (int i = bytes - 1; i >= 0; i--)
+		b->s[b->n++] = (unsigned char)(v >> (8 * i));
+}
+
+static void wbytes(struct wbuf *b, const void *p, size_t n)
+{
+	if (b->n + n > b->cap)
+		b->s = xrealloc(b->s, b->cap = (b->n + n) * 2 + 64);
+	memcpy(b->s + b->n, p, n);
+	b->n += n;
+}
+
+static unsigned long wstr(struct wbuf *strs, const char *s)
+{
+	unsigned long at = strs->n;
+	wbytes(strs, s, strlen(s) + 1);
+	return at;
+}
+
+static int cmp_def(const void *a, const void *b)
+{
+	return strcmp(((const struct rdef *)a)->name, ((const struct rdef *)b)->name);
+}
+
+static int cmp_ext(const void *a, const void *b)
+{
+	return strcmp(((const struct rext *)a)->name, ((const struct rext *)b)->name);
+}
+
+#define LG_BUCKETS 378
+#define LG_NONE 0xFFFFFFFFul
+
+/* Whether reference type T is a long word of initialized data pointing into
+ * the code (CODE) or elsewhere: libgen counts them per psect (the module's
+ * two reference tables). */
+static int data_pointer(unsigned t)
+{
+	return (t & 0x0020) == 0 && (t & 0x0018) == 0x0018 && (t & 0x00C0) == 0;
+}
+
+/* Writes libgen's format (type 1; reverse engineering of libgen's output,
+ * see m68k-os9-libgen.md) to OUT. */
+static void write_ucc(const char *out)
+{
+	struct rpsect *ps = NULL;
+	int nps = 0;
+	for (int i = 0; i < nmembers; i++)
+		read_rofs(member_rof(i), &ps, &nps);
+
+	struct wbuf strs = { 0 }, defs = { 0 }, psects = { 0 }, irefs = { 0 }, erefs = { 0 }, blocks = { 0 };
+	unsigned long head[LG_BUCKETS];
+	for (int i = 0; i < LG_BUCKETS; i++)
+		head[i] = LG_NONE;
+	wstr(&strs, out);
+
+	/* the definitions, psect by psect, each psect's sorted by name */
+	int ndefs = 0;
+	struct { char *name; unsigned long index; } *defined = NULL;
+	unsigned long *dhead = xmalloc((nps ? nps : 1) * sizeof *dhead);
+	unsigned long *nameoff = xmalloc((nps ? nps : 1) * sizeof *nameoff);
+	unsigned long **extoff = xmalloc((nps ? nps : 1) * sizeof *extoff);
+	for (int p = 0; p < nps; p++) {
+		struct rpsect *r = &ps[p];
+		qsort(r->defs, r->ndefs, sizeof *r->defs, cmp_def);
+		qsort(r->exts, r->nexts, sizeof *r->exts, cmp_ext);
+		nameoff[p] = wstr(&strs, r->name);
+		dhead[p] = r->ndefs ? (unsigned long)ndefs : LG_NONE;
+		for (int i = 0; i < r->ndefs; i++, ndefs++) {
+			unsigned bucket = 0;
+			for (const unsigned char *c = (const unsigned char *)r->defs[i].name; *c; c++)
+				bucket += *c;
+			bucket %= LG_BUCKETS - 1;
+			wput(&defs, r->defs[i].type, 2);
+			wput(&defs, r->defs[i].value, 4);
+			wput(&defs, wstr(&strs, r->defs[i].name), 4);
+			wput(&defs, head[bucket], 4);
+			wput(&defs, i + 1 < r->ndefs ? (unsigned long)ndefs + 1 : LG_NONE, 4);
+			wput(&defs, p, 4);
+			head[bucket] = ndefs;
+			defined = xrealloc(defined, (ndefs + 1) * sizeof *defined);
+			defined[ndefs].name = r->defs[i].name;
+			defined[ndefs].index = ndefs;
+		}
+		extoff[p] = xmalloc((r->nexts ? r->nexts : 1) * sizeof **extoff);
+		for (int i = 0; i < r->nexts; i++)
+			extoff[p][i] = wstr(&strs, r->exts[i].name);
+	}
+
+	/* where the per-psect blocks start: after the tables */
+	unsigned long nirefs = 0, nerefs = 0;
+	for (int p = 0; p < nps; p++)
+		for (int i = 0; i < ps[p].nexts; i++) {
+			int found = 0;
+			for (int d = 0; d < ndefs && !found; d++)
+				found = strcmp(defined[d].name, ps[p].exts[i].name) == 0;
+			if (found)
+				nirefs++;
+			else
+				nerefs++;
+		}
+	unsigned long base = 46 + LG_BUCKETS * 4 + defs.n + strs.n + (unsigned long)nps * 66 + nirefs * 16 + nerefs * 16;
+
+	unsigned long ii = 0, ei = 0;
+	for (int p = 0; p < nps; p++) {
+		struct rpsect *r = &ps[p];
+		unsigned long codeoff = base + blocks.n;
+		unsigned long body = r->code + r->idata + r->ridata + r->debug;
+		wbytes(&blocks, r->body, body);
+		int wide = r->series == 0xF9;
+		unsigned long ihead = LG_NONE, ehead = LG_NONE;
+		unsigned long codeptrs = 0, dataptrs = 0;
+		/* references to the library's definitions, then to other names */
+		for (int pass = 0; pass < 2; pass++) {
+			struct wbuf *tab = pass == 0 ? &irefs : &erefs;
+			unsigned long *count = pass == 0 ? &ii : &ei;
+			unsigned long *headp = pass == 0 ? &ihead : &ehead;
+			long last = -1;
+			for (int i = 0; i < r->nexts; i++) {
+				long def = -1;
+				for (int d = 0; d < ndefs && def < 0; d++)
+					if (strcmp(defined[d].name, r->exts[i].name) == 0)
+						def = d;
+				if ((pass == 0) != (def >= 0))
+					continue;
+				if (last >= 0) {
+					/* the previous entry's next */
+					unsigned char *n = tab->s + last * 16 + 8;
+					unsigned long v = *count;
+					n[0] = v >> 24, n[1] = v >> 16, n[2] = v >> 8, n[3] = v;
+				} else {
+					*headp = *count;
+				}
+				wput(tab, r->exts[i].nrefs, 4);
+				wput(tab, base + blocks.n, 4);
+				wput(tab, LG_NONE, 4);
+				wput(tab, pass == 0 ? (unsigned long)def : extoff[p][i], 4);
+				for (int k = 0; k < r->exts[i].nrefs; k++) {
+					wput(&blocks, r->exts[i].refs[k].type, 2);
+					wput(&blocks, r->exts[i].refs[k].offset, 4);
+					if (data_pointer(r->exts[i].refs[k].type))
+						dataptrs++;
+				}
+				last = (long)*count;
+				(*count)++;
+			}
+		}
+		unsigned long locoff = base + blocks.n;
+		wput(&blocks, r->nlocals, wide ? 4 : 2);
+		for (int k = 0; k < r->nlocals; k++) {
+			wput(&blocks, r->locals[k].type, 2);
+			wput(&blocks, r->locals[k].offset, 4);
+			if (data_pointer(r->locals[k].type)) {
+				if ((r->locals[k].type & 7) == 4)
+					codeptrs++;
+				else
+					dataptrs++;
+			}
+		}
+		wput(&blocks, 0, 4), wput(&blocks, 0, 4), wput(&blocks, 0, 4), wput(&blocks, 0, 4);
+
+		wput(&psects, r->series, 2);
+		wput(&psects, r->statics, 4);
+		wput(&psects, r->idata, 4);
+		wput(&psects, r->rstatics, 4);
+		wput(&psects, r->ridata, 4);
+		wput(&psects, r->code, 4);
+		wput(&psects, r->debug, 4);
+		wput(&psects, r->stack, 4);
+		wput(&psects, 0, 4);
+		wput(&psects, codeoff, 4);
+		wput(&psects, locoff, 4);
+		wput(&psects, dataptrs, 4);
+		wput(&psects, codeptrs, 4);
+		wput(&psects, ihead, 4);
+		wput(&psects, ehead, 4);
+		wput(&psects, nameoff[p], 4);
+		wput(&psects, dhead[p], 4);
+	}
+
+	/* the header: id, format 1 for the 68000 family, date, edition */
+	struct wbuf lib = { 0 };
+	wput(&lib, 0x2D00D5BC, 4);
+	wput(&lib, 0xFF01, 2);
+	time_t now = time(NULL);
+	struct tm *t = localtime(&now);
+	wput(&lib, t->tm_year, 1), wput(&lib, t->tm_mon + 1, 1), wput(&lib, t->tm_mday, 1);
+	wput(&lib, t->tm_hour, 1), wput(&lib, t->tm_min, 1), wput(&lib, t->tm_sec, 1);
+	wput(&lib, st.edition != NULL ? strtoul(st.edition, NULL, 0) : 1, 2);
+	wput(&lib, 0, 4);
+	wput(&lib, LG_BUCKETS * 4, 4);
+	wput(&lib, defs.n, 4);
+	wput(&lib, strs.n, 4);
+	wput(&lib, psects.n, 4);
+	wput(&lib, irefs.n, 4);
+	wput(&lib, erefs.n, 4);
+	wput(&lib, 0, 1), wput(&lib, st.mts ? 2 : 0, 1), wput(&lib, 0, 2);
+	for (int i = 0; i < LG_BUCKETS; i++)
+		wput(&lib, head[i], 4);
+	wbytes(&lib, defs.s, defs.n);
+	wbytes(&lib, strs.s, strs.n);
+	wbytes(&lib, psects.s, psects.n);
+	wbytes(&lib, irefs.s, irefs.n);
+	wbytes(&lib, erefs.s, erefs.n);
+	if (lib.n != base)
+		error("internal error: library layout");
+	wbytes(&lib, blocks.s, blocks.n);
+
+	char *temp = temp_beside(out);
+	FILE *fp = fopen(temp, "wb");
+	if (fp == NULL || fwrite(lib.s, 1, lib.n, fp) != lib.n || fclose(fp) != 0)
 		error("cannot write %s", temp);
 	if (host_replace(temp, out) != 0)
 		error("cannot write %s", out);
@@ -635,7 +981,7 @@ int main(int argc, char **argv)
 	switch (os9conv.obj) {
 	case OBJ_ELF: write_ar(out); break;
 	case OBJ_ROF: write_rof(out); break;
-	default: error("-obj=ucc (libgen's own format) isn't written yet");
+	default: write_ucc(out); break;
 	}
 	os9_cleanup();
 	return 0;

@@ -79,6 +79,10 @@ size (`__os9_stack`), entry point (`__os9_entry`) and uninitialized trap entry (
 The options override them. Without them: a program module, object code, reentrant, revision 1,
 edition 0, stack 0xC00.
 
+## The pointer tables
+
+- first the jump table's entries, in reverse order;
+
 ## Far calls: the jump table
 
 Calls and address loads are PC-relative with 16-bit displacements, so they reach ±32 KB. For larger

@@ -58,14 +58,39 @@ an ELF member the file symbol `rof2elf` writes, else its member name without `.o
 - **`-obj=rof`:** concatenated ROFs, which both Microware linkers read. ROF inputs are copied byte
   for byte (`a.r b.r` gives the bytes of `cat a.r b.r`); ELF members and `libgen` libraries go
   through [elf2rof](elf2rof.md).
+- **`-obj=ucc`:** `libgen`'s own format, type 1, as Ultra C's `libgen -c` writes it, byte for byte
+  but for the creation date (which makes no two `libgen` runs identical). Members that aren't ROFs
+  go through `elf2rof`.
 
 ## libgen's format
 
 `rof2elf` reads the format (see [rof2elf.md](rof2elf.md)); writing it needs what the manual
 (*Using Ultra C/C++*, chapter 9) leaves out:
 
+- **The header** (46 bytes): bytes 4 and 5 are `$FF $01`; the creation date at `$06`-`$0B` (year
+  less 1900, month, day, hour, minute, second); the edition at `$0C`, a word (1 without `-e=`);
+  `-mts` as the value 2 in byte `$2B`.
 - **The hash table** of the global definitions always has 378 buckets; a name's bucket is the sum
   of its bytes modulo 377, and each bucket's chain lists its definitions in reverse order.
+- **The string table** holds the output path as given to `-o=`, then for each psect its name, its
+  definitions' names sorted, and all its external names sorted (also those the library defines,
+  whose references go by definition).
+- **The definitions** are psect by psect, each psect's sorted by name; an entry's last field is its
+  psect's index. Each psect's references to the library's definitions and to other names are
+  entries sorted by name.
+- **After the tables,** each psect's block: its code, initialized data, remote initialized data and
+  debug information, then the reference lists of its entries (the library's names first), its
+  local references (count and references, as in its ROF), and 16 zero bytes.
+- **A psect entry's fields at 42 and 46**, which the manual leaves unnamed, count the long words of
+  initialized data (also remote) that point into the data (and to external names) and into the
+  code: the module's two pointer tables.
+
+## Microware compatibility
+
+The listings `-l` (five 16-character columns per line), `-lu`, `-ln` and `-li` are identical to
+Ultra C's `libgen`'s on its own libraries, several libraries in one call too; `-obj=ucc` libraries
+are identical to `libgen -c`'s on the same ROFs but for the date (small psects with every kind of
+definition and reference, `-e=` and `-mts`, and C 3.2's `math.l`).
 
 ## Differences and limitations
 
