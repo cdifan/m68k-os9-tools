@@ -25,6 +25,7 @@
 #define GCC	"m68k-elfos9-gcc"
 #define NM	"m68k-elfos9-nm"
 #define ELF2ROF	"elf2rof"
+#define R68	"m68k-os9-r68"
 #define ELF2MOD	"elf2mod"
 
 
@@ -173,7 +174,7 @@ static void usage(void)
 	usage_line(".c", "C source");
 	usage_line(".r, .o", "object, ROF or ELF (ROF is converted; see -elf-save=)");
 	usage_line(".l", "library: ROFs or Ultra C's libgen format (converted), or an ar archive");
-	usage_line(".a", "r68 assembler source: not supported yet");
+	usage_line(".a", "r68 assembler source, assembled by m68k-os9-r68");
 	printf("Environment:\n");
 	usage_line("CDEF", "Microware's header directory");
 	usage_line("CLIB", "Microware's library directory: cstart.r, clib.l ...");
@@ -531,6 +532,27 @@ static void compile(const char *source, const char *output, int assembler, int r
 	}
 }
 
+/* Assembles r68 source SOURCE into OUTPUT, an ELF object or (ROF) a ROF,
+ * with m68k-os9-r68 for the CPU of -k/-tp (r68's 2 is the 68020 and the
+ * CPU32). */
+static void assemble(const char *source, const char *output, int rof)
+{
+	struct args argv = { 0 };
+	args_add(&argv, R68);
+	args_add(&argv, source);
+	if (st.cpu != 0)
+		args_add(&argv, "-m2");
+	args_add(&argv, rof ? "-obj=rof" : "-obj=elf");
+	args_addf(&argv, "-o=%s", output);
+	if (os9_quiet)
+		args_add(&argv, "-q");
+	if (!os9_quiet && !os9_show)
+		printf("'%s'\n", source);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("assembling %s failed", source);
+	args_free(&argv);
+}
+
 /* ----- Linking ----- */
 
 /* The linker script, laid out as elf2mod expects (as test/l68cmp/mod.lds):
@@ -716,7 +738,22 @@ int main(int argc, char **argv)
 		} else if (ci_eq(sfx, ".l")) {
 			args_add(&st.libs, file);
 		} else if (ci_eq(sfx, ".a")) {
-			error("%s: assembler sources (r68) aren't supported yet", file);
+			/* r68 assembler: through m68k-os9-r68 (-a has nothing to
+			 * do for it). */
+			char *name = stem(file, 0);
+			if (first == NULL)
+				first = xstrdup(name);
+			if (st.rel_only) {
+				const char *dir = st.reldir != NULL ? st.reldir : ".";
+				char *out = concat(dir, "/", name, ".r", NULL);
+				assemble(file, out, os9conv.obj != OBJ_ELF);
+				free(out);
+			} else if (!st.asm_only) {
+				char *out = os9_temp(".o");
+				assemble(file, out, 0);
+				args_add(&objects, out);
+			}
+			free(name);
 		} else {
 			error("%s: no recognized suffix", file);
 		}

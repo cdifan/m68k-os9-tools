@@ -623,22 +623,34 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 		for (int i = 0; i < k; i++)
 			regs += register_part(pieces[i], lens[i]);
 		if (regs > 0) {
-			/* d(An) with a displacement of 0: as would drop it, r68
-			 * keeps it; r68__0 (0, defined at the end) makes it a value
-			 * as doesn't know yet. */
+			/* d(An): r68 keeps a 16-bit displacement, also of 0, which
+			 * as would drop; (d).w(An) keeps it, on any CPU. */
 			int an = regs == 1 && k == (open > 0 ? 1 : 2) && address_register(inner, ilen);
 			/* A number before (pc): r68's raw displacement, which as
 			 * (MRI) takes as an absolute address: the address it
 			 * means, from the extension word's. */
 			int pc = open > 0 && pc_register(inner, ilen) && is_number(s, open);
+			if (an) {
+				const char *d = s, *r = NULL;
+				size_t dn = open, rn = 0;
+				for (int i = 0; i < k; i++) {
+					if (register_part(pieces[i], lens[i]))
+						r = pieces[i], rn = lens[i];
+					else
+						d = pieces[i], dn = lens[i];
+				}
+				bputc(b, '(');
+				expression(b, d, dn);
+				bprintf(b, ").w(%.*s)", (int)rn, r);
+				bput(b, s + end + 1, n - end - 1);
+				return;
+			}
 			if (pc) {
 				bprintf(b, "(*+%d+", pc_ext_offset);
 				expression(b, s, open);
 				bputc(b, ')');
 			} else if (open > 0) {
 				expression(b, s, open);
-				if (an)
-					bputs(b, "+r68__0");
 			}
 			bputc(b, '(');
 			for (int i = 0; i < k; i++) {
@@ -651,8 +663,6 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 						bput(b, pieces[i], lens[i]);
 				} else {
 					expression(b, pieces[i], lens[i]);
-					if (an)
-						bputs(b, "+r68__0");
 				}
 			}
 			bputc(b, ')');
@@ -893,8 +903,16 @@ static void expression_list(struct buf *b, const char *args, int chars)
 
 static void translate_file(const char *path, FILE *out, int depth);
 
-/* PATH if it exists, found with each component's case ignored (a kit's
- * DEFS are in upper case, sources name them in lower case); null if not. */
+/* Text S (N chars) for r68error's <...> argument and .error's "...": no
+ * angle brackets or double quotes. */
+static void error_text(struct buf *b, const char *s, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+		bputc(b, s[i] == '<' ? '(' : s[i] == '>' ? ')' : s[i] == '"' ? '\'' : s[i]);
+}
+
+/* PATH if it exists, found with each component's case ignored (a
+ * directory in upper case, named in lower case); null if not. */
 static char *find_ci(const char *path)
 {
 	FILE *t = fopen(path, "rb");
@@ -1175,11 +1193,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		/* The used file, translated inline behind its own linemarker; the
 		 * source's numbering resumes after it. */
 		char *found = use_file(l.args, path);
-		bprintf(out, "*%s", text);
 		if (found == NULL) {
-			fprintf(stderr, "%s:%d: use %s: not found\n", path, lineno, l.args);
-			st.errors++;
+			/* An error if the line is assembled: r68 skips a use in a
+			 * false conditional (a board's definitions file). */
+			bputs(out, " r68error <use ");
+			error_text(out, l.args, strlen(l.args));
+			bputs(out, ": not found>");
 		} else {
+			bprintf(out, "*%s", text);
 			fprintf(fp, "%s\n", out->s);
 			out->n = 0;
 			out->s[0] = '\0';
@@ -1191,8 +1212,17 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "fail") == 0) {
-		/* as's fail takes an expression: an error at this line. */
-		bprintf(out, " fail 0 %s", l.args);
+		/* An error with the rest of the line as its text (as's fail
+		 * takes an expression). */
+		const char *t = strstr(text, l.op) + strlen(l.op);
+		while (*t == ' ' || *t == '\t')
+			t++;
+		size_t tn = strlen(t);
+		while (tn > 0 && isspace((unsigned char)t[tn - 1]))
+			tn--;
+		bputs(out, " r68error <");
+		error_text(out, t, tn);
+		bputc(out, '>');
 		goto done;
 	}
 	if (strcmp(base, "rept") == 0) {
@@ -1320,6 +1350,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	}
 	/* An instruction (or a macro call): its operands. */
 	{
+		/* The caches of cinv and cpush (bc, dc, ic, nc) aren't symbols. */
+		if (strncmp(base, "cinv", 4) == 0 || strncmp(base, "cpush", 5) == 0) {
+			bprintf(out, "%s %s %s%s", labs, l.op, l.args, rest);
+			goto done;
+		}
 		int absolute = strcmp(base, "jsr") == 0 || strcmp(base, "jmp") == 0 || strcmp(base, "lea") == 0 ||
 			strcmp(base, "pea") == 0;
 		const char *op = l.op;
@@ -1418,6 +1453,12 @@ static void translate_file(const char *path, FILE *out, int depth)
 
 static const char prelude[] =
 	" .mri 1\n"
+	"* an error with a text, if assembled: fail, a use file not found\n"
+	"r68error macro\n"
+	" .mri 0\n"
+	" .error \"\\1\"\n"
+	" .mri 1\n"
+	" endm\n"
 	"* os9 call: trap #0 and the call's code\n"
 	"os9 macro\n"
 	" trap #0\n"
