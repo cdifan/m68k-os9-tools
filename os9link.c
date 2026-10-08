@@ -6,6 +6,7 @@
 
 #include "os9link.h"
 #include "hostsys.h"
+#include "r68x_note.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -196,12 +197,136 @@ static long table_size(const char *path)
 	return bytes;
 }
 
+/* Whether file PATH contains S. */
+static int file_contains(const char *path, const char *s)
+{
+	FILE *fp = fopen(path, "r");
+	if (fp == NULL)
+		return 0;
+	char line[2048];
+	int found = 0;
+	while (!found && fgets(line, sizeof line, fp) != NULL)
+		found = strstr(line, s) != NULL;
+	fclose(fp);
+	return found;
+}
+
+/* The definitions of the r68x_ symbols (r68x_note.h) the objects refer to,
+ * those named in LOG (the failed link's messages): from a link written
+ * anyway (--noinhibit-exec), its .r68x section (the notes of the members
+ * linked) into a linker script that defines them, which joins L->link.
+ * Returns the number defined, or -1 (reported). */
+static int r68x_definitions(struct os9link *l, const char *log)
+{
+	struct args argv = { 0 };
+	args_add(&argv, l->gcc);
+	args_append(&argv, &l->link);
+	args_add(&argv, "-o");
+	args_add(&argv, l->elf);
+	args_add(&argv, "-Wl,--noinhibit-exec");
+	os9_run(&argv, NULL, os9_temp(".log"));
+	args_free(&argv);
+
+	/* objcopy beside the driver: m68k-elfos9-gcc, m68k-elfos9-objcopy */
+	size_t gn = strlen(l->gcc);
+	char *objcopy = xmalloc(gn + 8);
+	strcpy(objcopy, l->gcc);
+	if (gn >= 3 && strcmp(objcopy + gn - 3, "gcc") == 0)
+		strcpy(objcopy + gn - 3, "objcopy");
+	else
+		strcpy(objcopy, "objcopy");
+	char *notes = os9_temp(".r68x");
+	args_add(&argv, objcopy);
+	args_addf(&argv, "--dump-section=" R68X_SECTION "=%s", notes);
+	args_add(&argv, l->elf);
+	args_add(&argv, os9_temp(".elf"));
+	int status = os9_run(&argv, NULL, os9_temp(".log"));
+	args_free(&argv);
+	free(objcopy);
+	FILE *fp = status == 0 ? fopen(notes, "r") : NULL;
+	if (fp == NULL)
+		return 0;
+
+	char *script = os9_temp(".ld");
+	FILE *ld = fopen(script, "w");
+	if (ld == NULL) {
+		fclose(fp);
+		fprintf(stderr, "%s: cannot write %s\n", l->who, script);
+		return -1;
+	}
+	struct args names = { 0 }, texts = { 0 }, undef = { 0 };
+	char line[4096];
+	int count = 0, bad = 0;
+	while (fgets(line, sizeof line, fp) != NULL) {
+		line[strcspn(line, "\r\n")] = '\0';
+		char *eq = strchr(line, '=');
+		if (eq == NULL)
+			continue;
+		*eq = '\0';
+		const char *name = line, *text = eq + 1;
+		/* only those referred to: an object also notes the
+		 * expressions of lines its conditionals left out */
+		if (!file_contains(log, name))
+			continue;
+		struct r68x x;
+		char check[32];
+		r68x_name(text, check);
+		if (!r68x_parse(text, &x) || strcmp(check, name) != 0) {
+			fprintf(stderr, "%s: bad link-time expression %s=%s\n", l->who, name, text);
+			bad = 1;
+			continue;
+		}
+		int seen = 0;
+		for (int i = 0; i < names.n && !seen; i++)
+			if (strcmp(names.v[i], name) == 0) {
+				seen = 1;
+				if (strcmp(texts.v[i], text) != 0) {
+					/* two expressions with the same hash */
+					fprintf(stderr, "%s: %s stands for both %s and %s\n", l->who, name, texts.v[i], text);
+					bad = 1;
+				}
+			}
+		if (!seen) {
+			/* -u: the objects refer to the terms only through the
+			 * note, which takes no library member in */
+			for (int i = 0; i < x.n; i++)
+				args_addf(&undef, "-Wl,--undefined=%s", x.t[i].sym);
+			char *e = r68x_ld_expression(&x);
+			fprintf(ld, "%s = %s;\n", name, e);
+			free(e);
+			args_add(&names, name);
+			args_add(&texts, text);
+			count++;
+		}
+		r68x_free(&x);
+	}
+	fclose(fp);
+	fclose(ld);
+	args_free(&names);
+	args_free(&texts);
+	if (!bad && count) {
+		args_append(&l->link, &undef);
+		args_add(&l->link, "-Xlinker");
+		args_add(&l->link, script);
+	}
+	args_free(&undef);
+	return bad ? -1 : count;
+}
+
 int os9_link(struct os9link *l)
 {
 	char *log = os9_temp(".log");
 	int status = link_elf(l, -1, log);
 	if (os9_dry_run)
 		return make_module(l, NULL);
+	if (status != 0 && file_contains(log, R68X_PREFIX)) {
+		/* link-time expressions: defined, then linked again */
+		int n = r68x_definitions(l, log);
+		if (n < 0)
+			return 1;
+		if (n > 0)
+			status = link_elf(l, -1, log);
+	}
 	if (status == 0) {
 		cat_stderr(log);
 		return make_module(l, NULL);

@@ -30,8 +30,8 @@ TRANSLATORS=r68togas gastor68
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
 # libiberty runs the programs
 FRONTENDS=m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen m68k-os9-r68
-FE_SRCS=os9conv.c os9link.c hostsys.c
-FE_HDRS=os9conv.h os9link.h hostsys.h
+FE_SRCS=os9conv.c os9link.c hostsys.c r68x_note.c
+FE_HDRS=os9conv.h os9link.h hostsys.h r68x_note.h
 LIBIBERTY_CFLAGS=-I/usr/include/libiberty
 # m68k-os9-gcc, with these binutils of m68k-elfos9 as m68k-os9- too, so that
 # build systems find a complete toolchain (./configure --host=m68k-os9)
@@ -63,14 +63,14 @@ $(EXE): elf2mod.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 # rof2elf and elf2rof need no BFD.
-$(EXE_ROF2ELF): rof2elf.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+$(EXE_ROF2ELF): rof2elf.c r68x_note.c r68x_note.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c
 
 $(EXE_ELF2ROF): elf2rof.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-$(TRANSLATORS): %: %.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+$(TRANSLATORS): %: %.c r68x_note.c r68x_note.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c
 
 $(FRONTENDS): %: %.c $(FE_SRCS) $(FE_HDRS)
 	$(CC) $(CFLAGS) $(LIBIBERTY_CFLAGS) $(LDFLAGS) -o $@ $< $(FE_SRCS) -liberty

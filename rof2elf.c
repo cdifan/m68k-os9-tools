@@ -59,6 +59,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "r68x_note.h"
+
 /* ROF reference and definition type bits.  */
 #define T_KIND		0x0007	/* definition kind / reference target */
 #define T_BSS		0x0000
@@ -624,13 +626,13 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
 enum
 {
   S_NULL, S_TEXT, S_DATA, S_BSS, S_RDATA, S_RBSS, S_RELTEXT, S_RELDATA,
-  S_RELRDATA, S_SYMTAB, S_STRTAB, S_SHSTRTAB, S_NUM
+  S_RELRDATA, S_SYMTAB, S_STRTAB, S_SHSTRTAB, S_R68X, S_NUM
 };
 
 static const char *const secnames[S_NUM] = {
   "", ".text", ".data", ".bss", ".remote.data", ".remote.bss",
   ".rela.text", ".rela.data", ".rela.remote.data", ".symtab", ".strtab",
-  ".shstrtab"
+  ".shstrtab", R68X_SECTION
 };
 
 typedef struct
@@ -638,6 +640,9 @@ typedef struct
   Buf syms, strs, rel[3], text, data, rdata;
   int nsyms, nlocal;
   int *extsym;			/* ELF symbol of each external name */
+  Buf notes;			/* .r68x: link-time expressions */
+  char **xnames;		/* their symbols' names */
+  int *xsyms, nx;		/* and ELF symbols */
 } Elf;
 
 static int
@@ -667,6 +672,34 @@ add_sym (Elf *e, const char *name, uint32_t value, uint32_t size,
 #define SHN_ABS 0xFFF1
 #define SHN_COMMON 0xFFF2
 #define INFO(b, t) (((b) << 4) | (t))
+
+/* The ELF symbol for link-time expression X (r68x_note.h), its
+   definition noted in .r68x once.  */
+static int
+r68x_symbol (Elf *e, const struct r68x *x)
+{
+  char *text = r68x_text (x), name[32];
+  int i;
+  r68x_name (text, name);
+  for (i = 0; i < e->nx; i++)
+    if (!strcmp (e->xnames[i], name))
+      {
+	free (text);
+	return e->xsyms[i];
+      }
+  e->xnames = realloc (e->xnames, (e->nx + 1) * sizeof (char *));
+  e->xsyms = realloc (e->xsyms, (e->nx + 1) * sizeof (int));
+  if (!e->xnames || !e->xsyms)
+    die ("%s", "out of memory");
+  e->xnames[e->nx] = strcpy (xmalloc (strlen (name) + 1), name);
+  e->xsyms[e->nx] = add_sym (e, name, 0, 0, INFO (STB_GLOBAL, 0), 0);
+  buf_add (&e->notes, name, strlen (name));
+  buf_add (&e->notes, "=", 1);
+  buf_add (&e->notes, text, strlen (text));
+  buf_add (&e->notes, "\n", 1);
+  free (text);
+  return e->xsyms[e->nx++];
+}
 
 /* Section symbol index for a reference target kind.  */
 static int
@@ -887,8 +920,59 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	       : (int32_t) (((uint32_t) p[0] << 24) | ((uint32_t) p[1] << 16)
 			    | (p[2] << 8) | p[3]);
 
-      /* Fold known equates into the value; at most one other term and
-	 one negated code term can remain.  */
+      /* As it is, if one relocation can take it (one term, maybe less
+	 this ROF's code): equates too stay external, as l68 resolves
+	 them.  */
+      for (n = i; n < k; n++)
+	{
+	  Ref *x = &r->refs[n];
+	  if (x->type & R_NEG)
+	    {
+	      if (neg)
+		break;
+	      neg = x;
+	    }
+	  else
+	    {
+	      if (pos)
+		break;
+	      pos = x;
+	    }
+	}
+      if (n == k && pos
+	  && (pos->ext >= 0 || target_section (pos->type & T_KIND) >= 0)
+	  && (!neg || (neg->ext < 0 && (neg->type & T_KIND) == T_CODE
+		       && !(neg->type & R_REL) && !(pos->type & R_REL)
+		       && sec == S_TEXT)))
+	goto unfolded;
+      pos = neg = NULL;
+
+      /* Only external terms, none PC-relative: a link-time expression
+	 (r68x_note.h), as l68 would resolve it.  */
+      {
+	struct r68x x = { NULL, 0 };
+	for (n = i; n < k; n++)
+	  {
+	    Ref *y = &r->refs[n];
+	    if (y->ext < 0 || (y->type & R_REL))
+	      break;
+	    r68x_add (&x, r->exts[y->ext], strlen (r->exts[y->ext]),
+		      (y->type & R_NEG) ? -1 : 1);
+	  }
+	if (n == k && r68x_needed (&x))
+	  {
+	    sym = r68x_symbol (&e, &x);
+	    r68x_free (&x);
+	    type = size == 1 ? R_68K_8 : size == 2 ? R_68K_16 : R_68K_32;
+	    add_rela (&e, sec, off, sym, type, addend);
+	    memset (p, 0, size);
+	    continue;
+	  }
+	r68x_free (&x);
+      }
+
+      /* Otherwise known equates are folded into the value; at most one
+	 other term and one negated code term can remain.  */
       for (n = i; n < k; n++)
 	{
 	  Ref *x = &r->refs[n];
@@ -929,6 +1013,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	}
       if (!pos)
 	goto unsupported;
+    unfolded:
       rel = pos->type & R_REL;
       if (pos->ext >= 0)
 	sym = e.extsym[pos->ext];
@@ -976,6 +1061,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   secbuf[S_RELRDATA] = &e.rel[2];
   secbuf[S_SYMTAB] = &e.syms;
   secbuf[S_STRTAB] = &e.strs;
+  secbuf[S_R68X] = &e.notes;
   secsize[S_BSS] = r->statics;
   secsize[S_RBSS] = r->rstatics;
 
@@ -1039,6 +1125,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	    entsize = 16;
 	    break;
 	  case S_STRTAB: case S_SHSTRTAB: type = 3; align = 1; break;
+	  case S_R68X: align = 1; break;	/* not loaded */
 	  }
 	put32 (s, nameoff[i]);
 	put32 (s + 4, type);
@@ -1061,6 +1148,11 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   for (i = 0; i < 3; i++)
     free (e.rel[i].buf);
   free (e.extsym);
+  free (e.notes.buf);
+  for (i = 0; i < e.nx; i++)
+    free (e.xnames[i]);
+  free (e.xnames);
+  free (e.xsyms);
 }
 
 /* Read the whole file NAME.  */

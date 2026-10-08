@@ -12,9 +12,12 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "r68x_note.h"
 
 static const char *progname = "r68togas";
 
@@ -436,11 +439,30 @@ static void parse_binary(struct lexer *lx, struct buf *b, int prec, int top)
 	free(left.s);
 }
 
+static int fold_all, fold_first, fold_imm;	/* fold_imm: in # operands only (quick fields) */
+static int dc_size;	/* in a dc list: the element size (* is the statement's start) */	/* fold_first: in the first of a list (a trap macro's trap) */
+static int annotate, annotate_op;	/* this line changed in a way not obvious from it: noted
+					   (annotate_op: only its operation, noted alone) */
+static struct buf orig_stmt;		/* its statement as in the source, for the note */
+static struct buf orig_op;		/* its operation as in the source */
+static struct buf line_rest;		/* the line's comment, as the translation ends with it */
+static char *fold_equates(const char *s);
+static FILE *fold_log;			/* R68TOGAS_FOLDLOG: where the folds are listed */
+static const char *log_path = "";	/* the line being translated, for it */
+static int log_line;
+
 /* Translates expression text E (N chars) into B; returns 0 when it isn't
  * one r68 would take whole (then copied as it is). */
 static int expression(struct buf *b, const char *e, size_t n)
 {
 	char *s = xstrndup(e, n);
+	char *f = fold_equates(s);
+	if (f != NULL) {
+		free(s);
+		s = f;
+		e = s;
+		n = strlen(s);
+	}
 	struct lexer lx = { s, s, 1 };
 	struct buf out = { 0 };
 	parse_binary(&lx, &out, P_SHIFT, 1);
@@ -603,7 +625,11 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 		return;
 	if (*s == '#') {
 		bputc(b, '#');
+		int save = fold_all;
+		if (fold_imm)
+			fold_all = 1;
 		expression(b, s + 1, n - 1);
+		fold_all = save;
 		return;
 	}
 	if (register_list(s, n)) {
@@ -664,6 +690,7 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 			}
 			if (pc) {
 				bprintf(b, "(*+%d+", pc_ext_offset);
+				annotate = 1;
 				expression(b, s, open);
 				bputc(b, ')');
 			} else if (open > 0) {
@@ -870,6 +897,7 @@ struct state {
 	char **finals;		/* those referred to before their first set */
 	int nfinals;
 	char **folded;		/* the names of -e (sys.l's equates) */
+	char **foldval;		/* and their values */
 	int nfolded;
 	const char *section;	/* the current section, null if not known */
 	char *psect;		/* the psect line's fields */
@@ -884,9 +912,321 @@ struct state {
 	char **equates;		/* names defined by equ, set, do, lo so far */
 	int nequates;
 	int nmacros;
+	unsigned *macro_fold;	/* per macro: the parameters (bit n-1 for \n) used where
+				   equates are folded in (see fold_equates) */
 };
 
 static struct state st;
+
+/* sys.l's equates (-e) are left to the linker, as r68 leaves them, where an
+ * ELF relocation (symbol + addend) can take them: in a sum whose only
+ * symbol is the equate, added. In any other expression (another symbol,
+ * the equate subtracted, another operator) and where fold_all is set (a
+ * field in the instruction word, a size, a conditional) their values are
+ * put in. */
+static int folded_index(const char *s, size_t n)
+{
+	for (int i = 0; i < st.nfolded; i++)
+		if (strlen(st.folded[i]) == n && strncmp(st.folded[i], s, n) == 0)
+			return i;
+	return -1;
+}
+
+/* Link-time expressions (r68x_note.h): an expression of sys.l's equates
+ * that one relocation can't take but a sum of them can (Dir_+Write_,
+ * PD_PAR-PD_OPT, 4*F$Send, with constants) becomes r68x_<hash>+constant,
+ * the definition noted in .r68x, where a relocation takes it (r68x_ok: an
+ * instruction's or dc's operand; not equ and set, whose names may be used
+ * in fields where they are folded). */
+static int r68x_ok;
+static struct buf r68x_notes;	/* the .r68x section's lines */
+
+struct lin {
+	struct r68x x;
+	long c;
+	int ok;
+	const char *p;
+};
+
+static void lin_binary(struct lin *v, int prec);
+
+static void lin_unary(struct lin *v)
+{
+	const char *p = v->p;
+	if (*p == '-' || *p == '+' || *p == '^' || *p == '~') {
+		v->p++;
+		lin_unary(v);
+		if (*p == '-') {
+			v->c = -v->c;
+			for (int i = 0; i < v->x.n; i++)
+				v->x.t[i].coef = -v->x.t[i].coef;
+		} else if (*p != '+') {
+			v->c = ~v->c;
+			v->ok &= v->x.n == 0;
+		}
+		return;
+	}
+	if (*p == '(') {
+		v->p++;
+		lin_binary(v, P_SHIFT);
+		if (*v->p == ')')
+			v->p++;
+		else
+			v->ok = 0;
+		return;
+	}
+	unsigned long n = 0;
+	const char *q = p;
+	if (*p == '$' || (*p == '0' && (p[1] == 'x' || p[1] == 'X'))) {
+		q = p + (*p == '$' ? 1 : 2);
+		for (; isxdigit((unsigned char)*q); q++)
+			n = n << 4 | (isdigit((unsigned char)*q) ? *q - '0' : (tolower((unsigned char)*q) - 'a' + 10));
+	} else if (*p == '%') {
+		for (q = p + 1; *q == '0' || *q == '1'; q++)
+			n = n << 1 | (*q - '0');
+	} else if (isdigit((unsigned char)*p)) {
+		for (; isdigit((unsigned char)*q); q++)
+			n = n * 10 + (*q - '0');
+	} else if (*p == '\'') {
+		for (q = p + 1; *q != '\0'; q++) {
+			if (*q == '\'') {
+				if (q[1] != '\'')
+					break;
+				q++;
+			}
+			n = n << 8 | (unsigned char)*q;
+		}
+		if (*q != '\'')
+			v->ok = 0;
+		else
+			q++;
+	} else if (symstart((unsigned char)*p)) {
+		while (symchar((unsigned char)*q))
+			q++;
+		/* only sys.l's equates: a label, a set symbol, the location
+		 * don't go in a note */
+		if (folded_index(p, q - p) < 0)
+			v->ok = 0;
+		else
+			r68x_add(&v->x, p, q - p, 1);
+		v->p = q;
+		return;
+	}
+	if (q == p || symchar((unsigned char)*q))
+		v->ok = 0;
+	v->c = (long)(n & 0xffffffffUL);
+	v->p = q;
+}
+
+static void lin_binary(struct lin *v, int prec)
+{
+	if (prec > P_LOGIC) {
+		lin_unary(v);
+		return;
+	}
+	lin_binary(v, prec + 1);
+	int len, p;
+	const char *as;
+	while (v->ok && (p = binop(v->p, &len, &as)) == prec) {
+		struct lin r = { { NULL, 0 }, 0, 1, v->p + len };
+		lin_binary(&r, prec + 1);
+		v->p = r.p;
+		v->ok &= r.ok;
+		char o = *as;
+		if (o == '+' || o == '-') {
+			for (int i = 0; i < r.x.n; i++)
+				r68x_add(&v->x, r.x.t[i].sym, strlen(r.x.t[i].sym), o == '-' ? -r.x.t[i].coef : r.x.t[i].coef);
+			v->c = o == '-' ? v->c - r.c : v->c + r.c;
+		} else if (o == '*' && (v->x.n == 0 || r.x.n == 0)) {
+			/* a symbol times a number */
+			struct lin *s = v->x.n ? v : &r;
+			long k = v->x.n ? r.c : v->c;
+			for (int i = 0; i < s->x.n; i++)
+				s->x.t[i].coef *= k;
+			v->c *= r.c;
+			if (s == &r) {
+				r68x_free(&v->x);
+				v->x = r.x;
+				r.x.t = NULL;
+				r.x.n = 0;
+			}
+		} else if (v->x.n == 0 && r.x.n == 0) {
+			unsigned long a = v->c, b = r.c;
+			if (o == '/' && b == 0)
+				v->ok = 0;
+			else
+				v->c = o == '/' ? (long)a / (long)b : o == '&' ? (long)(a & b) : o == '!' ? (long)(a | b) :
+					o == '<' ? (long)(a << (b & 31)) : (long)(a >> (b & 31));
+		} else {
+			v->ok = 0;
+		}
+		r68x_free(&r.x);
+	}
+}
+
+/* Expression text S as a link-time expression: null if it isn't one, or
+ * one relocation takes it as it is. */
+static char *r68x_expression(const char *s)
+{
+	struct lin v = { { NULL, 0 }, 0, 1, s };
+	lin_binary(&v, P_SHIFT);
+	if (!v.ok || *v.p != '\0' || (v.x.n > 0 && !r68x_needed(&v.x))) {
+		r68x_free(&v.x);
+		return NULL;
+	}
+	struct buf b = { 0 };
+	long c = (long)(int32_t)(v.c & 0xffffffffUL);
+	if (v.x.n > 0) {
+		char *text = r68x_text(&v.x);
+		char name[32];
+		r68x_name(text, name);
+		struct buf note = { 0 };
+		bprintf(&note, "%s=%s\\n", name, text);
+		if (r68x_notes.s == NULL || strstr(r68x_notes.s, note.s) == NULL)
+			bputs(&r68x_notes, note.s);
+		free(note.s);
+		free(text);
+		bputs(&b, name);
+		if (c != 0)
+			bputc(&b, c < 0 ? '-' : '+');
+	} else if (c < 0) {
+		bputc(&b, '-');
+	}
+	unsigned long a = c < 0 ? -(unsigned long)c : (unsigned long)c;
+	if (v.x.n == 0 || c != 0)
+		bprintf(&b, a < 10 ? "%lu" : "$%lx", a);
+	r68x_free(&v.x);
+	return b.s;
+}
+
+/* Expression text S with the folded equates that must be folded replaced by
+ * their values; null if nothing is replaced. */
+static char *fold_equates(const char *s)
+{
+	if (st.nfolded == 0)
+		return NULL;
+	size_t n = strlen(s);
+	size_t at[64], len[64];
+	int idx[64], nf = 0, nsym = 0, other_op = 0, neg = 0;
+	unsigned params = 0;	/* macro parameters \1..\9 in a macro definition */
+	char prev = 0;		/* the last significant character, 0 at the start */
+	for (size_t i = 0; i < n;) {
+		char c = s[i];
+		if (c == ' ' || c == '\t') {
+			i++;
+			continue;
+		}
+		if (c == '\'' || c == '"') {
+			size_t j = i + 1;
+			while (j < n && s[j] != c)
+				j++;
+			i = j < n ? j + 1 : n;
+			prev = 'x';
+			continue;
+		}
+		if (c == '\\' && i + 1 < n) {
+			/* a macro parameter: a symbol as far as is known */
+			nsym++;
+			if (s[i + 1] >= '1' && s[i + 1] <= '9') {
+				params |= 1u << (s[i + 1] - '1');
+				if (prev == '-')
+					neg = 1;
+			}
+			i += 2;
+			prev = 'x';
+			continue;
+		}
+		if (isalpha((unsigned char)c) || c == '_' || c == '.' || c == '@') {
+			size_t j = i;
+			while (j < n && (isalnum((unsigned char)s[j]) || s[j] == '_' || s[j] == '$' || s[j] == '.' || s[j] == '@'))
+				j++;
+			nsym++;
+			int k = folded_index(s + i, j - i);
+			if (k >= 0) {
+				if (prev == '-')
+					neg = 1;
+				if (nf < 64) {
+					at[nf] = i;
+					len[nf] = j - i;
+					idx[nf++] = k;
+				}
+			}
+			i = j;
+			prev = 'x';
+			continue;
+		}
+		if (isdigit((unsigned char)c) || (c == '$' && i + 1 < n && isxdigit((unsigned char)s[i + 1])) ||
+		    (c == '%' && i + 1 < n && (s[i + 1] == '0' || s[i + 1] == '1'))) {
+			size_t j = i + 1;
+			while (j < n && isalnum((unsigned char)s[j]))
+				j++;
+			i = j;
+			prev = 'x';
+			continue;
+		}
+		if (c == '*' && (prev == 0 || prev == '(' || strchr("+-*/&!|^<>~", prev))) {
+			nsym++;		/* the location */
+			i++;
+			prev = 'x';
+			continue;
+		}
+		if (c != '+' && c != '-')
+			other_op = 1;
+		prev = c;
+		i++;
+	}
+	if (!(fold_all || nsym > 1 || other_op || neg))
+		return NULL;
+	/* in a macro definition: the arguments for these parameters are
+	 * folded in where the macro is called */
+	if (params && st.in_macro && st.nmacros > 0)
+		st.macro_fold[st.nmacros - 1] |= params;
+	if (nf == 0)
+		return NULL;
+	if (!fold_all && !params && r68x_ok) {
+		char *x = r68x_expression(s);
+		if (x != NULL) {
+			if (fold_log != NULL)
+				fprintf(fold_log, "%s:%d\tr68x\t%s\t%s\n", log_path, log_line, s, x);
+			annotate = 1;
+			return x;
+		}
+		if (nsym == 1 && !neg) {
+			/* one equate, added: a relocation takes it
+			 * (T_VctIRQ-(4*4)) */
+			struct lin v = { { NULL, 0 }, 0, 1, s };
+			lin_binary(&v, P_SHIFT);
+			int one = v.ok && *v.p == '\0' && v.x.n == 1 && v.x.t[0].coef == 1;
+			r68x_free(&v.x);
+			if (one)
+				return NULL;
+		}
+	}
+	if (fold_log != NULL)
+		/* R68TOGAS_FOLDLOG: file, line, why, the expression */
+		fprintf(fold_log, "%s:%d\t%s\t%s\n", log_path, log_line,
+			fold_all ? (fold_imm ? "quick" : "context") : nsym > nf ? "other-symbols" : nf > 1 ? "equates" :
+			neg ? "negated" : "operator", s);
+	struct buf b = { 0 };
+	size_t from = 0;
+	for (int k = 0; k < nf; k++) {
+		bput(&b, s + from, at[k] - from);
+		/* the value as short as it goes: $00000080 as $80 */
+		const char *v = st.foldval[idx[k]];
+		if (v[0] == '$') {
+			const char *d = v + 1;
+			while (d[0] == '0' && d[1] != '\0')
+				d++;
+			bprintf(&b, "$%s", d);
+		} else {
+			bprintf(&b, "(%s)", v);
+		}
+		from = at[k] + len[k];
+	}
+	annotate = 1;
+	bputs(&b, s + from);
+	return b.s;
+}
 
 static void add_global_marked(const char *name)
 {
@@ -940,6 +1280,42 @@ static void op_parts(const char *op, char *base, size_t size, char *suffix)
 	*suffix = op[i] == '.' && op[i + 1] ? tolower((unsigned char)op[i + 1]) : 0;
 }
 
+/* Expression S (N chars) with each * meaning the location (not a
+ * multiplication) replaced by (*-OFFSET): in r68 a dc list's * is the
+ * statement's start, in as the element's; null if it has none. */
+static char *location_from(const char *s, size_t n, long offset)
+{
+	struct buf b = { 0 };
+	char prev = 0;
+	int any = 0;
+	for (size_t i = 0; i < n; i++) {
+		char c = s[i];
+		if (c == '\'' || c == '"') {
+			size_t j = i + 1;
+			while (j < n && s[j] != c)
+				j++;
+			bput(&b, s + i, (j < n ? j + 1 : n) - i);
+			i = j < n ? j : n;
+			prev = 'x';
+			continue;
+		}
+		if (c == '*' && (prev == 0 || prev == '(' || strchr("+-*/&!|^<>~", prev))) {
+			bprintf(&b, "(*-%ld)", offset);
+			any = 1;
+			prev = 'x';
+			continue;
+		}
+		bputc(&b, c);
+		if (c != ' ' && c != '\t')
+			prev = isalnum((unsigned char)c) || c == '_' || c == '$' || c == '.' || c == '@' ? 'x' : c;
+	}
+	if (!any) {
+		free(b.s);
+		return NULL;
+	}
+	return b.s;
+}
+
 /* Expressions separated by commas (dc, the if directives' operands...). */
 static void expression_list(struct buf *b, const char *args, int chars)
 {
@@ -948,16 +1324,32 @@ static void expression_list(struct buf *b, const char *args, int chars)
 	int k = split_commas(args, strlen(args), pieces, lens, 256);
 	expr_chars = chars;
 	int written = 0;
+	long offset = 0;	/* bytes before this element (dc lists) */
 	for (int i = 0; i < k; i++) {
 		/* An empty string "" adds nothing (and '' is a quote in MRI). */
 		if (lens[i] == 2 && pieces[i][0] == '"' && pieces[i][1] == '"' && k > 1)
 			continue;
 		if (written++)
 			bputc(b, ',');
-		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars)))
+		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars))) {
 			string_operand(b, pieces[i], lens[i]);
-		else
-			expression(b, pieces[i], lens[i]);
+			offset = -1;	/* a string's length: not counted */
+		} else {
+			int save = fold_all;
+			if (i == 0 && fold_first)
+				fold_all = 1;
+			char *loc = dc_size && offset > 0 ? location_from(pieces[i], lens[i], offset) : NULL;
+			if (loc) {
+				expression(b, loc, strlen(loc));
+				free(loc);
+				annotate = 1;
+			} else {
+				expression(b, pieces[i], lens[i]);
+			}
+			fold_all = save;
+			if (offset >= 0)
+				offset += dc_size;
+		}
 	}
 	expr_chars = 0;
 }
@@ -1343,12 +1735,21 @@ static int is_macro(const char *op)
 
 /* A macro call's arguments: a quoted one passes its text without the
  * quotes in r68, as <...> does in MRI; the others as operands. */
-static void macro_arguments(struct buf *b, const char *args)
+static void macro_arguments(struct buf *b, const char *args, const char *name)
 {
 	const char *pieces[64];
 	size_t lens[64];
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
+	unsigned fold = 0;
+	for (int i = 0; i < st.nmacros; i++)
+		if (ci_eq(st.macros[i], name))
+			fold = st.macro_fold[i];
+	int save_ok = r68x_ok;
+	r68x_ok = 0;	/* folded as before: see r68x_ok */
 	for (int i = 0; i < k; i++) {
+		int save = fold_all;
+		if (i < 9 && (fold & (1u << i)))
+			fold_all = 1;
 		if (i)
 			bputc(b, ',');
 		if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
@@ -1361,10 +1762,13 @@ static void macro_arguments(struct buf *b, const char *args)
 			 * an instruction, add/sub for r68's quick forms. */
 			bput(b, pieces[i], 3);
 			bput(b, pieces[i] + 4, lens[i] - 4);
+			annotate = 1;
 		} else {
 			operand(b, pieces[i], lens[i], 0);
 		}
+		fold_all = save;
 	}
+	r68x_ok = save_ok;
 }
 
 /* The movem register mask as l68 reads it: a register list stays, a mask
@@ -1418,6 +1822,8 @@ static void movem_operands(struct buf *b, const char *args)
 static void translate_line(const char *text, struct buf *out, const char *path, int lineno, FILE *fp, int depth)
 {
 	struct line l;
+	log_path = path;
+	log_line = lineno;
 	string_params = st.in_macro;
 	if (!split_line(text, &l)) {
 		bputs(out, text);
@@ -1428,6 +1834,37 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		op_parts(l.op, base, sizeof base, &size);
 	else
 		base[0] = '\0', size = 0;
+	/* sys.l's equates folded in whole where no relocation can take them
+	 * (r68 can't either): fields of the instruction word that aren't a
+	 * byte (quick values, shift counts), sizes and counts, conditionals
+	 * (see fold_equates). moveq's and trap's are bytes: relocated, as
+	 * r68 does. */
+	static const char *const fold_ops[] = { "ds", "dz", "do", "lo", "org", "rept", "align", NULL };
+	static const char *const quick_ops[] = { "addq", "subq", "asl", "asr", "lsl", "lsr", "rol", "ror",
+		"roxl", "roxr", NULL };
+	fold_all = strncmp(base, "if", 2) == 0;
+	for (int i = 0; fold_ops[i] && !fold_all; i++)
+		fold_all = strcmp(base, fold_ops[i]) == 0;
+	r68x_ok = strcmp(base, "equ") != 0 && strcmp(base, "set") != 0;
+	fold_imm = 0;
+	for (int i = 0; quick_ops[i] && !fold_imm; i++)
+		fold_imm = strcmp(base, quick_ops[i]) == 0;
+	fold_first = 0;
+	line_rest.n = 0;
+	if (line_rest.s)
+		line_rest.s[0] = '\0';
+	bputs(&line_rest, l.rest ? l.rest : "");
+	orig_stmt.n = orig_op.n = 0;
+	if (orig_stmt.s)
+		orig_stmt.s[0] = '\0';
+	if (orig_op.s)
+		orig_op.s[0] = '\0';
+	if (l.op) {
+		bputs(&orig_op, l.op);
+		bputs(&orig_stmt, l.op);
+		if (l.args && *l.args)
+			bprintf(&orig_stmt, " %s", l.args);
+	}
 	/* Outside a psect (definition files used before it) r68 exports
 	 * nothing. */
 	int wrap_global = 0;
@@ -1602,7 +2039,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				bprintf(out, "%s dc.%c ", labs, sz);
 			else
 				bprintf(out, " r68dc %s,%c,%s,<", sect, sz, nm.s ? nm.s : "");
+			dc_size = sz == 'b' ? 1 : sz == 'l' ? 4 : 2;
 			expression_list(out, l.args, sz != 'b');
+			dc_size = 0;
 			if (!same)
 				bputc(out, '>');
 		} else if (strcmp(base, "ds") == 0 && sz == 'b') {
@@ -1645,7 +2084,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	}
 	if (strcmp(base, "dc") == 0) {
 		bprintf(out, "%s %s ", labs, l.op);
+		dc_size = size == 'b' ? 1 : size == 'l' ? 4 : 2;
 		expression_list(out, l.args, size != 'b');
+		dc_size = 0;
 		bputs(out, rest);
 		goto done;
 	}
@@ -1683,8 +2124,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		} else if (!st.in_macro && strncmp(base, "if", 2) == 0) {
 			st.cond_depth++;
 		} else if (!st.in_macro && strcmp(base, "endc") == 0) {
-			if (st.cond_depth > 0)
-				st.cond_depth--;
+			/* An endc that closes nothing (also
+			 * outside macros): r68 ignores it, as doesn't: dropped. */
+			if (st.cond_depth == 0) {
+				bprintf(out, "*%s", text);
+				goto done;
+			}
+			st.cond_depth--;
 		} else if (st.in_macro && strncmp(base, "if", 2) == 0) {
 			st.macro_ifs++;
 		} else if (st.in_macro && strcmp(base, "endc") == 0) {
@@ -1714,6 +2160,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bprintf(out, "%s %s ", labs, l.op);
 		if (strcmp(base, "macro") == 0 && l.label) {
 			st.macros = xrealloc(st.macros, (st.nmacros + 1) * sizeof *st.macros);
+			st.macro_fold = xrealloc(st.macro_fold, (st.nmacros + 1) * sizeof *st.macro_fold);
+			st.macro_fold[st.nmacros] = 0;
 			st.macros[st.nmacros++] = xstrdup(l.label);
 		}
 		if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0 || strcmp(base, "macro") == 0)
@@ -1747,6 +2195,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* r68 takes the word size for ccr (the byte operation's code). */
 			snprintf(opb, sizeof opb, "%s.b", base);
 			op = opb;
+			annotate_op = 1;
 		} else if (st.branch_sizing && size != 'l' && is_branch(base) && local_label(l.args)) {
 			/* r68 -b sizes every branch to a label of this source, an
 			 * explicit .s or .w too; in MRI mode as sizes only jbra,
@@ -1761,6 +2210,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			 * add/sub. */
 			snprintf(opb, sizeof opb, "%.3s%s", base, l.op + 4);
 			op = opb;
+			annotate_op = 1;
 		}
 		/* move.l #n,Dn: r68 doesn't make it moveq, as would. */
 		int no_moveq = strcmp(base, "move") == 0 && size == 'l';
@@ -1775,16 +2225,25 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bprintf(out, "%s r68L %s", labs, l.op);
 			if (*l.args) {
 				bputc(out, ',');
-				macro_arguments(out, l.args);
+				macro_arguments(out, l.args, l.op);
 			}
 			bputs(out, rest);
+			goto done;
+		}
+		if (strcmp(base, "trap") == 0 && l.args[0] == '#' && !is_number(l.args + 1, strlen(l.args + 1))) {
+			/* trap #symbol: the number as a byte added to the opcode's,
+			 * which a relocation can take (r68's byte reference). */
+			bprintf(out, "%s dc.b $4e,$40+(", labs);
+			annotate = 1;
+			expression(out, l.args + 1, strlen(l.args + 1));
+			bprintf(out, ")%s", rest);
 			goto done;
 		}
 		size_t start = out->n;
 		bprintf(out, "%s %s ", labs, op);
 		int need = cpu_needed(base, size, l.args);
 		if (is_macro(l.op)) {
-			macro_arguments(out, l.args);
+			macro_arguments(out, l.args, l.op);
 		} else if (strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0) {
 			movem_operands(out, l.args);
 		} else {
@@ -1807,10 +2266,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputs(out, "#(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputs(out, ")&$ff");
+					annotate = 1;
 				} else
 					operand(out, pieces[i], lens[i], abs_here);
-				if (no_moveq && i == 0 && pieces[i][0] == '#')
+				if (no_moveq && i == 0 && pieces[i][0] == '#') {
 					bputs(out, "+r68__0");
+					annotate = 1;
+				}
 			}
 		}
 		if (need) {
@@ -1839,7 +2301,10 @@ done:
 		put_symbol(&nm, l.label, strlen(l.label));
 		out->n = 0;
 		out->s[0] = '\0';
-		if (*b)
+		if (*b && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0))
+			/* NAME: equ value: NAME equ value on one line */
+			bprintf(out, " r68gdef %s,<%s>%s", nm.s, b, rest);
+		else if (*b)
 			bprintf(out, " r68glab %s,<%s>%s", nm.s, b, rest);
 		else
 			bprintf(out, " r68glab %s%s", nm.s, rest);
@@ -1879,8 +2344,19 @@ static void translate_file(const char *path, FILE *out, int depth)
 		if (line.s)
 			line.s[0] = '\0';
 		st.rest_of_file = text.s + j;
+		annotate = annotate_op = 0;
 		translate_line(raw, &line, path, lineno, out, depth);
-		fprintf(out, "%s\n", line.s ? line.s : "");
+		if ((annotate || annotate_op) && line.s && orig_stmt.n) {
+			/* on the same line, right after the operands, before the
+			 * line's own comment (a comment in MRI mode after ;) */
+			size_t ln = strlen(line.s), rn = line_rest.n;
+			if (rn == 0 || rn > ln || strcmp(line.s + ln - rn, line_rest.s) != 0)
+				rn = 0;
+			fprintf(out, "%.*s\t;[r68: %s]%s\n", (int)(ln - rn), line.s, annotate ? orig_stmt.s : orig_op.s,
+				line.s + ln - rn);
+		} else {
+			fprintf(out, "%s\n", line.s ? line.s : "");
+		}
 		free(raw);
 		if (j < text.n && text.s[j] == '\r' && j + 1 < text.n && text.s[j + 1] == '\n')
 			j++;
@@ -1892,6 +2368,9 @@ static void translate_file(const char *path, FILE *out, int depth)
 
 static const char prelude[] =
 	" .mri 1\n"
+	"* Translated by r68togas from r68 (Microware's assembler) source. A statement changed in a\n"
+	"* way not obvious from it is followed by ;[r68: <its original text>] (the operation alone\n"
+	"* if only it changed); these rewrites are described in r68togas.md, \"Annotations\".\n"
 	"* an error with a text, if assembled: fail, a use file not found\n"
 	"r68error macro\n"
 	" .mri 0\n"
@@ -1905,7 +2384,7 @@ static const char prelude[] =
 	" endm\n"
 	"* tcall n,code: trap #n and the code\n"
 	"tcall macro\n"
-	" trap #\\1\n"
+	" dc.b $4e,$40+\\1 (trap: an equate's number relocated, as r68 does)\n"
 	" dc.w \\2\n"
 	" endm\n"
 	"* vsect contents: uninitialized (ds), initialized (dc, dz), labels\n"
@@ -1985,6 +2464,8 @@ int main(int argc, char **argv)
 	const char *output = NULL, *source = NULL;
 	struct buf defs = { 0 };
 	const char *arch = NULL;
+	if (getenv("R68TOGAS_FOLDLOG") != NULL && *getenv("R68TOGAS_FOLDLOG"))
+		fold_log = fopen(getenv("R68TOGAS_FOLDLOG"), "a");
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
 			output = argv[++i];
@@ -2006,17 +2487,18 @@ int main(int argc, char **argv)
 		} else if (strcmp(argv[i], "-B") == 0) {
 			st.relax_globals = 1;
 		} else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
-			/* NAME VALUE lines (sys.l's equates): set lines, which the
-			 * source may define again. */
+			/* NAME VALUE lines (sys.l's equates): set lines in the
+			 * prelude, but for the names the source defines itself
+			 * (see after scan_labels). */
 			FILE *ef = fopen(argv[++i], "r");
 			if (ef == NULL)
 				die("cannot read %s", argv[i]);
 			char name[512], value[64];
 			while (fscanf(ef, "%511s %63s", name, value) == 2) {
 				st.folded = xrealloc(st.folded, (st.nfolded + 1) * sizeof *st.folded);
-				st.folded[st.nfolded++] = xstrdup(name);
-				put_symbol(&defs, name, strlen(name));
-				bprintf(&defs, " set %s\n", value);
+				st.foldval = xrealloc(st.foldval, (st.nfolded + 1) * sizeof *st.foldval);
+				st.folded[st.nfolded] = xstrdup(name);
+				st.foldval[st.nfolded++] = xstrdup(value);
 			}
 			fclose(ef);
 		} else if (strncmp(argv[i], "-m", 2) == 0) {
@@ -2072,6 +2554,8 @@ int main(int argc, char **argv)
 	fputs(prelude, out);
 	/* r68glab NAME[,<rest>]: a global label in a conditional, with a marker */
 	fputs("r68glab macro\n\\1\nr68__g_\\1 set 1\n \\2\n endm\n", out);
+	/* r68gdef NAME,<equ value>: the same for an equ or set (one line) */
+	fputs("r68gdef macro\n\\1 \\2\nr68__g_\\1 set 1\n endm\n", out);
 	/* r68chip CPU,<instruction>: one instruction of a later CPU than -m's */
 	fprintf(out, "r68chip macro\n chip \\1\n \\2\n chip %s\n endm\n", chip_name(st.cpu_level));
 	/* r68L NAME,args: r68__L1..8 set to the arguments' lengths (\Ln in
@@ -2109,8 +2593,28 @@ int main(int argc, char **argv)
 				st.locals[st.nlocals++] = globals[j];
 			}
 		}
+		/* sys.l's equates (-e) that may be folded in (fold_equates):
+		 * not the names the source defines (by a label, equ, set, do
+		 * or lo, under any conditional), as the sources of the
+		 * libraries themselves do. */
+		int k2 = 0;
+		for (int i = 0; i < st.nfolded; i++) {
+			int d = 0;
+			for (int j = 0; j < st.nlocals && !d; j++)
+				d = strcmp(st.locals[j], st.folded[i]) == 0;
+			for (int j = 0; j < nglobals && !d; j++)
+				d = strcmp(globals[j], st.folded[i]) == 0;
+			for (int j = 0; j < st.nsets && !d; j++)
+				d = strcmp(st.sets[j], st.folded[i]) == 0;
+			if (d)
+				continue;
+			st.folded[k2] = st.folded[i];
+			st.foldval[k2++] = st.foldval[i];
+		}
+		st.nfolded = k2;
 	}
 	translate_file(source, out, 0);
+	r68x_ok = 0;
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
 	fputs(st.globals.s ? st.globals.s : "", out);
 	fputs(st.epilogue_more.s ? st.epilogue_more.s : "", out);
@@ -2153,6 +2657,9 @@ int main(int argc, char **argv)
 	fprintf(final, "# 1 \"r68.prelude\"\n");
 	if (psect_name != NULL)
 		fprintf(final, " .file \"%s\"\n", psect_name);
+	if (r68x_notes.s != NULL)
+		/* the link-time expressions' definitions (r68x_note.h), not loaded */
+		fprintf(final, " .section " R68X_SECTION ",\"\"\n .ascii \"%s\"\n .text\n", r68x_notes.s);
 	if (st.used_remote)
 		/* The remote data's sections with their ELF flags (MRI's section
 		 * has none to give): allocated, writable, .remote.bss without
