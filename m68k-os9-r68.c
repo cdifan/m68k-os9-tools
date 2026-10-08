@@ -373,6 +373,45 @@ static char *equates(void)
 	return file;
 }
 
+/* Whether the assembler sizes a branch to a global label of the same
+ * file (the binutils change for m68k-elfos9; without it as keeps a
+ * relocation, and r68togas -b mustn't use jbra there): a probe. */
+static int relaxes_globals(void)
+{
+	char *src = os9_temp(".s"), *obj = os9_temp(".o"), *out = os9_temp(".out");
+	FILE *fp = fopen(src, "w");
+	if (fp == NULL)
+		return 0;
+	fputs(" .globl x\nx: nop\n jbra x\n", fp);
+	fclose(fp);
+	struct args argv = { 0 };
+	args_add(&argv, AS);
+	args_add(&argv, "-o");
+	args_add(&argv, obj);
+	args_add(&argv, src);
+	int show = os9_show;
+	os9_show = 0;
+	int ok = os9_run(&argv, NULL, NULL) == 0;
+	args_free(&argv);
+	if (ok) {
+		args_add(&argv, "m68k-elfos9-size");
+		args_add(&argv, obj);
+		ok = os9_run(&argv, out, NULL) == 0;
+		args_free(&argv);
+	}
+	os9_show = show;
+	int text = 0;
+	FILE *o = ok ? fopen(out, "r") : NULL;
+	char line[256];
+	while (o != NULL && fgets(line, sizeof line, o) != NULL)
+		if (isdigit((unsigned char)line[strspn(line, " \t")]))
+			text = atoi(line);
+	if (o != NULL)
+		fclose(o);
+	/* nop and bra.s: 4 bytes; with a relocation, bra.w: 6 or jmp: 8 */
+	return text == 4;
+}
+
 /* GNU as's options for r68's -m<n>: the CPU, with the FPU (r68 takes its
  * instructions for any CPU). */
 static void cpu_options(struct args *argv)
@@ -423,8 +462,11 @@ static void assemble(const char *source)
 	args_add(&argv, R68TOGAS);
 	args_append(&argv, &st.defs);
 	args_addf(&argv, "-m%d", st.cpu);
-	if (st.branch_sizing)
+	if (st.branch_sizing) {
 		args_add(&argv, "-b");
+		if (relaxes_globals())
+			args_add(&argv, "-B");
+	}
 	args_append(&argv, &st.dirs);
 	char *eqf = equates();
 	if (eqf != NULL) {

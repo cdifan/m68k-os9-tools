@@ -461,6 +461,9 @@ static int expression(struct buf *b, const char *e, size_t n)
 static int register_part(const char *s, size_t n)
 {
 	size_t k = 0;
+	/* a macro parameter in a register's place (\1(\2) in a macro body) */
+	if (n >= 2 && s[0] == '\\' && isdigit((unsigned char)s[1]))
+		return n == 2;
 	while (k < n && isalnum((unsigned char)s[k]))
 		k++;
 	if (k == 0 || !is_r68_register(s, k))
@@ -485,6 +488,10 @@ static int address_register(const char *s, size_t n)
 		if (!register_part(pieces[i], lens[i]))
 			continue;
 		if (lens[i] == 2 && strncasecmp(pieces[i], "sp", 2) == 0)
+			return 1;
+		/* a parameter: taken as an address register (d(\2) keeps its
+		 * 16-bit displacement, which r68 keeps for any register) */
+		if (lens[i] == 2 && pieces[i][0] == '\\')
 			return 1;
 		return lens[i] == 2 && tolower((unsigned char)pieces[i][0]) == 'a' && pieces[i][1] >= '0' &&
 			pieces[i][1] <= '7';
@@ -847,7 +854,9 @@ struct state {
 	int in_psect, in_vsect, remote;
 	int used_remote;	/* a vsect remote seen */
 	int in_macro, macro_ifs;	/* in a macro definition; its open conditionals */
+	int cond_depth;		/* open conditionals outside macro definitions */
 	int branch_sizing;	/* -b: r68's -b/-bt */
+	int relax_globals;	/* -B: as relaxes branches to global symbols */
 	int cpu_level;		/* -m: 0, 10, 20, 30, 40, 60 */
 	char **locals;		/* -b: labels defined without ':' (scan_labels) */
 	int nlocals;
@@ -878,6 +887,15 @@ struct state {
 };
 
 static struct state st;
+
+static void add_global_marked(const char *name)
+{
+	struct buf b = { 0 };
+	put_symbol(&b, name, strlen(name));
+	/* exported if the line was assembled: r68glab sets r68__g_NAME */
+	bprintf(&st.globals, " ifdef r68__g_%s\n xdef %s\n endc\n", b.s, b.s);
+	free(b.s);
+}
 
 static void add_global(const char *name)
 {
@@ -1412,8 +1430,18 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		base[0] = '\0', size = 0;
 	/* Outside a psect (definition files used before it) r68 exports
 	 * nothing. */
-	if (l.label && l.global && st.in_psect)
-		add_global(l.label);
+	int wrap_global = 0;
+	if (l.label && l.global && st.in_psect) {
+		/* In a conditional, the label may be global only where the
+		 * condition is false (Entry: for OS-9000; plain
+		 * Entry for OS-9): exported only if its line is assembled. */
+		if (st.cond_depth > 0 && !st.in_macro && !st.in_vsect) {
+			add_global_marked(l.label);
+			wrap_global = 1;
+		} else {
+			add_global(l.label);
+		}
+	}
 
 	struct buf lab = { 0 };
 	if (l.label) {
@@ -1652,6 +1680,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_ifs = 0;
 		} else if (strcmp(base, "endm") == 0) {
 			st.in_macro = 0;
+		} else if (!st.in_macro && strncmp(base, "if", 2) == 0) {
+			st.cond_depth++;
+		} else if (!st.in_macro && strcmp(base, "endc") == 0) {
+			if (st.cond_depth > 0)
+				st.cond_depth--;
 		} else if (st.in_macro && strncmp(base, "if", 2) == 0) {
 			st.macro_ifs++;
 		} else if (st.in_macro && strcmp(base, "endc") == 0) {
@@ -1714,12 +1747,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* r68 takes the word size for ccr (the byte operation's code). */
 			snprintf(opb, sizeof opb, "%s.b", base);
 			op = opb;
-		} else if (st.branch_sizing && size != 'w' && size != 'l' && is_branch(base) &&
-			   local_label(l.args)) {
-			/* r68 -b sizes branches (a bra.s that doesn't reach becomes
-			 * a bra.w); in MRI mode as sizes only jbra and jb<cc>. Only
-			 * to a local label of this source: to an external one, as
-			 * would make an absolute jmp on the 68000. */
+		} else if (st.branch_sizing && size != 'l' && is_branch(base) && local_label(l.args)) {
+			/* r68 -b sizes every branch to a label of this source, an
+			 * explicit .s or .w too; in MRI mode as sizes only jbra,
+			 * jb<cc> and jbsr. Not to an external label (as makes an
+			 * absolute jmp on the 68000), nor to a global one unless as
+			 * relaxes those (-B). */
 			/* as has no jblo, jbhs */
 			snprintf(opb, sizeof opb, "j%s", strcmp(base, "blo") == 0 ? "bcs" : strcmp(base, "bhs") == 0 ? "bcc" : base);
 			op = opb;
@@ -1792,6 +1825,27 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bputs(out, rest);
 	}
 done:
+	if (wrap_global && out->s != NULL && lab.s != NULL && strncmp(out->s, lab.s, lab.n) == 0) {
+		/* NAME: rest -> r68glab NAME,<rest> (the comment after it) */
+		char *body = xstrdup(out->s + lab.n);
+		size_t rn = strlen(rest);
+		size_t bn = strlen(body);
+		if (rn <= bn && strcmp(body + bn - rn, rest) == 0)
+			body[bn - rn] = '\0';
+		char *b = body;
+		while (*b == ' ' || *b == '\t')
+			b++;
+		struct buf nm = { 0 };
+		put_symbol(&nm, l.label, strlen(l.label));
+		out->n = 0;
+		out->s[0] = '\0';
+		if (*b)
+			bprintf(out, " r68glab %s,<%s>%s", nm.s, b, rest);
+		else
+			bprintf(out, " r68glab %s%s", nm.s, rest);
+		free(nm.s);
+		free(body);
+	}
 	free(lab.s);
 	free_line(&l);
 }
@@ -1920,7 +1974,8 @@ static void usage(void)
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
 	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060)\n");
 	printf("  -e FILE    equates (NAME VALUE lines, as sys.l's) set in the prelude\n");
-	printf("  -b         r68's -b/-bt: short branches that don't reach get longer\n");
+	printf("  -b         r68's -b/-bt: branches to this source's labels sized by as\n");
+	printf("  -B         with -b: also to its global labels (as relaxes those)\n");
 	printf("  -u DIR     search DIR for use files (r68's -u)\n");
 	printf("  -o OUTPUT  write to OUTPUT (default: standard output)\n");
 }
@@ -1948,6 +2003,8 @@ int main(int argc, char **argv)
 			bputc(&defs, '\n');
 		} else if (strcmp(argv[i], "-b") == 0) {
 			st.branch_sizing = 1;
+		} else if (strcmp(argv[i], "-B") == 0) {
+			st.relax_globals = 1;
 		} else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
 			/* NAME VALUE lines (sys.l's equates): set lines, which the
 			 * source may define again. */
@@ -2013,6 +2070,8 @@ int main(int argc, char **argv)
 	if (arch != NULL)
 		fprintf(out, " .arch %s\n", arch);
 	fputs(prelude, out);
+	/* r68glab NAME[,<rest>]: a global label in a conditional, with a marker */
+	fputs("r68glab macro\n\\1\nr68__g_\\1 set 1\n \\2\n endm\n", out);
 	/* r68chip CPU,<instruction>: one instruction of a later CPU than -m's */
 	fprintf(out, "r68chip macro\n chip \\1\n \\2\n chip %s\n endm\n", chip_name(st.cpu_level));
 	/* r68L NAME,args: r68__L1..8 set to the arguments' lengths (\Ln in
@@ -2043,6 +2102,13 @@ int main(int argc, char **argv)
 				st.locals[k++] = st.locals[i];
 		}
 		st.nlocals = k;
+		if (st.relax_globals) {
+			/* -B: as sizes branches to global labels too */
+			for (int j = 0; j < nglobals; j++) {
+				st.locals = xrealloc(st.locals, (st.nlocals + 1) * sizeof *st.locals);
+				st.locals[st.nlocals++] = globals[j];
+			}
+		}
 	}
 	translate_file(source, out, 0);
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
