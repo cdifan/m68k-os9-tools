@@ -835,6 +835,8 @@ struct state {
 	int nsearch;
 	int errors;
 	char **macros;		/* the macros defined so far */
+	char **equates;		/* names defined by equ, set, do, lo so far */
+	int nequates;
 	int nmacros;
 };
 
@@ -890,8 +892,12 @@ static void expression_list(struct buf *b, const char *args, int chars)
 	size_t lens[256];
 	int k = split_commas(args, strlen(args), pieces, lens, 256);
 	expr_chars = chars;
+	int written = 0;
 	for (int i = 0; i < k; i++) {
-		if (i)
+		/* An empty string "" adds nothing (and '' is a quote in MRI). */
+		if (lens[i] == 2 && pieces[i][0] == '"' && pieces[i][1] == '"' && k > 1)
+			continue;
+		if (written++)
 			bputc(b, ',');
 		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars)))
 			string_operand(b, pieces[i], lens[i]);
@@ -902,6 +908,45 @@ static void expression_list(struct buf *b, const char *args, int chars)
 }
 
 static void translate_file(const char *path, FILE *out, int depth);
+
+static void add_equate(const char *name)
+{
+	st.equates = xrealloc(st.equates, (st.nequates + 1) * sizeof *st.equates);
+	st.equates[st.nequates++] = xstrdup(name);
+}
+
+/* Whether expression S (N chars) has only numbers and names equated so
+ * far, so that as can compute it (and mask it: r68 writes a move.b
+ * immediate as its low byte, $00nn, as the whole value, $FF7F for ^$80). */
+static int known_value(const char *s, size_t n)
+{
+	for (size_t i = 0; i < n;) {
+		if (s[i] == '$' || s[i] == '%' || isdigit((unsigned char)s[i])) {
+			i++;
+			while (i < n && isalnum((unsigned char)s[i]))
+				i++;
+		} else if (s[i] == '\'') {
+			for (i++; i < n && s[i] != '\''; i++)
+				;
+			i++;
+		} else if (symstart((unsigned char)s[i])) {
+			size_t j = i;
+			while (j < n && symchar((unsigned char)s[j]))
+				j++;
+			int found = 0;
+			for (int k = 0; k < st.nequates && !found; k++)
+				found = strlen(st.equates[k]) == j - i && strncmp(st.equates[k], s + i, j - i) == 0;
+			if (!found)
+				return 0;
+			i = j;
+		} else if (s[i] == '*' && (i == 0 || strchr("+-*/(&!|^<>", s[i - 1]))) {
+			return 0;	/* the location counter */
+		} else {
+			i++;
+		}
+	}
+	return 1;
+}
 
 /* Text S (N chars) for r68error's <...> argument and .error's "...": no
  * angle brackets or double quotes. */
@@ -1243,6 +1288,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bputs(out, rest);
 		goto done;
 	}
+	if (l.label && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0 || strcmp(base, "do") == 0 ||
+			strcmp(base, "lo") == 0))
+		add_equate(l.label);
 	if (strcmp(base, "do") == 0 || strcmp(base, "lo") == 0) {
 		int bytes = size == 'b' ? 1 : size == 'l' ? 4 : 2;
 		struct buf nm = { 0 };
@@ -1375,7 +1423,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		int no_moveq = strcmp(base, "move") == 0 && size == 'l';
 		/* move.b with a negative immediate: r68 writes the extension
 		 * word $00nn, as $FFnn (both $FFnn for andi.b and the others). */
-		int byte_imm = strcmp(base, "move") == 0 && size == 'b' && l.args[0] == '#' && l.args[1] == '-';
+		int byte_imm = strcmp(base, "move") == 0 && size == 'b' && l.args[0] == '#';
 		pc_ext_offset = strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0 ||
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
 			  strcmp(base, "bset") == 0) && l.args[0] == '#') ? 4 : 2;
@@ -1395,7 +1443,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
 				if (lens[i] > 0 && pieces[i][0] == '"')
 					string_operand(out, pieces[i], lens[i]);
-				else if (byte_imm && i == 0 && is_number(pieces[i] + 1, lens[i] - 1)) {
+				else if (byte_imm && i == 0 && known_value(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "#(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputs(out, ")&$ff");
@@ -1591,7 +1639,7 @@ int main(int argc, char **argv)
 	if (output != NULL && strcmp(output, source) == 0)
 		die("%s: won't write over the source", output);
 	FILE *out = stdout;
-	char *temp = NULL;
+	char *temp = NULL, *psect_name = NULL;
 	if (output != NULL) {
 		temp = xmalloc(strlen(output) + 8);
 		sprintf(temp, "%s.tmp", output);
@@ -1599,7 +1647,13 @@ int main(int argc, char **argv)
 		if (out == NULL)
 			die("cannot write %s", temp);
 	}
-	fprintf(out, "# 1 \"r68.prelude\"\n");
+	/* The translation goes to a temporary file first: the psect's name,
+	 * known at its end, is written first, as .file before .mri 1 (a .mri 0
+	 * later would make as expand earlier MRI macros' strings wrongly). */
+	FILE *final = out;
+	out = tmpfile();
+	if (out == NULL)
+		die("cannot make a temporary file");
 	if (arch != NULL)
 		fprintf(out, " .arch %s\n", arch);
 	fputs(prelude, out);
@@ -1634,8 +1688,18 @@ int main(int argc, char **argv)
 			free(tl.s);
 		}
 		if (k >= 1)
-			fprintf(out, " .mri 0\n .file \"%.*s\"\n", (int)lens[0], pieces[0]);
+			psect_name = xstrndup(pieces[0], lens[0]);
 	}
+	fprintf(final, "# 1 \"r68.prelude\"\n");
+	if (psect_name != NULL)
+		fprintf(final, " .file \"%s\"\n", psect_name);
+	rewind(out);
+	char chunk[8192];
+	size_t got;
+	while ((got = fread(chunk, 1, sizeof chunk, out)) > 0)
+		fwrite(chunk, 1, got, final);
+	fclose(out);
+	out = final;
 	if (output != NULL) {
 		if (fclose(out) != 0)
 			die("cannot write %s", temp);

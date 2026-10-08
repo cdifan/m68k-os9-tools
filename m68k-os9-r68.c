@@ -60,7 +60,7 @@ static const struct option options[] = {
 	{ "f", FLAG, "", "Form feeds for page ejects", "ignored", O_F },
 	{ "g", FLAG, "", "List all code bytes", NULL, O_G },
 	{ "l", FLAG, "", "Listing to standard output", NULL, O_L },
-	{ "j", FLAG, "", "Long branches through a jump table (-m0)", "not supported", O_J },
+	{ "j", FLAG, "", "Long branches through a jump table (-m0)", "elf2mod's jump table does it", O_J },
 	{ "m", NUMBER, "<n>", "CPU: 0 68000, 1 68010, 2 68020/CPU32, 3 68030, 4 68040, 6 68060", NULL, O_M },
 	{ "n", FLAG, "", "No line numbers in the listing", "ignored", O_N },
 	{ "o", OPTVALUE, "[=<path>]", "Object file (output.r without a path)", NULL, O_O },
@@ -155,7 +155,7 @@ static void apply(const struct option *o, const char *value)
 	case O_D: case O_E: case O_F: case O_N: case O_P: note_ignored(o, value); break;
 	case O_G: st.all_bytes = 1; break;
 	case O_L: st.listing = 1; break;
-	case O_J: error("-j (branches through a jump table) isn't supported"); break;
+	case O_J: note_ignored(o, value); break;
 	case O_M:
 		if (strlen(value) != 1 || strchr("012346", value[0]) == NULL)
 			error("-m%s: the CPU is 0, 1, 2, 3, 4 or 6", value);
@@ -177,7 +177,8 @@ static void apply(const struct option *o, const char *value)
 
 static void option(const char *arg)
 {
-	const char *text = arg + 1;
+	/* --bt: xcc -as=-bt passes it so, and r68 takes it. */
+	const char *text = arg[1] == '-' && arg[2] != '\0' ? arg + 2 : arg + 1;
 	const struct option *best = NULL;
 	const char *value = NULL;
 	size_t bestlen = 0;
@@ -216,8 +217,25 @@ static void option(const char *arg)
 		bestlen = len;
 		value = candidate;
 	}
-	if (best == NULL)
-		error("unknown option %s (%s -? for the usage)", arg, os9_who);
+	if (best == NULL) {
+		/* Single-letter flags together, as r68 takes them (-qb in the
+		 * SDK's makefiles). */
+		for (const char *c = text; *c; c++) {
+			const struct option *o = NULL;
+			for (size_t i = 0; i < NOPTIONS; i++)
+				if (options[i].kind == FLAG && options[i].name[1] == '\0' &&
+				    options[i].name[0] == tolower((unsigned char)*c))
+					o = &options[i];
+			if (o == NULL || text[1] == '\0')
+				error("unknown option %s (%s -? for the usage)", arg, os9_who);
+		}
+		for (const char *c = text; *c; c++)
+			for (size_t i = 0; i < NOPTIONS; i++)
+				if (options[i].kind == FLAG && options[i].name[1] == '\0' &&
+				    options[i].name[0] == tolower((unsigned char)*c))
+					apply(&options[i], NULL);
+		return;
+	}
 	apply(best, value);
 }
 
@@ -422,7 +440,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s: ignored:", os9_who);
 		for (int i = 0; i < st.notes.n; i++)
 			fprintf(stderr, " %s", st.notes.v[i]);
-		fprintf(stderr, " (listing layout and errors are GNU as's)\n");
+		fprintf(stderr, " (see %s -?)\n", os9_who);
 	}
 	assemble(st.files.v[0]);
 	os9_cleanup();
