@@ -69,7 +69,7 @@ struct option {
 	const char *name;	/* lowercase, without the '-' */
 	enum kind kind;
 	const char *arg;	/* the value, in the usage */
-	const char *help;	/* Microware's description */
+	const char *help;	/* what the option does, in our words */
 	const char *does;	/* what this program does, when that differs */
 	enum id id;
 	int modes;
@@ -104,7 +104,7 @@ static const struct option options[] = {
 	{ "s", FLAG, "", "Leave out stack checks", NULL, O_S, COMPAT },
 	{ "t", VALUE, "=<dir>", "Put temporary files in <dir>", NULL, O_T, COMPAT },
 	{ "t?", FLAG, "", "List target systems and processors", NULL, O_TQ, COMPAT },
-	{ "to", VALUE, "=<name>", "Target operating system", "OSK only", O_TO, COMPAT },
+	{ "to", VALUE, "=<name>", "Operating system to compile for", "OSK only", O_TO, COMPAT },
 	{ "tp", VALUE, "=<n>[..]", "Target processor, with options", "68k, 020 (with 68881), cpu32", O_TP, COMPAT },
 	{ "u", JOIN, "<name>", "Undefine a predefined macro", NULL, O_U, COMPAT },
 	{ "v", VALUE, "=<dir>", "Also search <dir> for #include files", "before CDEF", O_V, COMPAT },

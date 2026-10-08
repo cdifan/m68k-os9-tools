@@ -44,7 +44,7 @@
  *
  * The addend goes into the object bytes, as ROF has no addend field.
  * The __os9_* symbols (from rof2elf, or defined by hand in a mainline)
- * give the psect's module header: __os9_tylan, __os9_attrev,
+ * give the psect's module header: __os9_typelang, __os9_attrev,
  * __os9_edition and __os9_stack (absolute), __os9_entry and
  * __os9_trapent (code).
  */
@@ -359,7 +359,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   Ext *exts = NULL;
   int nexts = 0, nlocs = 0, ndefs = 0;
   Ref *locs = NULL;
-  uint32_t tylan = 0, attrev = 0, edition = 0, stack = 0, entry = 0,
+  uint32_t typelang = 0, attrev = 0, edition = 0, stack = 0, entry = 0,
 	   trapent = 0xFFFFFFFF;
   Def *defs = NULL;
   time_t now;
@@ -624,8 +624,8 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
       if (!strncmp (y->name, "__os9_", 6))
 	{
 	  uint32_t code = y->area == A_CODE ? y->offset : 0;
-	  if (!strcmp (y->name, "__os9_tylan"))
-	    tylan = y->value;
+	  if (!strcmp (y->name, "__os9_typelang"))
+	    typelang = y->value;
 	  else if (!strcmp (y->name, "__os9_attrev"))
 	    attrev = y->value;
 	  else if (!strcmp (y->name, "__os9_edition"))
@@ -677,7 +677,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   now = sde ? (time_t) strtoll (sde, NULL, 10) : time (NULL);
   tm = sde ? gmtime (&now) : localtime (&now);
   add32 (out, 0xDEADFACE);
-  add16 (out, tylan);
+  add16 (out, typelang);
   add16 (out, attrev);
   add16 (out, 0);		/* assembly valid */
   add16 (out, 9);		/* series: ROF edition 9 */

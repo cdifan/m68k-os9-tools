@@ -48,7 +48,7 @@
  * uses for 32-bit PC-relative values) becomes a PC-relative relocation.
  *
  * Mainline ROFs (with a module type) also get absolute symbols carrying
- * the module header values: __os9_tylan, __os9_attrev, __os9_edition,
+ * the module header values: __os9_typelang, __os9_attrev, __os9_edition,
  * __os9_stack, and code symbols __os9_entry and __os9_trapent.
  */
 
@@ -250,7 +250,7 @@ typedef struct
 typedef struct
 {
   char *name;
-  unsigned tylan, attrev, edition;
+  unsigned typelang, attrev, edition;
   uint32_t statics, idata, code, stack, entry, trapent, rstatics, ridata,
 	   debug;
   const unsigned char *codep, *datap, *rdatap;
@@ -271,7 +271,7 @@ parse_rof (In *in, Rof *r)
   memset (r, 0, sizeof *r);
   if (get32 (in) != 0xDEADFACE)
     return 0;
-  r->tylan = get16 (in);
+  r->typelang = get16 (in);
   r->attrev = get16 (in);
   if (get16 (in) != 0)
     die ("%s: ROF has assembly errors", in->file);
@@ -832,9 +832,10 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	}
     }
 
-  if (r->tylan != 0)
+  if (r->typelang != 0)
     {
-      add_sym (&e, "__os9_tylan", r->tylan, 0, INFO (STB_GLOBAL, 0), SHN_ABS);
+      add_sym (&e, "__os9_typelang", r->typelang, 0, INFO (STB_GLOBAL, 0),
+	       SHN_ABS);
       add_sym (&e, "__os9_attrev", r->attrev, 0, INFO (STB_GLOBAL, 0),
 	       SHN_ABS);
       add_sym (&e, "__os9_edition", r->edition, 0, INFO (STB_GLOBAL, 0),
