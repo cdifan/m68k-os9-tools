@@ -1204,7 +1204,20 @@ static char *fold_equates(const char *s)
 			size_t j = i;
 			while (j < n && (isalnum((unsigned char)s[j]) || s[j] == '_' || s[j] == '$' || s[j] == '.' || s[j] == '@'))
 				j++;
-			nsym++;
+			/* a name this source defined before (equ, set, do, lo) is
+			 * a constant, not a second symbol: V_Name+BASE is one
+			 * external and a number, a relocation takes it (folding
+			 * sys.l's V_Name there was wrong: a source may
+			 * define its own, which C 3.2's R68 leaves to the link) */
+			int known = 0;
+			for (int e = 0; e < st.nequates && !known; e++)
+				known = strlen(st.equates[e]) == j - i && strncmp(st.equates[e], s + i, j - i) == 0;
+			/* or set anywhere in the source (BASE, set in a use
+			 * file after a macro that uses it) */
+			for (int e = 0; e < st.nsets && !known; e++)
+				known = strlen(st.sets[e]) == j - i && strncmp(st.sets[e], s + i, j - i) == 0;
+			if (!known)
+				nsym++;
 			int k = folded_index(s + i, j - i);
 			if (k >= 0) {
 				if (prev == '-')
@@ -1949,6 +1962,11 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 			bput(b, pieces[i], 3);
 			bput(b, pieces[i] + 4, lens[i] - 4);
 			annotate = 1;
+		} else if (lens[i] >= 3 && pieces[i][lens[i] - 2] == '.' && strchr("bwlsdxpBWLSDXP", pieces[i][lens[i] - 1]) &&
+			   strspn(pieces[i], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") == lens[i] - 2) {
+			/* a mnemonic with its size (MAC tst.b,V_Mine): as it is,
+			 * not a name with a dot (see put_symbol) */
+			bput(b, pieces[i], lens[i]);
 		} else {
 			operand(b, pieces[i], lens[i], 0);
 		}
