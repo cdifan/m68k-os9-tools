@@ -2093,15 +2093,36 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 	for (size_t i = 0; i < sizeof ops / sizeof *ops; i++)
 		if (strcmp(base, ops[i].name) == 0)
 			op = ops[i].op;
+	/* adda/suba #imm,An (add/sub to an address register too): C 3.2's
+	 * R68 writes ADDA/SUBA with the immediate also for #1..#8, where
+	 * as and Ultra C's r68 make ADDQ/SUBQ */
+	int addr = 0;
+	if (strcmp(base, "adda") == 0)
+		op = 0xD000, addr = 1;
+	else if (strcmp(base, "suba") == 0)
+		op = 0x9000, addr = 1;
 	if (op == 0)
 		return 0;
 	const char *pieces[4];
 	size_t lens[4];
-	if (split_commas(args, strlen(args), pieces, lens, 4) != 2 || pieces[0][0] != '#' || lens[1] != 2 ||
-	    (pieces[1][0] != 'd' && pieces[1][0] != 'D') || pieces[1][1] < '0' || pieces[1][1] > '7')
+	if (split_commas(args, strlen(args), pieces, lens, 4) != 2 || pieces[0][0] != '#')
+		return 0;
+	int reg;
+	if (lens[1] == 2 && (pieces[1][0] == 'd' || pieces[1][0] == 'D') && pieces[1][1] >= '0' && pieces[1][1] <= '7' &&
+	    !addr)
+		reg = pieces[1][1] - '0';
+	else if (lens[1] == 2 && (pieces[1][0] == 'a' || pieces[1][0] == 'A') && pieces[1][1] >= '0' &&
+		 pieces[1][1] <= '7' && (op == 0xD000 || op == 0x9000))
+		reg = 8 + pieces[1][1] - '0';
+	else if (lens[1] == 2 && strncasecmp(pieces[1], "sp", 2) == 0 && (op == 0xD000 || op == 0x9000))
+		reg = 15;
+	else
 		return 0;
 	int s = size == 'b' ? 0 : size == 'l' ? 2 : 1;
-	unsigned word = op | (unsigned)(pieces[1][1] - '0') << 9 | (unsigned)s << 6 | 0x3C;
+	if (reg >= 8 && s == 0)
+		return 0;
+	unsigned word = reg >= 8 ? op | (unsigned)(reg - 8) << 9 | (s == 2 ? 0x1C0u : 0xC0u) | 0x3C
+		: op | (unsigned)reg << 9 | (unsigned)s << 6 | 0x3C;
 	struct buf e = { 0 };
 	expression(&e, pieces[0] + 1, lens[0] - 1);
 	if (s == 2)
