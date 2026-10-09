@@ -975,7 +975,7 @@ struct state {
 	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
 	int nmren;
 	int c32;		/* -d c32: C 3.2's R68's encodings */
-	int rept_fold, rept_state;	/* a rept of one dc.b line folded: its count; 1: the dc.b
+	int rept_fold, rept_state;	/* a rept of one dc line folded: its count; 1: the dc
 					   next, 2: the endr */
 	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
 };
@@ -1422,9 +1422,13 @@ static int whole_quoted(const char *s, size_t n)
 
 static void expression_list(struct buf *b, const char *args, int chars)
 {
-	const char *pieces[256];
-	size_t lens[256];
-	int k = split_commas(args, strlen(args), pieces, lens, 256);
+	/* as many elements as there are (a folded rept's list is long) */
+	int max = 1;
+	for (const char *c = args; *c; c++)
+		max += *c == ',';
+	const char **pieces = xmalloc(max * sizeof *pieces);
+	size_t *lens = xmalloc(max * sizeof *lens);
+	int k = split_commas(args, strlen(args), pieces, lens, max);
 	expr_chars = chars;
 	int written = 0;
 	long offset = 0;	/* bytes before this element (dc lists) */
@@ -1458,6 +1462,8 @@ static void expression_list(struct buf *b, const char *args, int chars)
 		}
 	}
 	expr_chars = 0;
+	free(pieces);
+	free(lens);
 }
 
 static void translate_file(const char *path, FILE *out, int depth);
@@ -1704,6 +1710,123 @@ static void add_equate(const char *name)
 {
 	st.equates = xrealloc(st.equates, (st.nequates + 1) * sizeof *st.equates);
 	st.equates[st.nequates++] = xstrdup(name);
+}
+
+/* The values of equates whose expressions are constants (for rept counts):
+ * a small evaluator of numbers, known names, + - * / and parentheses. */
+static char **cv_names;
+static long *cv_values;
+static int ncv;
+
+static int cv_expr(const char **p, long *v);
+
+static int cv_unary(const char **p, long *v)
+{
+	while (**p == ' ' || **p == '\t')
+		(*p)++;
+	if (**p == '-') {
+		(*p)++;
+		if (!cv_unary(p, v))
+			return 0;
+		*v = -*v;
+		return 1;
+	}
+	if (**p == '(') {
+		(*p)++;
+		if (!cv_expr(p, v) || **p != ')')
+			return 0;
+		(*p)++;
+		return 1;
+	}
+	char *e;
+	if (**p == '$') {
+		*v = strtol(*p + 1, &e, 16);
+		if (e == *p + 1)
+			return 0;
+		*p = e;
+		return 1;
+	}
+	if (isdigit((unsigned char)**p)) {
+		*v = strtol(*p, &e, 10);
+		*p = e;
+		return 1;
+	}
+	if (symstart((unsigned char)**p)) {
+		const char *q = *p;
+		while (symchar((unsigned char)*q))
+			q++;
+		for (int i = ncv - 1; i >= 0; i--)
+			if (strlen(cv_names[i]) == (size_t)(q - *p) && strncmp(cv_names[i], *p, q - *p) == 0) {
+				*v = cv_values[i];
+				*p = q;
+				return 1;
+			}
+	}
+	return 0;
+}
+
+static int cv_term(const char **p, long *v)
+{
+	if (!cv_unary(p, v))
+		return 0;
+	for (;;) {
+		while (**p == ' ' || **p == '\t')
+			(*p)++;
+		char op = **p;
+		if (op != '*' && op != '/')
+			return 1;
+		(*p)++;
+		long w;
+		if (!cv_unary(p, &w) || (op == '/' && w == 0))
+			return 0;
+		*v = op == '*' ? *v * w : *v / w;
+	}
+}
+
+static int cv_expr(const char **p, long *v)
+{
+	if (!cv_term(p, v))
+		return 0;
+	for (;;) {
+		while (**p == ' ' || **p == '\t')
+			(*p)++;
+		char op = **p;
+		if (op != '+' && op != '-')
+			return 1;
+		(*p)++;
+		long w;
+		if (!cv_term(p, &w))
+			return 0;
+		*v = op == '+' ? *v + w : *v - w;
+	}
+}
+
+/* Notes the value of NAME equ ARGS if it is a constant. */
+static void note_value(const char *name, const char *args)
+{
+	const char *p = args;
+	long v;
+	if (!cv_expr(&p, &v))
+		return;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (*p != '\0')
+		return;
+	cv_names = xrealloc(cv_names, (ncv + 1) * sizeof *cv_names);
+	cv_values = xrealloc(cv_values, (ncv + 1) * sizeof *cv_values);
+	cv_names[ncv] = xstrdup(name);
+	cv_values[ncv++] = v;
+}
+
+/* The value of expression S if it is a constant (numbers, known equates). */
+static int constant_value(const char *s, long *v)
+{
+	const char *p = s;
+	if (!cv_expr(&p, v))
+		return 0;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	return *p == '\0';
 }
 
 /* Whether expression S (N chars) has only numbers and names equated so
@@ -2017,7 +2140,12 @@ static void movem_operands(struct buf *b, const char *args)
 			free(e.s);
 			bprintf(b, "#%s", name);
 		} else {
-			operand(b, pieces[i], lens[i], 0);
+			/* a bare address (movem.w d0-a7,$100): absolute long, as
+			 * Microware's assemblers (see the instructions' operands) */
+			int bare = pieces[i][0] != '#' && memchr(pieces[i], '(', lens[i]) == NULL &&
+				memchr(pieces[i], '\\', lens[i]) == NULL && !register_list(pieces[i], lens[i]) &&
+				!(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
+			operand(b, pieces[i], lens[i], bare);
 		}
 	}
 }
@@ -2050,13 +2178,8 @@ static int rept_of_bytes(const char *args)
 {
 	if (st.in_macro || st.rest_of_file == NULL)
 		return 0;
-	char *e;
-	long n = strtol(args, &e, 10);
-	if (args[0] == '$')
-		n = strtol(args + 1, &e, 16);
-	while (*e == ' ' || *e == '\t')
-		e++;
-	if (*e != '\0' || n < 1 || n > 4096)
+	long n;
+	if (!constant_value(args, &n) || n < 1 || n > 4096)
 		return 0;
 	const char *p = st.rest_of_file;	/* at the rept line's own line end */
 	if (*p == '\r')
@@ -2081,7 +2204,7 @@ static int rept_of_bytes(const char *args)
 		if (ok) {
 			op_parts(a.op, ba, sizeof ba, &sa);
 			op_parts(b.op, bb, sizeof bb, &sb);
-			ok = strcmp(ba, "dc") == 0 && sa == 'b' && strcmp(bb, "endr") == 0 && b.label == NULL;
+			ok = strcmp(ba, "dc") == 0 && (sa == 'b' || sa == 'w' || sa == 'l' || sa == 0) && strcmp(bb, "endr") == 0 && b.label == NULL;
 		}
 		free_line(&a);
 		free_line(&b);
@@ -2170,6 +2293,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		op_parts(l.op, base, sizeof base, &size);
 	else
 		base[0] = '\0', size = 0;
+	/* The dc line of a folded rept (see rept_of_bytes): its list N times. */
+	if (st.rept_fold && st.rept_state == 1 && l.op && strcmp(base, "dc") == 0) {
+		struct buf a = { 0 };
+		for (int i = 0; i < st.rept_fold; i++)
+			bprintf(&a, "%s%s", i ? "," : "", l.args);
+		free(l.args);
+		l.args = a.s;
+		st.rept_state = 2;
+	}
 	/* A call of a renamed macro (see the macro statement): by its new name. */
 	for (int i = 0; l.op && i < st.nmren; i++)
 		if (strcmp(l.op, st.mren_from[i]) == 0) {
@@ -2329,29 +2461,30 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "rept") == 0 && rept_of_bytes(l.args)) {
-		/* rept N around one dc.b line: that line's list N times (the
+		/* rept N around one dc line: that line's list N times (the
 		 * rept and endr lines comments). In MRI mode as aligns before
 		 * a rept after an odd number of bytes, r68 doesn't
-		 * (dc.b 0, then Tab rept 23 dc.b ... endr). */
-		if (*labs)
+		 * (dc.b 0, then Tab rept 23 dc.b ... endr);
+		 * and a label on the rept in a vsect belongs to the data that
+		 * follows (Buf: rept LEN, dc.w $200): it goes to
+		 * the dc line. */
+		if (st.in_vsect) {
+			/* the section switch and the label here, so that the dc
+			 * line (already in its section) is written as it is: a
+			 * long list as a macro argument (r68dc) is cut short */
+			struct buf nm = { 0 };
+			if (l.label)
+				put_symbol(&nm, l.label, strlen(l.label));
+			bprintf(out, " r68lab %s,%s%s", data_section(1), nm.s ? nm.s : "", rest);
+			st.section = data_section(1);
+			free(nm.s);
+			annotate = 1;
+		} else if (*labs) {
 			bprintf(out, "%s%s", labs, rest);
-		else
+			annotate = 1;
+		} else {
 			bprintf(out, "*%s", text);
-		annotate = *labs != '\0';
-		goto done;
-	}
-	if (st.rept_fold && strcmp(base, "dc") == 0 && size == 'b' && st.rept_state == 1) {
-		struct buf a = { 0 };
-		for (int i = 0; i < st.rept_fold; i++)
-			bprintf(&a, "%s%s", i ? "," : "", l.args);
-		bprintf(out, "%s %s ", labs, l.op);
-		dc_size = 1;
-		expression_list(out, a.s, 0);
-		dc_size = 0;
-		bputs(out, rest);
-		free(a.s);
-		annotate = 1;
-		st.rept_state = 2;
+		}
 		goto done;
 	}
 	if (st.rept_fold && strcmp(base, "endr") == 0 && st.rept_state == 2) {
@@ -2394,6 +2527,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	if (l.label && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0 || strcmp(base, "do") == 0 ||
 			strcmp(base, "lo") == 0)) {
 		add_equate(l.label);
+		if (!st.in_macro && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0) && l.args)
+			note_value(l.label, l.args);
 		/* set where it is assembled: not in a macro definition, whose
 		 * lines run where it is called */
 		if (!st.in_macro) {
