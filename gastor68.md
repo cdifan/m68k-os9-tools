@@ -29,6 +29,9 @@ only what GCC writes.
 
 ### The psect
 
+- **The psect line:** in C 3.2's style `psect name_c,0,0,0,0,0` (the source's name, every
+  character other than a letter, digit, `_`, `$` or `@` as `_`) followed by `nam name_c`; in Ultra
+  C's style `psect name.c,0,0,0,0,0`, as Ultra C writes it.
 - **A mainline:** a GNU source that defines the `__os9_*` symbols (`__os9_typelang`,
   `__os9_attrev`, `__os9_edition`, `__os9_stack`, `__os9_entry`, as hand-written startup code
   does) gets their values in the psect line's fields; compiled C files have zeros.

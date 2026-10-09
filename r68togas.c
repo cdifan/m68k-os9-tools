@@ -225,6 +225,8 @@ static void skipsp(struct lexer *lx)
 
 /* One operand: a number, symbol, character constant, '*', '.', a macro
  * parameter, a parenthesized expression, or a unary operator before one. */
+static int annotate;
+
 static void parse_unary(struct lexer *lx, struct buf *b)
 {
 	const char *p = lx->p;
@@ -272,6 +274,14 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		else
 			bput(b, p, q - p);
 		lx->p = q;
+		return;
+	}
+	if (*p == '$' && !isxdigit((unsigned char)p[1]) && p[1] != '\0' && !symchar((unsigned char)p[1])) {
+		/* $ without a hex digit, as in #$((\1)<<16)+(\2) (in
+		 * macros): r68 takes the value after it. */
+		lx->p++;
+		annotate = 1;
+		parse_unary(lx, b);
 		return;
 	}
 	if (*p == '$') {
@@ -340,7 +350,10 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			q++;
 		else
 			lx->ok = 0;
-		if (expr_chars || count != 1)
+		/* as splits operands at a comma, and ends them at a blank, in a
+		 * quote too (move.b #',',(a3)+): only a letter or digit is
+		 * kept as a character. */
+		if (expr_chars || count != 1 || !isalnum((unsigned char)v))
 			bprintf(b, "$%lx", v);
 		else
 			bput(b, p, q - p);
@@ -617,6 +630,9 @@ static int split_commas(const char *s, size_t n, const char **piece, size_t *len
 	return count;
 }
 
+static int global_label(const char *s, size_t n);
+static void put_twin(struct buf *b, const char *s, size_t n);
+
 /* Translates one instruction operand. ABSOLUTE: a bare expression operand
  * is an absolute address (r68's jsr/jmp/lea/pea label: absolute long). */
 static void operand(struct buf *b, const char *s, size_t n, int absolute)
@@ -693,6 +709,8 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				annotate = 1;
 				expression(b, s, open);
 				bputc(b, ')');
+			} else if (open > 0 && pc_register(inner, ilen) && global_label(s, open)) {
+				put_twin(b, s, open);
 			} else if (open > 0) {
 				expression(b, s, open);
 			}
@@ -914,6 +932,12 @@ struct state {
 	int nmacros;
 	unsigned *macro_fold;	/* per macro: the parameters (bit n-1 for \n) used where
 				   equates are folded in (see fold_equates) */
+	char **gl;		/* the labels defined with ':' (scan_labels) */
+	int ngl;
+	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
+	int nmren;
+	int c32;		/* -d c32: C 3.2's R68's encodings */
+	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
 };
 
 static struct state st;
@@ -1478,6 +1502,39 @@ static int is_lmacro(const char *op)
 
 /* Whether TARGET (a branch operand) is a label this source defines
  * without ':' (scan_labels), or one made in a macro (\@). */
+/* A label this source defines with ':' (global). */
+static int global_label(const char *s, size_t n)
+{
+	if (memchr(s, '\\', n) != NULL)		/* a macro's name\@: not one symbol */
+		return 0;
+	for (int i = 0; i < st.ngl; i++)
+		if (strlen(st.gl[i]) == n && strncmp(st.gl[i], s, n) == 0)
+			return 1;
+	return 0;
+}
+
+/* A global label of this source in a PC-relative operand or as a branch
+ * target: r68 resolves it in the file, as resolves a global symbol only at
+ * link time (a relocation; an error in an 8-bit field, as (pc,Xn) and .s
+ * branches have). Written as NAME__r68pc, a local equate of NAME (epilogue),
+ * which as resolves. */
+static void put_twin(struct buf *b, const char *s, size_t n)
+{
+	struct buf t = { 0 };
+	put_symbol(&t, s, n);
+	bputs(&t, "__r68pc");
+	bputs(b, t.s);
+	char needle[600];
+	snprintf(needle, sizeof needle, "\n%s equ ", t.s);
+	if (st.twins.s == NULL || strstr(st.twins.s, needle) == NULL) {
+		struct buf nm = { 0 };
+		put_symbol(&nm, s, n);
+		bprintf(&st.twins, "\n%s equ %s", t.s, nm.s);
+		free(nm.s);
+	}
+	free(t.s);
+}
+
 static int local_label(const char *target)
 {
 	if (strchr(target, '\\') != NULL)
@@ -1485,7 +1542,7 @@ static int local_label(const char *target)
 	for (int i = 0; i < st.nlocals; i++)
 		if (strcmp(st.locals[i], target) == 0)
 			return 1;
-	return 0;
+	return global_label(target, strlen(target));
 }
 
 static char *use_file(const char *arg, const char *from);
@@ -1570,6 +1627,53 @@ static void add_equate(const char *name)
 /* Whether expression S (N chars) has only numbers and names equated so
  * far, so that as can compute it (and mask it: r68 writes a move.b
  * immediate as its low byte, $00nn, as the whole value, $FF7F for ^$80). */
+/* Whether expression S (N chars) uses the location counter: a * where an
+ * operand starts (not a multiplication). */
+static int has_location(const char *s, size_t n)
+{
+	char prev = 0;
+	for (size_t i = 0; i < n; i++) {
+		if (s[i] == '\'') {
+			for (i++; i < n && s[i] != '\''; i++)
+				;
+			prev = 'x';
+			continue;
+		}
+		if (s[i] == ' ' || s[i] == '\t')
+			continue;
+		if (s[i] == '*' && (prev == 0 || strchr("+-*/(&!|^<>~", prev)))
+			return 1;
+		prev = s[i];
+	}
+	return 0;
+}
+
+/* Whether S (N chars) is a plain number from -128 to 127 (decimal, $hex,
+ * %binary, with a minus). */
+static int small_number(const char *s, size_t n)
+{
+	char t[64];
+	if (n == 0 || n >= sizeof t)
+		return 0;
+	memcpy(t, s, n);
+	t[n] = '\0';
+	char *p = t, *e;
+	int neg = *p == '-';
+	if (neg)
+		p++;
+	int radix = *p == '$' ? 16 : *p == '%' ? 2 : 10;
+	if (radix != 10)
+		p++;
+	if (!isxdigit((unsigned char)*p))
+		return 0;
+	long v = strtol(p, &e, radix);
+	if (*e != '\0')
+		return 0;
+	if (neg)
+		v = -v;
+	return v >= -128 && v <= 127;
+}
+
 static int known_value(const char *s, size_t n)
 {
 	for (size_t i = 0; i < n;) {
@@ -1685,6 +1789,19 @@ static char *use_file(const char *arg, const char *from)
 		if (*c == '\\')
 			*c = '/';
 	char *found = NULL;
+	if (isalpha((unsigned char)name[0]) && name[1] == ':' && name[2] == '/') {
+		/* A DOS path (use c:\os9\defs\oskdefs.d): the drive as
+		 * WSL mounts it (/mnt/c), else as MSYS (/c). */
+		char d = (char)tolower((unsigned char)name[0]);
+		for (int k = 0; k < 2 && found == NULL; k++) {
+			struct buf p = { 0 };
+			bprintf(&p, k == 0 ? "/mnt/%c%s" : "/%c%s", d, name + 2);
+			found = find_ci(p.s);
+			free(p.s);
+		}
+		free(name);
+		return found;
+	}
 	if (name[0] == '/') {
 		found = find_ci(name);
 		free(name);
@@ -1818,6 +1935,46 @@ static void movem_operands(struct buf *b, const char *args)
 	}
 }
 
+static int macro_name_clash(const char *name);
+
+/* -d c32: add, sub, and, or and cmp with an immediate source and a data
+ * register destination, written without the i: C 3.2's R68 uses the
+ * <ea>,Dn form with the immediate as its operand (and.l #2,d0: $C0BC
+ * $00000002), as and Ultra C's r68 the immediate instructions (ANDI:
+ * $0280 ...). Written as words: the opcode, then the immediate (through
+ * the prelude's r68imml for a long). 1 if done. */
+static int c32_immediate(struct buf *out, const char *labs, const char *base, char size, const char *args,
+			 const char *rest)
+{
+	static const struct { const char *name; unsigned op; } ops[] = {
+		{ "or", 0x8000 }, { "sub", 0x9000 }, { "cmp", 0xB000 }, { "and", 0xC000 }, { "add", 0xD000 },
+	};
+	unsigned op = 0;
+	for (size_t i = 0; i < sizeof ops / sizeof *ops; i++)
+		if (strcmp(base, ops[i].name) == 0)
+			op = ops[i].op;
+	if (op == 0)
+		return 0;
+	const char *pieces[4];
+	size_t lens[4];
+	if (split_commas(args, strlen(args), pieces, lens, 4) != 2 || pieces[0][0] != '#' || lens[1] != 2 ||
+	    (pieces[1][0] != 'd' && pieces[1][0] != 'D') || pieces[1][1] < '0' || pieces[1][1] > '7')
+		return 0;
+	int s = size == 'b' ? 0 : size == 'l' ? 2 : 1;
+	unsigned word = op | (unsigned)(pieces[1][1] - '0') << 9 | (unsigned)s << 6 | 0x3C;
+	struct buf e = { 0 };
+	expression(&e, pieces[0] + 1, lens[0] - 1);
+	if (s == 2)
+		bprintf(out, "%s r68imml $%04X,<%s>%s", labs, word, e.s, rest);
+	else if (s == 1)
+		bprintf(out, "%s dc.w $%04X,%s%s", labs, word, e.s, rest);
+	else
+		bprintf(out, "%s dc.w $%04X,(%s)&$ff%s", labs, word, e.s, rest);
+	free(e.s);
+	annotate = 1;
+	return 1;
+}
+
 /* Translates one statement line into OUT (one line, no newline). */
 static void translate_line(const char *text, struct buf *out, const char *path, int lineno, FILE *fp, int depth)
 {
@@ -1834,6 +1991,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		op_parts(l.op, base, sizeof base, &size);
 	else
 		base[0] = '\0', size = 0;
+	/* A call of a renamed macro (see the macro statement): by its new name. */
+	for (int i = 0; l.op && i < st.nmren; i++)
+		if (strcmp(l.op, st.mren_from[i]) == 0) {
+			free(l.op);
+			l.op = xstrdup(st.mren_to[i]);
+			op_parts(l.op, base, sizeof base, &size);
+			break;
+		}
 	/* sys.l's equates folded in whole where no relocation can take them
 	 * (r68 can't either): fields of the instruction word that aren't a
 	 * byte (quick values, shift counts), sizes and counts, conditionals
@@ -1868,7 +2033,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	/* Outside a psect (definition files used before it) r68 exports
 	 * nothing. */
 	int wrap_global = 0;
-	if (l.label && l.global && st.in_psect) {
+	if (l.label && l.global && st.in_macro && strchr(l.label, '\\') != NULL && !st.in_vsect) {
+		/* A global label whose name a macro's argument makes (a source's
+		 * _C\1:): exported by each expansion (r68xlab), not in the
+		 * epilogue. */
+		wrap_global = 2;
+	} else if (l.label && l.global && st.in_psect) {
 		/* In a conditional, the label may be global only where the
 		 * condition is false (Entry: for OS-9000; plain
 		 * Entry for OS-9): exported only if its line is assembled. */
@@ -1986,9 +2156,23 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "com") == 0) {
-		fprintf(stderr, "%s:%d: com (common blocks) isn't supported\n", path, lineno);
-		st.errors++;
-		bprintf(out, "*%s", text);
+		/* NAME: com.s n: a common block of n elements (.w by default),
+		 * an ELF common symbol (rof2elf makes ROF's commons ones too).
+		 * In a remote vsect it would be remote: refused. */
+		if (l.label == NULL || st.remote) {
+			fprintf(stderr, "%s:%d: com %s isn't supported\n", path, lineno,
+				l.label == NULL ? "without a label" : "in a remote vsect");
+			st.errors++;
+			bprintf(out, "*%s", text);
+			goto done;
+		}
+		struct buf nm = { 0 };
+		put_symbol(&nm, l.label, strlen(l.label));
+		bprintf(out, " r68com %s,%d*(", nm.s, size == 'b' ? 1 : size == 'l' ? 4 : 2);
+		expression(out, l.args, strlen(l.args));
+		bprintf(out, ")%s", rest);
+		free(nm.s);
+		annotate = 1;
 		goto done;
 	}
 	if (strcmp(base, "org") == 0) {
@@ -2113,6 +2297,24 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bprintf(&lab, "%s__r68", nm.s);
 			labs = lab.s;
 			free(nm.s);
+		} else if (strcmp(base, "macro") == 0 && l.label != NULL && macro_name_clash(l.label)) {
+			/* r68's macro names are case sensitive, as's aren't: a
+			 * name that only the case tells from one of the prelude's
+			 * (OS9, which calls os9) or from another macro is
+			 * defined as NAME__r68m<n>, and called so. */
+			struct buf nm = { 0 };
+			put_symbol(&nm, l.label, strlen(l.label));
+			free(lab.s);
+			lab.s = NULL;
+			lab.n = lab.size = 0;
+			bprintf(&lab, "%s__r68m%d", nm.s, st.nmren + 1);
+			labs = lab.s;
+			free(nm.s);
+			st.mren_from = xrealloc(st.mren_from, (st.nmren + 1) * sizeof *st.mren_from);
+			st.mren_to = xrealloc(st.mren_to, (st.nmren + 1) * sizeof *st.mren_to);
+			st.mren_from[st.nmren] = xstrdup(l.label);
+			st.mren_to[st.nmren++] = xstrdup(lab.s);
+			annotate = 1;
 		}
 		/* r68 takes an endc in a macro body that closes nothing (a
 		 * board's definitions file), as doesn't: dropped. */
@@ -2162,7 +2364,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macros = xrealloc(st.macros, (st.nmacros + 1) * sizeof *st.macros);
 			st.macro_fold = xrealloc(st.macro_fold, (st.nmacros + 1) * sizeof *st.macro_fold);
 			st.macro_fold[st.nmacros] = 0;
-			st.macros[st.nmacros++] = xstrdup(l.label);
+			int renamed = st.nmren > 0 && strcmp(st.mren_from[st.nmren - 1], l.label) == 0 &&
+				lab.s != NULL && strcmp(st.mren_to[st.nmren - 1], lab.s) == 0;
+			st.macros[st.nmacros++] = xstrdup(renamed ? lab.s : l.label);
 		}
 		if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0 || strcmp(base, "macro") == 0)
 			bputs(out, l.args);
@@ -2239,6 +2443,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bprintf(out, ")%s", rest);
 			goto done;
 		}
+		if (st.c32 && !is_macro(l.op) && c32_immediate(out, labs, base, size, l.args, rest))
+			goto done;
 		size_t start = out->n;
 		bprintf(out, "%s %s ", labs, op);
 		int need = cpu_needed(base, size, l.args);
@@ -2262,14 +2468,31 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputc(out, '<');
 					bput(out, pieces[i] + 1, lens[i] - 2);
 					bputc(out, '>');
+				} else if (strcmp(base, "moveq") == 0 && i == 0 && pieces[i][0] == '#' &&
+					   known_value(pieces[i] + 1, lens[i] - 1) && !small_number(pieces[i] + 1, lens[i] - 1)) {
+					/* moveq #128..#255: r68 takes the byte (moveq #$80
+					 * gives -128), as wants -128..127. */
+					struct buf e = { 0 };
+					expression(&e, pieces[i] + 1, lens[i] - 1);
+					bprintf(out, "#((%s)&$ff)-(((%s)&$80)<<1)", e.s, e.s);
+					free(e.s);
+					annotate = 1;
 				} else if (byte_imm && i == 0 && known_value(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "#(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputs(out, ")&$ff");
 					annotate = 1;
+				} else if ((is_branch(base) || (base[0] == 'd' && base[1] == 'b')) && i == k - 1 &&
+					   global_label(pieces[i], lens[i])) {
+					put_twin(out, pieces[i], lens[i]);
 				} else
 					operand(out, pieces[i], lens[i], abs_here);
-				if (no_moveq && i == 0 && pieces[i][0] == '#') {
+				/* only where as could take it for moveq: a data register;
+				 * and not with * in the value (#exit-*-8: a PC-relative
+				 * value, which as can't add another undefined term to) */
+				if (no_moveq && i == 0 && pieces[i][0] == '#' && k == 2 && lens[1] == 2 &&
+				    (pieces[1][0] == 'd' || pieces[1][0] == 'D') && pieces[1][1] >= '0' && pieces[1][1] <= '7' &&
+				    !has_location(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "+r68__0");
 					annotate = 1;
 				}
@@ -2301,7 +2524,9 @@ done:
 		put_symbol(&nm, l.label, strlen(l.label));
 		out->n = 0;
 		out->s[0] = '\0';
-		if (*b && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0))
+		if (wrap_global == 2)
+			bprintf(out, " r68xlab %s%s%s%s%s", nm.s, *b ? ",<" : "", b, *b ? ">" : "", rest);
+		else if (*b && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0))
 			/* NAME: equ value: NAME equ value on one line */
 			bprintf(out, " r68gdef %s,<%s>%s", nm.s, b, rest);
 		else if (*b)
@@ -2445,6 +2670,24 @@ static const char prelude[] =
 	" section .text\n"
 	"r68__btext\n";
 
+/* Whether a macro named NAME would clash in as, whose macro names ignore
+ * case: with a prelude macro or with a macro defined before whose name
+ * differs from NAME only in case. */
+static int macro_name_clash(const char *name)
+{
+	for (int i = 0; i < st.nmacros; i++)
+		if (ci_eq(st.macros[i], name) && strcmp(st.macros[i], name) != 0)
+			return 1;
+	for (const char *p = prelude; (p = strstr(p, " macro\n")) != NULL; p++) {
+		const char *s = p;
+		while (s > prelude && s[-1] != '\n')
+			s--;
+		if ((size_t)(p - s) == strlen(name) && strncasecmp(s, name, p - s) == 0)
+			return 1;
+	}
+	return 0;
+}
+
 static void usage(void)
 {
 	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-e FILE] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
@@ -2455,6 +2698,8 @@ static void usage(void)
 	printf("  -e FILE    equates (NAME VALUE lines, as sys.l's) set in the prelude\n");
 	printf("  -b         r68's -b/-bt: branches to this source's labels sized by as\n");
 	printf("  -B         with -b: also to its global labels (as relaxes those)\n");
+	printf("  -d D       the dialect: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68:\n");
+	printf("             its encodings where they differ)\n");
 	printf("  -u DIR     search DIR for use files (r68's -u)\n");
 	printf("  -o OUTPUT  write to OUTPUT (default: standard output)\n");
 }
@@ -2486,6 +2731,12 @@ int main(int argc, char **argv)
 			st.branch_sizing = 1;
 		} else if (strcmp(argv[i], "-B") == 0) {
 			st.relax_globals = 1;
+		} else if (strncmp(argv[i], "-d", 2) == 0) {
+			/* -d c32 | ucc: the dialect (whose encodings) */
+			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
+			if (d == NULL || (strcmp(d, "c32") != 0 && strcmp(d, "ucc") != 0))
+				die("-d takes c32 or ucc");
+			st.c32 = strcmp(d, "c32") == 0;
 		} else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
 			/* NAME VALUE lines (sys.l's equates): set lines in the
 			 * prelude, but for the names the source defines itself
@@ -2554,6 +2805,12 @@ int main(int argc, char **argv)
 	fputs(prelude, out);
 	/* r68glab NAME[,<rest>]: a global label in a conditional, with a marker */
 	fputs("r68glab macro\n\\1\nr68__g_\\1 set 1\n \\2\n endm\n", out);
+	/* r68imml OPCODE,VALUE: an instruction word and a long immediate (-d c32) */
+	fputs("r68imml macro\n dc.w \\1\n dc.l \\2\n endm\n", out);
+	/* r68com NAME,SIZE: a common block */
+	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
+	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
+	fputs("r68xlab macro\n xdef \\1\n\\1\n \\2\n endm\n", out);
 	/* r68gdef NAME,<equ value>: the same for an equ or set (one line) */
 	fputs("r68gdef macro\n\\1 \\2\nr68__g_\\1 set 1\n endm\n", out);
 	/* r68chip CPU,<instruction>: one instruction of a later CPU than -m's */
@@ -2576,6 +2833,8 @@ int main(int argc, char **argv)
 		char **globals = NULL;
 		int nglobals = 0;
 		scan_labels(source, 0, &globals, &nglobals);
+		st.gl = globals;
+		st.ngl = nglobals;
 		/* a name defined global anywhere isn't local */
 		int k = 0;
 		for (int i = 0; i < st.nlocals; i++) {
@@ -2617,6 +2876,8 @@ int main(int argc, char **argv)
 	r68x_ok = 0;
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
 	fputs(st.globals.s ? st.globals.s : "", out);
+	if (st.twins.s)
+		fprintf(out, "%s\n", st.twins.s + 1);
 	fputs(st.epilogue_more.s ? st.epilogue_more.s : "", out);
 	fputs("r68__0 equ 0\n", out);
 	/* set symbols referred to before their first set: their final value,

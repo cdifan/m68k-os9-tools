@@ -85,6 +85,7 @@ static struct {
 	const char *out;	/* -o= ("output.r" for a bare -o); null: none */
 	struct args files;
 	struct args notes;	/* options ignored, for one note */
+	const char *dialect;	/* -dialect=: r68togas -d; null: its default */
 } st;
 
 /* ----- Usage ----- */
@@ -115,6 +116,8 @@ static void usage(void)
 	printf("Options of this program:\n");
 	usage_line("-sysl=<lib>", "the library whose equates are folded in (default CLIB's sys.l;\n"
 		"                      none: none), as rof2elf -e folds them into ROFs");
+	usage_line("-dialect=<d>", "whose encodings where Microware's assemblers differ: ucc\n"
+		"                      (Ultra C's r68, the default) or c32 (C 3.2's R68)");
 	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
 		"                      translated source, for m68k-os9-as; standard output\n"
 		"                      without -o)");
@@ -197,6 +200,12 @@ static void option(const char *arg)
 	}
 	if (ci_prefix(text, "sysl=")) {
 		sysl = text + 5;
+		return;
+	}
+	if (ci_prefix(text, "dialect=")) {
+		if (!ci_eq(text + 8, "c32") && !ci_eq(text + 8, "ucc"))
+			error("-dialect= takes c32 or ucc");
+		st.dialect = ci_eq(text + 8, "c32") ? "c32" : "ucc";
 		return;
 	}
 	if (ci_prefix(text, "obj=") && ci_eq(text + 4, "r68"))
@@ -462,6 +471,10 @@ static void assemble(const char *source)
 	args_add(&argv, R68TOGAS);
 	args_append(&argv, &st.defs);
 	args_addf(&argv, "-m%d", st.cpu);
+	if (st.dialect != NULL) {
+		args_add(&argv, "-d");
+		args_add(&argv, st.dialect);
+	}
 	if (st.branch_sizing) {
 		args_add(&argv, "-b");
 		if (relaxes_globals())
