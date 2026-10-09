@@ -2660,6 +2660,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.mren_from[st.nmren] = xstrdup(l.label);
 			st.mren_to[st.nmren++] = xstrdup(lab.s);
 			annotate = 1;
+		} else if (strcmp(base, "macro") == 0 && l.label != NULL && strchr(l.label, '.') != NULL &&
+			   lab.s != NULL) {
+			/* A name with a dot (DRAW.w), defined as put_symbol
+			 * writes it: called so, not as DRAW with a size. */
+			st.mren_from = xrealloc(st.mren_from, (st.nmren + 1) * sizeof *st.mren_from);
+			st.mren_to = xrealloc(st.mren_to, (st.nmren + 1) * sizeof *st.mren_to);
+			st.mren_from[st.nmren] = xstrdup(l.label);
+			st.mren_to[st.nmren++] = xstrdup(lab.s);
 		}
 		/* r68 takes an endc in a macro body that closes nothing (a
 		 * board's definitions file), as doesn't: dropped. */
