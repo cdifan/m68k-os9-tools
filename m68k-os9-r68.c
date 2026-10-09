@@ -329,8 +329,16 @@ static void register_names(const char *object)
 		name[strcspn(name, "\r\n")] = '\0';
 		size_t n = strlen(name);
 		if (n > 5 && strcmp(name + n - 5, "__r68") == 0 && strncmp(name, "r68__", 5) != 0) {
+			/* and a dot in the name was __dot__ (see r68togas's put_symbol) */
+			char *orig = xstrdup(name), *p;
+			orig[n - 5] = '\0';
+			while ((p = strstr(orig, "__dot__")) != NULL) {
+				*p = '.';
+				memmove(p + 1, p + 7, strlen(p + 7) + 1);
+			}
 			args_add(&renames, "--redefine-sym");
-			args_addf(&renames, "%s=%.*s", name, (int)(n - 5), name);
+			args_addf(&renames, "%s=%s", name, orig);
+			free(orig);
 		}
 	}
 	fclose(fp);

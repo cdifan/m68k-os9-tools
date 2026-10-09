@@ -172,6 +172,10 @@ static int is_r68_register(const char *s, size_t n)
  * GNU as takes for a register with "__r68" after it. */
 static void put_symbol(struct buf *b, const char *s, size_t n)
 {
+	/* A dot inside the name (labels lab.a ... lab.s):
+	 * __dot__, as would read bls.s lab.s's .s as a size;
+	 * with __r68 after the name, whose dots m68k-os9-r68 gives back. */
+	int dots = 0;
 	for (size_t i = 0; i < n; i++) {
 		if (s[i] == '\\' && i + 1 < n) {
 			/* a macro parameter in the name (Name\@) */
@@ -179,10 +183,13 @@ static void put_symbol(struct buf *b, const char *s, size_t n)
 			i++;
 		} else if (s[i] == '@')
 			bputs(b, "_at_");
-		else
+		else if (s[i] == '.' && i > 0) {
+			bputs(b, "__dot__");
+			dots = 1;
+		} else
 			bputc(b, s[i]);
 	}
-	if (clashes(s, n))
+	if (dots || clashes(s, n))
 		bputs(b, "__r68");
 }
 
@@ -641,6 +648,27 @@ static int split_commas(const char *s, size_t n, const char **piece, size_t *len
 static int global_label(const char *s, size_t n);
 static void put_twin(struct buf *b, const char *s, size_t n);
 
+/* S (N chars) with register names in lower case: r68 takes them in any
+ * case, as in lower or upper case only (-(Sp)). */
+static void put_regs(struct buf *b, const char *s, size_t n)
+{
+	for (size_t i = 0; i < n;) {
+		size_t j = i;
+		while (j < n && isalnum((unsigned char)s[j]))
+			j++;
+		if (j > i && (i == 0 || !symchar((unsigned char)s[i - 1])) && is_r68_register(s + i, j - i)) {
+			for (size_t k = i; k < j; k++)
+				bputc(b, (char)tolower((unsigned char)s[k]));
+			i = j;
+		} else if (j > i) {
+			bput(b, s + i, j - i);
+			i = j;
+		} else {
+			bputc(b, s[i++]);
+		}
+	}
+}
+
 /* Translates one instruction operand. ABSOLUTE: a bare expression operand
  * is an absolute address (r68's jsr/jmp/lea/pea label: absolute long). */
 static void operand(struct buf *b, const char *s, size_t n, int absolute)
@@ -657,15 +685,15 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 		return;
 	}
 	if (register_list(s, n)) {
-		bput(b, s, n);
+		put_regs(b, s, n);
 		return;
 	}
 	if (n >= 4 && s[0] == '-' && s[1] == '(' && s[n - 1] == ')') {
-		bput(b, s, n);
+		put_regs(b, s, n);
 		return;
 	}
 	if (n >= 4 && s[0] == '(' && s[n - 2] == ')' && s[n - 1] == '+') {
-		bput(b, s, n);
+		put_regs(b, s, n);
 		return;
 	}
 	/* An address mode: displacement(registers...), or (bd,An,Xn). */
@@ -732,7 +760,7 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 					if (lens[i] == 3 && strncasecmp(pieces[i], "pcr", 3) == 0)
 						bputs(b, "pc");
 					else
-						bput(b, pieces[i], lens[i]);
+						put_regs(b, pieces[i], lens[i]);
 				} else {
 					expression(b, pieces[i], lens[i]);
 				}
@@ -2145,9 +2173,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	/* Outside a psect (definition files used before it) r68 exports
 	 * nothing. */
 	int wrap_global = 0;
-	if (l.label && l.global && st.in_macro && strchr(l.label, '\\') != NULL && !st.in_vsect) {
-		/* A global label whose name a macro's argument makes (a source's
-		 * _C\1:): exported by each expansion (r68xlab), not in the
+	if (l.label && l.global && st.in_macro && strchr(l.label, '\\') != NULL) {
+		/* A global label whose name a macro's argument makes
+		 * (_C\1:): exported by each expansion (r68xlab), not in the
 		 * epilogue. */
 		wrap_global = 2;
 	} else if (l.label && l.global && st.in_psect) {
@@ -2552,6 +2580,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* as has no jblo, jbhs */
 			snprintf(opb, sizeof opb, "j%s", strcmp(base, "blo") == 0 ? "bcs" : strcmp(base, "bhs") == 0 ? "bcc" : base);
 			op = opb;
+		} else if (strcmp(base, "exg") == 0 && size) {
+			/* exg.l: r68 takes the size, as doesn't */
+			snprintf(opb, sizeof opb, "exg");
+			op = opb;
+			annotate_op = 1;
 		} else if (strcmp(base, "addi") == 0 || strcmp(base, "subi") == 0) {
 			/* r68 makes addi/subi #1..8 addq/subq; as does that for
 			 * add/sub. */
