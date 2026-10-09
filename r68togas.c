@@ -950,7 +950,6 @@ struct state {
 	int rept_fold, rept_state;	/* a rept of one dc.b line folded: its count; 1: the dc.b
 					   next, 2: the endr */
 	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
-	struct buf swapped;	/* labels whose line defines the twin: NAME equ NAME__r68pc lines */
 };
 
 static struct state st;
@@ -1979,6 +1978,25 @@ static void movem_operands(struct buf *b, const char *args)
 
 static int macro_name_clash(const char *name);
 
+/* Whether BASE is an instruction whose operand may be a memory address
+ * (its bare expression an absolute address); not a branch, nor a macro
+ * called before its definition was seen (a descriptor calling its template macro). */
+static int memory_instruction(const char *base)
+{
+	static const char *const ops[] = {
+		"move", "movea", "add", "adda", "addi", "addq", "addx", "sub", "suba", "subi", "subq", "subx",
+		"and", "andi", "or", "ori", "eor", "eori", "cmp", "cmpa", "cmpi", "cmpm", "clr", "tst", "neg",
+		"negx", "not", "nbcd", "abcd", "sbcd", "tas", "btst", "bchg", "bclr", "bset", "muls", "mulu",
+		"divs", "divu", "chk", "chk2", "cmp2", "asl", "asr", "lsl", "lsr", "rol", "ror", "roxl", "roxr",
+		"st", "sf", "shi", "sls", "scc", "scs", "shs", "slo", "sne", "seq", "svc", "svs", "spl", "smi",
+		"sge", "slt", "sgt", "sle", "moves", "movep", "cas", "cas2", "pack", "unpk", "bfchg", "bfclr",
+		"bfexts", "bfextu", "bfffo", "bfins", "bfset", "bftst", NULL };
+	for (const char *const *o = ops; *o; o++)
+		if (strcmp(base, *o) == 0)
+			return 1;
+	return 0;
+}
+
 /* rept ARGS: whether it is a plain count (1..4096) around exactly one
  * dc.b line without a label (the next line) closed by endr (the line after
  * it), outside a macro definition; then st.rept_fold is the count. */
@@ -2147,19 +2165,6 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	struct buf lab = { 0 };
 	if (l.label) {
 		put_symbol(&lab, l.label, strlen(l.label));
-		/* A global label in code (not in a macro, a conditional's
-		 * r68glab or a vsect; not an equate): the line defines its
-		 * local twin NAME__r68pc, the epilogue NAME as an equate of it
-		 * (see put_twin). as resolves PC-relative references to the
-		 * twin itself, and a real label also in 8-bit fields, where
-		 * an equate goes through a fixup that refuses a displacement
-		 * of 0 ("invalid byte branch offset"). */
-		if (l.global && st.in_psect && !st.in_vsect && !st.in_macro && !wrap_global &&
-		    strchr(l.label, '\\') == NULL && (base[0] == '\0' ||
-		    (strcmp(base, "set") != 0 && (strcmp(base, "equ") != 0 || strcmp(l.args, "*") == 0)))) {
-			bprintf(&st.swapped, "\n%s equ %s__r68pc", lab.s, lab.s);
-			bputs(&lab, "__r68pc");
-		}
 		if (l.global)
 			bputc(&lab, ':');
 	}
@@ -2601,7 +2606,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				 * equ $c0): absolute long in both of Microware's
 				 * assemblers, as takes a short one for a small value.
 				 * Not a branch's target. */
-				int addr_op = !is_branch(base) && !(base[0] == 'd' && base[1] == 'b');
+				int addr_op = memory_instruction(base);
 				int abs_here = (absolute ? i == 0 : addr_op && memchr(pieces[i], '\\', lens[i]) == NULL) &&
 					pieces[i][0] != '#' &&
 					memchr(pieces[i], '(', lens[i]) == NULL && !register_list(pieces[i], lens[i]) &&
@@ -3028,31 +3033,9 @@ int main(int argc, char **argv)
 			st.cond_depth > 1 ? "s" : "");
 	for (; st.cond_depth > 0; st.cond_depth--)
 		fputs(" endc\n", out);
-	/* the global labels whose lines define their twins: before the
-	 * xdefs, whose ifdef must see them */
-	if (st.swapped.s)
-		fprintf(out, "%s\n", st.swapped.s + 1);
 	fputs(st.globals.s ? st.globals.s : "", out);
-	/* the other twins: equates of their labels */
-	for (char *p = st.twins.s; p != NULL && *p; ) {
-		char *e = strchr(p + 1, '\n');
-		size_t n = e ? (size_t)(e - p) : strlen(p);
-		/* "\nT equ NAME": skipped if "\nNAME equ T" is among the swapped */
-		char *sp = memchr(p + 1, ' ', n - 1);
-		int skip = 0;
-		if (sp != NULL && st.swapped.s != NULL) {
-			struct buf k = { 0 };
-			bprintf(&k, "\n%.*s equ %.*s\n", (int)(p + n - (sp + 5)), sp + 5, (int)(sp - p - 1), p + 1);
-			struct buf hay = { 0 };
-			bprintf(&hay, "%s\n", st.swapped.s);
-			skip = strstr(hay.s, k.s) != NULL;
-			free(k.s);
-			free(hay.s);
-		}
-		if (!skip)
-			fprintf(out, "%.*s\n", (int)(n - 1), p + 1);
-		p += n;
-	}
+	if (st.twins.s)
+		fprintf(out, "%s\n", st.twins.s + 1);
 	fputs(st.epilogue_more.s ? st.epilogue_more.s : "", out);
 	fputs("r68__0 equ 0\n", out);
 	/* set symbols referred to before their first set: their final value,
