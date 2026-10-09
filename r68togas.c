@@ -226,6 +226,9 @@ static void skipsp(struct lexer *lx)
 /* One operand: a number, symbol, character constant, '*', '.', a macro
  * parameter, a parenthesized expression, or a unary operator before one. */
 static int annotate;
+static int global_label(const char *s, size_t n);
+static void put_twin(struct buf *b, const char *s, size_t n);
+static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 
 static void parse_unary(struct lexer *lx, struct buf *b)
 {
@@ -380,6 +383,11 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		const char *q = p;
 		while (symchar((unsigned char)*q))
 			q++;
+		if (twin_mode && global_label(p, q - p)) {
+			put_twin(b, p, q - p);
+			lx->p = q;
+			return;
+		}
 		put_symbol(b, p, q - p);
 		if (forward_set(p, q - p))
 			bputs(b, "__final");
@@ -709,8 +717,10 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				annotate = 1;
 				expression(b, s, open);
 				bputc(b, ')');
-			} else if (open > 0 && pc_register(inner, ilen) && global_label(s, open)) {
-				put_twin(b, s, open);
+			} else if (open > 0 && pc_register(inner, ilen)) {
+				twin_mode = 1;
+				expression(b, s, open);
+				twin_mode = 0;
 			} else if (open > 0) {
 				expression(b, s, open);
 			}
@@ -937,7 +947,10 @@ struct state {
 	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
 	int nmren;
 	int c32;		/* -d c32: C 3.2's R68's encodings */
+	int rept_fold, rept_state;	/* a rept of one dc.b line folded: its count; 1: the dc.b
+					   next, 2: the endr */
 	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
+	struct buf swapped;	/* labels whose line defines the twin: NAME equ NAME__r68pc lines */
 };
 
 static struct state st;
@@ -1341,6 +1354,32 @@ static char *location_from(const char *s, size_t n, long offset)
 }
 
 /* Expressions separated by commas (dc, the if directives' operands...). */
+/* Whether S (N chars) is one quoted token: its closing quote (a doubled
+ * one is a quote inside) is its last character, blanks aside. */
+static int whole_quoted(const char *s, size_t n)
+{
+	char q = s[0];
+	size_t i = 1;
+	while (i < n) {
+		if (s[i] == q) {
+			if (i + 1 < n && s[i + 1] == q) {
+				i += 2;
+				continue;
+			}
+			break;
+		}
+		if (s[i] == '\\' && q == '"' && i + 1 < n)
+			i++;
+		i++;
+	}
+	if (i >= n)
+		return 1;	/* unterminated: as a string, as before */
+	for (i++; i < n; i++)
+		if (s[i] != ' ' && s[i] != '\t')
+			return 0;
+	return 1;
+}
+
 static void expression_list(struct buf *b, const char *args, int chars)
 {
 	const char *pieces[256];
@@ -1355,7 +1394,10 @@ static void expression_list(struct buf *b, const char *args, int chars)
 			continue;
 		if (written++)
 			bputc(b, ',');
-		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars))) {
+		/* a string only if the element is one quoted token: ' '+12 is a
+		 * value (dc.b ...,27,"Y",' '+12,' '+58) */
+		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars)) &&
+		    whole_quoted(pieces[i], lens[i])) {
 			string_operand(b, pieces[i], lens[i]);
 			offset = -1;	/* a string's length: not counted */
 		} else {
@@ -1937,6 +1979,58 @@ static void movem_operands(struct buf *b, const char *args)
 
 static int macro_name_clash(const char *name);
 
+/* rept ARGS: whether it is a plain count (1..4096) around exactly one
+ * dc.b line without a label (the next line) closed by endr (the line after
+ * it), outside a macro definition; then st.rept_fold is the count. */
+static int rept_of_bytes(const char *args)
+{
+	if (st.in_macro || st.rest_of_file == NULL)
+		return 0;
+	char *e;
+	long n = strtol(args, &e, 10);
+	if (args[0] == '$')
+		n = strtol(args + 1, &e, 16);
+	while (*e == ' ' || *e == '\t')
+		e++;
+	if (*e != '\0' || n < 1 || n > 4096)
+		return 0;
+	const char *p = st.rest_of_file;	/* at the rept line's own line end */
+	if (*p == '\r')
+		p++;
+	if (*p == '\n')
+		p++;
+	char *lines[2];
+	for (int i = 0; i < 2; i++) {
+		size_t len = strcspn(p, "\r\n");
+		lines[i] = xstrndup(p, len);
+		p += len;
+		if (*p == '\r')
+			p++;
+		if (*p == '\n')
+			p++;
+	}
+	struct line a, b;
+	int ok = split_line(lines[0], &a) && split_line(lines[1], &b);
+	if (ok) {
+		char ba[32], bb[32], sa, sb;
+		ok = a.label == NULL && a.op != NULL && b.op != NULL && a.args != NULL;
+		if (ok) {
+			op_parts(a.op, ba, sizeof ba, &sa);
+			op_parts(b.op, bb, sizeof bb, &sb);
+			ok = strcmp(ba, "dc") == 0 && sa == 'b' && strcmp(bb, "endr") == 0 && b.label == NULL;
+		}
+		free_line(&a);
+		free_line(&b);
+	}
+	free(lines[0]);
+	free(lines[1]);
+	if (ok) {
+		st.rept_fold = (int)n;
+		st.rept_state = 1;
+	}
+	return ok;
+}
+
 /* -d c32: add, sub, and, or and cmp with an immediate source and a data
  * register destination, written without the i: C 3.2's R68 uses the
  * <ea>,Dn form with the immediate as its operand (and.l #2,d0: $C0BC
@@ -2053,6 +2147,19 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	struct buf lab = { 0 };
 	if (l.label) {
 		put_symbol(&lab, l.label, strlen(l.label));
+		/* A global label in code (not in a macro, a conditional's
+		 * r68glab or a vsect; not an equate): the line defines its
+		 * local twin NAME__r68pc, the epilogue NAME as an equate of it
+		 * (see put_twin). as resolves PC-relative references to the
+		 * twin itself, and a real label also in 8-bit fields, where
+		 * an equate goes through a fixup that refuses a displacement
+		 * of 0 ("invalid byte branch offset"). */
+		if (l.global && st.in_psect && !st.in_vsect && !st.in_macro && !wrap_global &&
+		    strchr(l.label, '\\') == NULL && (base[0] == '\0' ||
+		    (strcmp(base, "set") != 0 && (strcmp(base, "equ") != 0 || strcmp(l.args, "*") == 0)))) {
+			bprintf(&st.swapped, "\n%s equ %s__r68pc", lab.s, lab.s);
+			bputs(&lab, "__r68pc");
+		}
 		if (l.global)
 			bputc(&lab, ':');
 	}
@@ -2147,6 +2254,37 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bputs(out, " r68error <");
 		error_text(out, t, tn);
 		bputc(out, '>');
+		goto done;
+	}
+	if (strcmp(base, "rept") == 0 && rept_of_bytes(l.args)) {
+		/* rept N around one dc.b line: that line's list N times (the
+		 * rept and endr lines comments). In MRI mode as aligns before
+		 * a rept after an odd number of bytes, r68 doesn't
+		 * (dc.b 0, then Tab rept 23 dc.b ... endr). */
+		if (*labs)
+			bprintf(out, "%s%s", labs, rest);
+		else
+			bprintf(out, "*%s", text);
+		annotate = *labs != '\0';
+		goto done;
+	}
+	if (st.rept_fold && strcmp(base, "dc") == 0 && size == 'b' && st.rept_state == 1) {
+		struct buf a = { 0 };
+		for (int i = 0; i < st.rept_fold; i++)
+			bprintf(&a, "%s%s", i ? "," : "", l.args);
+		bprintf(out, "%s %s ", labs, l.op);
+		dc_size = 1;
+		expression_list(out, a.s, 0);
+		dc_size = 0;
+		bputs(out, rest);
+		free(a.s);
+		annotate = 1;
+		st.rept_state = 2;
+		goto done;
+	}
+	if (st.rept_fold && strcmp(base, "endr") == 0 && st.rept_state == 2) {
+		bprintf(out, "*%s", text);
+		st.rept_fold = st.rept_state = 0;
 		goto done;
 	}
 	if (strcmp(base, "rept") == 0) {
@@ -2459,8 +2597,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			for (int i = 0; i < k; i++) {
 				if (i)
 					bputc(out, ',');
-				int abs_here = absolute && i == 0 && pieces[i][0] != '#' && strchr(pieces[i], '(') == NULL &&
-					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
+				/* A bare address (move.l a6,Space with Space
+				 * equ $c0): absolute long in both of Microware's
+				 * assemblers, as takes a short one for a small value.
+				 * Not a branch's target. */
+				int addr_op = !is_branch(base) && !(base[0] == 'd' && base[1] == 'b');
+				int abs_here = (absolute ? i == 0 : addr_op && memchr(pieces[i], '\\', lens[i]) == NULL) &&
+					pieces[i][0] != '#' &&
+					memchr(pieces[i], '(', lens[i]) == NULL && !register_list(pieces[i], lens[i]) &&
+					!(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
 				if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
 					/* No instruction takes a string: a call of a macro
 					 * defined later (SBFDesc ...,"sbgiga" in a macro body),
@@ -2482,9 +2627,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputs(out, ")&$ff");
 					annotate = 1;
-				} else if ((is_branch(base) || (base[0] == 'd' && base[1] == 'b')) && i == k - 1 &&
-					   global_label(pieces[i], lens[i])) {
-					put_twin(out, pieces[i], lens[i]);
+				} else if ((is_branch(base) || (base[0] == 'd' && base[1] == 'b')) && i == k - 1) {
+					twin_mode = 1;
+					operand(out, pieces[i], lens[i], abs_here);
+					twin_mode = 0;
 				} else
 					operand(out, pieces[i], lens[i], abs_here);
 				/* only where as could take it for moveq: a data register;
@@ -2875,9 +3021,38 @@ int main(int argc, char **argv)
 	translate_file(source, out, 0);
 	r68x_ok = 0;
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
+	/* r68 ends a source in a conditional without a word
+	 * (ifne DEBUG): closed here, as doesn't. */
+	if (st.cond_depth > 0)
+		fprintf(out, "* closing %d conditional%s the source leaves open, as r68 does\n", st.cond_depth,
+			st.cond_depth > 1 ? "s" : "");
+	for (; st.cond_depth > 0; st.cond_depth--)
+		fputs(" endc\n", out);
+	/* the global labels whose lines define their twins: before the
+	 * xdefs, whose ifdef must see them */
+	if (st.swapped.s)
+		fprintf(out, "%s\n", st.swapped.s + 1);
 	fputs(st.globals.s ? st.globals.s : "", out);
-	if (st.twins.s)
-		fprintf(out, "%s\n", st.twins.s + 1);
+	/* the other twins: equates of their labels */
+	for (char *p = st.twins.s; p != NULL && *p; ) {
+		char *e = strchr(p + 1, '\n');
+		size_t n = e ? (size_t)(e - p) : strlen(p);
+		/* "\nT equ NAME": skipped if "\nNAME equ T" is among the swapped */
+		char *sp = memchr(p + 1, ' ', n - 1);
+		int skip = 0;
+		if (sp != NULL && st.swapped.s != NULL) {
+			struct buf k = { 0 };
+			bprintf(&k, "\n%.*s equ %.*s\n", (int)(p + n - (sp + 5)), sp + 5, (int)(sp - p - 1), p + 1);
+			struct buf hay = { 0 };
+			bprintf(&hay, "%s\n", st.swapped.s);
+			skip = strstr(hay.s, k.s) != NULL;
+			free(k.s);
+			free(hay.s);
+		}
+		if (!skip)
+			fprintf(out, "%.*s\n", (int)(n - 1), p + 1);
+		p += n;
+	}
 	fputs(st.epilogue_more.s ? st.epilogue_more.s : "", out);
 	fputs("r68__0 equ 0\n", out);
 	/* set symbols referred to before their first set: their final value,
