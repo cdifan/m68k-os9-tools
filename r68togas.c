@@ -996,6 +996,46 @@ static int folded_index(const char *s, size_t n)
 	return -1;
 }
 
+/* Whether name N (n chars) matches scanned name PAT, where a macro
+ * parameter or \@ in PAT (_C\1) stands for any run of name characters. */
+static int name_match(const char *pat, const char *n, size_t len)
+{
+	if (*pat == '\0')
+		return len == 0;
+	if (pat[0] == '\\' && pat[1] != '\0') {
+		for (size_t k = 0; k <= len; k++)
+			if (name_match(pat + 2, n + k, len - k))
+				return 1;
+		return 0;
+	}
+	return len > 0 && *pat == *n && name_match(pat + 1, n + 1, len - 1);
+}
+
+/* Whether name S (n chars) is external: defined nowhere in the source or
+ * its use files (scan_labels: labels, equ and set names; a name a macro
+ * makes, _C\1, as a pattern) nor so far (equ, set), and no register. r68
+ * leaves such a name to the link, also in a sum (ext_tab+TabEnt,
+ * chose_continue-bas_add): a link-time expression. Not a name with a dot
+ * (written as __dot__, see put_symbol). */
+static int external_name(const char *s, size_t n)
+{
+	static const char *const regs[] = { "sp", "pc", "sr", "ccr", "usp", "zpc", NULL };
+	if (memchr(s, '.', n) != NULL)
+		return 0;
+	if (n == 2 && strchr("dDaA", s[0]) && s[1] >= '0' && s[1] <= '7')
+		return 0;
+	for (const char *const *r = regs; *r; r++)
+		if (strlen(*r) == n && strncasecmp(*r, s, n) == 0)
+			return 0;
+	char **lists[] = { st.locals, st.gl, st.sets, st.equates };
+	int counts[] = { st.nlocals, st.ngl, st.nsets, st.nequates };
+	for (int l = 0; l < 4; l++)
+		for (int i = 0; i < counts[l]; i++)
+			if (name_match(lists[l][i], s, n))
+				return 0;
+	return 1;
+}
+
 /* Link-time expressions (r68x_note.h): an expression of sys.l's equates
  * that one relocation can't take but a sum of them can (Dir_+Write_,
  * PD_PAR-PD_OPT, 4*F$Send, with constants) becomes r68x_<hash>+constant,
@@ -1067,9 +1107,9 @@ static void lin_unary(struct lin *v)
 	} else if (symstart((unsigned char)*p)) {
 		while (symchar((unsigned char)*q))
 			q++;
-		/* only sys.l's equates: a label, a set symbol, the location
-		 * don't go in a note */
-		if (folded_index(p, q - p) < 0)
+		/* only sys.l's equates and external names: a label, a set
+		 * symbol, the location don't go in a note */
+		if (folded_index(p, q - p) < 0 && !external_name(p, q - p))
 			v->ok = 0;
 		else
 			r68x_add(&v->x, p, q - p, 1);
@@ -1167,7 +1207,7 @@ static char *r68x_expression(const char *s)
  * their values; null if nothing is replaced. */
 static char *fold_equates(const char *s)
 {
-	if (st.nfolded == 0)
+	if (st.nfolded == 0 && (!r68x_ok || fold_all))
 		return NULL;
 	size_t n = strlen(s);
 	size_t at[64], len[64];
@@ -1256,10 +1296,20 @@ static char *fold_equates(const char *s)
 		return NULL;
 	/* in a macro definition: the arguments for these parameters are
 	 * folded in where the macro is called */
-	if (params && st.in_macro && st.nmacros > 0)
+	if (params && st.in_macro && st.nmacros > 0 && st.nfolded > 0)
 		st.macro_fold[st.nmacros - 1] |= params;
-	if (nf == 0)
-		return NULL;
+	if (nf == 0) {
+		/* no equate of sys.l's: a sum of external names (ext_tab+TabEnt,
+		 * chose_continue-bas_add), which no relocation takes, as a
+		 * link-time expression too */
+		char *x = !fold_all && !params && r68x_ok && nsym > 1 ? r68x_expression(s) : NULL;
+		if (x != NULL) {
+			if (fold_log != NULL)
+				fprintf(fold_log, "%s:%d\tr68x\t%s\t%s\n", log_path, log_line, s, x);
+			annotate = 1;
+		}
+		return x;
+	}
 	if (!fold_all && !params && r68x_ok) {
 		char *x = r68x_expression(s);
 		if (x != NULL) {
