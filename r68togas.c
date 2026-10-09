@@ -2057,6 +2057,19 @@ static int is_macro(const char *op)
 
 /* A macro call's arguments: a quoted one passes its text without the
  * quotes in r68, as <...> does in MRI; the others as operands. */
+/* S as a macro argument in <...>: as's MRI macros take ! there as an escape,
+ * and count < and > ("HELLO!", a shift): those escaped. */
+static void put_angle(struct buf *b, const char *s, size_t n)
+{
+	bputc(b, '<');
+	for (size_t i = 0; i < n; i++) {
+		if (s[i] == '!' || s[i] == '<' || s[i] == '>')
+			bputc(b, '!');
+		bputc(b, s[i]);
+	}
+	bputc(b, '>');
+}
+
 static void macro_arguments(struct buf *b, const char *args, const char *name)
 {
 	const char *pieces[64];
@@ -2075,9 +2088,7 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		if (i)
 			bputc(b, ',');
 		if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
-			bputc(b, '<');
-			bput(b, pieces[i] + 1, lens[i] - 2);
-			bputc(b, '>');
+			put_angle(b, pieces[i] + 1, lens[i] - 2);
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
 			   (lens[i] == 4 || pieces[i][4] == '.')) {
 			/* A mnemonic argument (DTDEST subi.w,#1,V_Counter): as in
@@ -2223,7 +2234,8 @@ static int rept_of_bytes(const char *args)
  * <ea>,Dn form with the immediate as its operand (and.l #2,d0: $C0BC
  * $00000002), as and Ultra C's r68 the immediate instructions (ANDI:
  * $0280 ...). Written as words: the opcode, then the immediate (through
- * the prelude's r68imml for a long). 1 if done. */
+ * the prelude's r68imml for a long, r68immb for a byte of an external).
+ * 1 if done. */
 static int c32_immediate(struct buf *out, const char *labs, const char *base, char size, const char *args,
 			 const char *rest)
 {
@@ -2264,14 +2276,20 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 		return 0;
 	unsigned word = reg >= 8 ? op | (unsigned)(reg - 8) << 9 | (s == 2 ? 0x1C0u : 0xC0u) | 0x3C
 		: op | (unsigned)reg << 9 | (unsigned)s << 6 | 0x3C;
+	/* in parentheses: a dc element in quotes is a string ('0': $3000) */
 	struct buf e = { 0 };
+	bputc(&e, '(');
 	expression(&e, pieces[0] + 1, lens[0] - 1);
-	if (s == 2)
-		bprintf(out, "%s r68imml $%04X,<%s>%s", labs, word, e.s, rest);
-	else if (s == 1)
+	bputc(&e, ')');
+	if (s == 1)
 		bprintf(out, "%s dc.w $%04X,%s%s", labs, word, e.s, rest);
-	else
-		bprintf(out, "%s dc.w $%04X,(%s)&$ff%s", labs, word, e.s, rest);
+	else if (s == 0 && known_value(pieces[0] + 1, lens[0] - 1))
+		bprintf(out, "%s dc.w $%04X,%s&$ff%s", labs, word, e.s, rest);
+	else {	/* a long, or an external's byte (cmp.b #EXT_VAL,d1: relocated) */
+		bprintf(out, "%s %s $%04X,", labs, s == 2 ? "r68imml" : "r68immb", word);
+		put_angle(out, e.s, e.n);
+		bputs(out, rest);
+	}
 	free(e.s);
 	annotate = 1;
 	return 1;
@@ -2564,15 +2582,18 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		int same = same_section(sect);
 		st.section = sect;
 		if (strcmp(base, "dc") == 0) {
-			if (same)
-				bprintf(out, "%s dc.%c ", labs, sz);
-			else
-				bprintf(out, " r68dc %s,%c,%s,<", sect, sz, nm.s ? nm.s : "");
+			struct buf list = { 0 };
 			dc_size = sz == 'b' ? 1 : sz == 'l' ? 4 : 2;
-			expression_list(out, l.args, sz != 'b');
+			expression_list(&list, l.args, sz != 'b');
 			dc_size = 0;
-			if (!same)
-				bputc(out, '>');
+			if (same) {
+				bprintf(out, "%s dc.%c ", labs, sz);
+				bput(out, list.s ? list.s : "", list.n);
+			} else {
+				bprintf(out, " r68dc %s,%c,%s,", sect, sz, nm.s ? nm.s : "");
+				put_angle(out, list.s ? list.s : "", list.n);
+			}
+			free(list.s);
 		} else if (strcmp(base, "ds") == 0 && sz == 'b') {
 			/* ds.b as fill: MRI's ds.b would align the next statement
 			 * after an odd count, a section switch too, r68 doesn't. */
@@ -2830,9 +2851,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					/* No instruction takes a string: a call of a macro
 					 * defined later (SBFDesc ...,"sbgiga" in a macro body),
 					 * whose quoted argument r68 passes without quotes. */
-					bputc(out, '<');
-					bput(out, pieces[i] + 1, lens[i] - 2);
-					bputc(out, '>');
+					put_angle(out, pieces[i] + 1, lens[i] - 2);
 				} else if (strcmp(base, "moveq") == 0 && i == 0 && pieces[i][0] == '#' &&
 					   known_value(pieces[i] + 1, lens[i] - 1) && !small_number(pieces[i] + 1, lens[i] - 1)) {
 					/* moveq #128..#255: r68 takes the byte (moveq #$80
@@ -3173,6 +3192,9 @@ int main(int argc, char **argv)
 	fputs("r68glab macro\n\\1\nr68__g_\\1 set 1\n \\2\n endm\n", out);
 	/* r68imml OPCODE,VALUE: an instruction word and a long immediate (-d c32) */
 	fputs("r68imml macro\n dc.w \\1\n dc.l \\2\n endm\n", out);
+	/* r68immb OPCODE,VALUE: an instruction word and a byte immediate of an
+	 * external (-d c32) */
+	fputs("r68immb macro\n dc.w \\1\n dc.b 0,\\2\n endm\n", out);
 	/* r68com NAME,SIZE: a common block */
 	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
 	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
