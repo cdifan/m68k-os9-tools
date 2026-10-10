@@ -1,0 +1,11 @@
+* Without -dialect=c32: add/sub/and/or/cmp #imm,Dn as the immediate instructions (Ultra C's r68).
+* (the counterpart of c32-imm-dn: the default dialect)
+* expect text: 028000000002 06410100 0c020030 00430003 048400010000 0c450030
+ psect ucc_imm_dn,0,0,0,0,0
+ and.l #2,d0
+ add.w #$100,d1
+ cmp.b #'0',d2
+ or.w #3,d3
+ sub.l #$10000,d4
+ cmp.w #'0',d5
+ ends

@@ -1,0 +1,11 @@
+* -(expr)(An): a negated displacement, not a predecrement; for a 68020 it was copied as it was
+* and gas made the full form for a difference of labels further on.
+* fixed: 4283498 2026-10-10 r68togas, rof2elf, m68k-os9-r68, os9link: corpus fixes; l68's PC-relative error
+* options: -m2
+* expect text: 49ecfffc 4e71 0000 0000 51fc
+ psect neg_disp,0,0,0,0,0
+ lea -(B-A)(a4),a4
+ nop
+A dc.w 0,0
+B
+ ends

@@ -1,0 +1,9 @@
+* An external named only by an equate (ALL_SIZE equ Ext_Size): no undefined symbol in the
+* object, as the Microware assemblers write no reference for it.
+* fixed: 9aa72b9 2026-10-10 r68togas, m68k-os9-r68: padding by dialect; unreferenced externals removed
+* expect nosym: Ext_Size
+* expect reloc: R_68K_32          used
+ psect unref_extern,0,0,0,0,0
+ALL_SIZE equ Ext_Size
+ dc.l used
+ ends

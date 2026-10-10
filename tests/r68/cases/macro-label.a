@@ -1,0 +1,11 @@
+* A global label made by a macro argument (_S\1:) is exported by each expansion.
+* fixed: 194231a 2026-10-09 r68togas: first fixes from comparisons with Microware's r68; m68k-os9-r68 -dialect=c32
+* expect sym: T _Sone 00000000
+* expect sym: T _Stwo 00000004
+ psect macro_label,0,0,0,0,0
+DEFS macro
+_S\1: dc.b "\1",0
+ endm
+ DEFS one
+ DEFS two
+ ends

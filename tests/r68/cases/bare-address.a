@@ -1,0 +1,10 @@
+* A bare address operand is absolute long, as in both Microware assemblers.
+* fixed: 22a2b7c 2026-10-09 r68togas: more corpus fixes
+* fixed: acdb7a5 2026-10-09 r68togas: movem's bare address long; the rept fold for any dc and equate counts; long dc lists
+* expect text: 23ce000000c0 30390000 0100 48b9ffff00000100
+ psect bare_address,0,0,0,0,0
+Addr equ $c0
+ move.l a6,Addr
+ move.w $100,d0
+ movem.w d0-d7/a0-a7,$100
+ ends

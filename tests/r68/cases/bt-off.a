@@ -1,0 +1,10 @@
+* --bt turns -bt off again, as r68 takes --x (a makefile may pass -bt and --bt): an unsized
+* branch is a word.
+* fixed: 4283498 2026-10-10 r68togas, rof2elf, m68k-os9-r68, os9link: corpus fixes; l68's PC-relative error
+* options: -bt --bt
+* expect text: 60000004 4e714e75
+ psect bt_off,0,0,0,0,0
+ bra next
+ nop
+next rts
+ ends

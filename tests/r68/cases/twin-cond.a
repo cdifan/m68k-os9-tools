@@ -1,0 +1,14 @@
+* A global label's value in a conditional before the epilogue, with PC-relative references to it
+* through the twin.
+* fixed: 0c4e23f 2026-10-09 r68togas: twins back to epilogue equates; absolute long only for instructions; docs
+* expect text: 4e714e71 4e75 0004 60f6 4e71
+ psect twin_cond,0,0,0,0,0
+start: nop
+ nop
+endl: rts
+ ifne endl-start-4
+ fail wrong
+ endc
+ dc.w endl-start
+ bra.s start
+ ends

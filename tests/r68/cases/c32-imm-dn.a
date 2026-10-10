@@ -1,0 +1,13 @@
+* -dialect=c32: add/sub/and/or/cmp #imm,Dn in C 3.2's <ea>,Dn form.
+* fixed: 194231a 2026-10-09 r68togas: first fixes from comparisons with Microware's r68; m68k-os9-r68 -dialect=c32
+* fixed: db2dd88 2026-10-09 r68togas: ! < > escaped in <...> macro arguments; c32 immediates in parentheses
+* options: -dialect=c32
+* expect text: c0bc00000002 d27c0100 b43c0030 867c0003 98bc00010000 ba7c0030
+ psect c32_imm_dn,0,0,0,0,0
+ and.l #2,d0
+ add.w #$100,d1
+ cmp.b #'0',d2
+ or.w #3,d3
+ sub.l #$10000,d4
+ cmp.w #'0',d5
+ ends

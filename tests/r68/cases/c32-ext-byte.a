@@ -1,0 +1,9 @@
+* -dialect=c32: the byte immediate of an external (cmp.b #EXT_B,d1), which as can't mask:
+* through the prelude macro r68immb, relocated.
+* fixed: db2dd88 2026-10-09 r68togas: ! < > escaped in <...> macro arguments; c32 immediates in parentheses
+* options: -dialect=c32
+* expect text: b23c0000
+* expect reloc: R_68K_8           EXT_B
+ psect c32_ext_byte,0,0,0,0,0
+ cmp.b #EXT_B,d1
+ ends

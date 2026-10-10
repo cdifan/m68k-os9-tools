@@ -1,0 +1,14 @@
+* A PC-relative reference to a global label made by a macro argument: r68 resolves it; ours
+* kept a relocation (no twin for such a label), which links the same. The pre-scan now notes the
+* global labels macro calls make (a bne.s to one before the call was "too large").
+* fixed: 88d366c 2026-10-11 r68togas: twins for the global labels macro calls make
+* expect text: 6006 4e71 41fa 0002 6f6e6500
+ psect macro_label_pcrel,0,0,0,0,0
+DEFS macro
+_S\1: dc.b "\1",0
+ endm
+ bra.s _Sone
+ nop
+ lea _Sone(pc),a0
+ DEFS one
+ ends

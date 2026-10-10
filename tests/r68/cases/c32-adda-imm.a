@@ -1,0 +1,12 @@
+* -dialect=c32: adda/suba (and add/sub to an address register) #1..#8 without the quick form,
+* as C 3.2's R68.
+* fixed: d8621e7 2026-10-09 r68togas -d c32: adda/suba #imm,An without the quick form, as C 3.2's R68
+* options: -dialect=c32
+* expect text: d0fc0008 93fc00000001 d5fc00000004 96fc0002 5048
+ psect c32_adda_imm,0,0,0,0,0
+ adda.w #8,a0
+ suba.l #1,a1
+ add.l #4,a2
+ sub.w #2,a3
+ addq.w #8,a0
+ ends

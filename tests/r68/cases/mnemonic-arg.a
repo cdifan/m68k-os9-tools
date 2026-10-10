@@ -1,0 +1,10 @@
+* A macro argument that is a mnemonic with a size keeps its dot.
+* fixed: 8266699 2026-10-09 r68togas: no sys.l folding for a sum with the source's own constants; mnemonic macro arguments
+* expect text: 4a00 4a90
+ psect mnemonic_arg,0,0,0,0,0
+MNEM macro
+ \1 \2
+ endm
+ MNEM tst.b,d0
+ MNEM tst.l,(a0)
+ ends

@@ -1,0 +1,14 @@
+* A global label made by a macro argument in a vsect: global in r68 (B), local in ours.
+* fixed: cda8de1 2026-10-11 r68togas: a macro's dc and ds where it is called
+* expect sym: B _Sone 00000000
+* expect sym: B _Stwo 00000004
+ psect macro_vsect_label,0,0,0,0,0
+ vsect
+VAR macro
+_S\1: ds.l 1
+ endm
+ VAR one
+ VAR two
+ ends
+ move.l _Sone(a6),d0
+ ends

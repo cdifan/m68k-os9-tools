@@ -1,0 +1,15 @@
+* Padding without -m (Ultra C's r68): to 4, nop after a zero byte; data to 4 with zeros.
+* fixed: 9aa72b9 2026-10-10 r68togas, m68k-os9-r68: padding by dialect; unreferenced externals removed
+* expect text: 4e714e71 01004e71
+* expect data: 01020300
+* expect size: .bss 4
+* expect align: .text 2
+ psect pad_ucc,0,0,0,0,0
+ vsect
+ dc.b 1,2,3
+ ds.b 3
+ ends
+ nop
+ nop
+ dc.b 1
+ ends

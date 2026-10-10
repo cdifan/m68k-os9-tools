@@ -290,5 +290,7 @@ differ, the assemblers are followed.
   with Ultra C's `r68` when `R68` is set, and translated back by gastor68 (see
   [gastor68.md](gastor68.md)).
 
+      TOOLS=<dir> [R68=<r68.exe> R68WORK=/mnt/c/...] bash tests/r68/run.sh [CASE...]
+
 - **`make check-r68`** in `test/abi-exec`: tests whose assembly side is written in r68 syntax
   (`r68tests/`), translated, assembled and run with their C side.

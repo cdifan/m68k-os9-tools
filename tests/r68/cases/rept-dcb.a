@@ -1,0 +1,10 @@
+* rept N around one dc.b line after an odd number of bytes: no alignment (as aligns, r68 not).
+* fixed: 22a2b7c 2026-10-09 r68togas: more corpus fixes
+* expect text: 01 0203 0203 0203 04
+ psect rept_dcb,0,0,0,0,0
+ dc.b 1
+ rept 3
+ dc.b 2,3
+ endr
+ dc.b 4
+ ends

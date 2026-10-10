@@ -1,0 +1,15 @@
+* ! < > in a string passed to a macro, and in a dc.b in a vsect (through r68dc): as's MRI
+* macros take ! as an escape in <...> and count < and > ("ENTER THE KEY!").
+* fixed: db2dd88 2026-10-09 r68togas: ! < > escaped in <...> macro arguments; c32 immediates in parentheses
+* expect text: 41ee0000 413c4221 3e00 4e71
+* expect data: 454e54455220544845204b45592100 00
+ psect string_bang,0,0,0,0,0
+MSG macro
+ dc.b "\1",0
+ endm
+ vsect
+ dc.b "ENTER THE KEY!",0
+ ends
+ lea 0(a6),a0
+ MSG "A<B!>"
+ ends

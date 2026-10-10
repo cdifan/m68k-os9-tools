@@ -1,0 +1,10 @@
+* A macro defined with a colon: both Microware assemblers export its name as a global symbol of
+* value 0 (ROF's kind 7).
+* fixed: 4283498 2026-10-10 r68togas, rof2elf, m68k-os9-r68, os9link: corpus fixes; l68's PC-relative error
+* expect sym: A MacX 00000000
+ psect macro_export,0,0,0,0,0
+MacX: macro
+ nop
+ endm
+ MacX
+ ends

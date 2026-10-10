@@ -1,0 +1,12 @@
+* -dialect=c32: junk after a set or equ value is ignored, as C 3.2's R68 does
+* (x set x+obj_sz*2(a0),a0).
+* fixed: 4283498 2026-10-10 r68togas, rof2elf, m68k-os9-r68, os9link: corpus fixes; l68's PC-relative error
+* options: -dialect=c32
+* expect text: 0008 0003
+ psect c32_set_junk,0,0,0,0,0
+obj_sz equ 2
+x set 4
+x set x+obj_sz*2(a0),a0
+y equ 3 junk
+ dc.w x,y
+ ends

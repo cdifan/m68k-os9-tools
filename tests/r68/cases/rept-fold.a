@@ -1,0 +1,15 @@
+* The rept fold takes dc of any size and a count of numbers and equates; in a vsect its rept
+* line defines the label in the initialized data (BUF1: rept CNT, dc.w $200).
+* fixed: acdb7a5 2026-10-09 r68togas: movem's bare address long; the rept fold for any dc and equate counts; long dc lists
+* expect data: 0200 0200 0200 0200 0200 0200 1234 0000
+* expect sym: D BUF1 00000000
+ psect rept_fold,0,0,0,0,0
+CNT equ (12/4)*2
+ vsect
+BUF1: rept CNT
+ dc.w $200
+ endr
+ dc.w $1234
+ ends
+ lea BUF1(a6),a0
+ ends

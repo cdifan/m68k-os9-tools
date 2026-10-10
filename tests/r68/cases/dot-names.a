@@ -1,0 +1,15 @@
+* A dot inside a name: the object's symbols keep it; a macro so named is called by its name,
+* not as the macro without the dot with a size (DO_IT.w).
+* fixed: e99ca29 2026-10-09 r68togas: dots in names, exg.l, register names in any case, macro labels in a vsect
+* fixed: 4f65c9e 2026-10-09 r68togas: a macro with a dot in its name is called by its written name
+* expect sym: T lab.a 00000000
+* expect sym: T lab.s 00000002
+* expect text: 4e71 3001 60fa 4e71
+ psect dot_names,0,0,0,0,0
+DO_IT.w macro
+ move.w \1,d0
+ endm
+lab.a: nop
+lab.s: DO_IT.w d1
+ bra.s lab.a
+ ends

@@ -1,0 +1,6 @@
+* A sum of names the source defines nowhere (ext_a+EXT_B): an r68x link-time expression.
+* fixed: c39cc72 2026-10-09 r68togas: link-time expressions of external names too
+* expect reloc: R_68K_32          r68x_
+ psect ext_sum,0,0,0,0,0
+ dc.l ext_a+EXT_B
+ ends

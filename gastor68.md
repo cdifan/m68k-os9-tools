@@ -138,5 +138,7 @@ been checked for either.
 
 ## Tests
 
+      TOOLS=<dir> GASTOR68=<gastor68> [R68=<r68.exe> R68WORK=/mnt/c/...] bash tests/gastor68/run.sh
+
 - **`make check-gastor68`** in `test/abi-exec`: each test's C side compiled with `-S`, translated by
   gastor68, translated back by r68togas, assembled by `gas`, linked and run, at `-O0` and `-O2`.

@@ -1,0 +1,16 @@
+* Padding with -dialect=c32 (C 3.2's R68): to 2, a zero byte.
+* options: -dialect=c32
+* fixed: 9aa72b9 2026-10-10 r68togas, m68k-os9-r68: padding by dialect; unreferenced externals removed
+* expect text: 4e714e71 0100
+* expect data: 010203 00
+* expect size: .bss 4
+* expect align: .text 1
+ psect pad_c32,0,0,0,0,0
+ vsect
+ dc.b 1,2,3
+ ds.b 3
+ ends
+ nop
+ nop
+ dc.b 1
+ ends

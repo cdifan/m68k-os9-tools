@@ -1,0 +1,12 @@
+* A macro defined in a vsect and called in code: r68 puts its dc in the code.
+* known: open (found 2026-10-10): r68togas translates a macro's dc/ds by the section where it is defined
+* expect text: 6f6e6500
+* expect size: .data 0
+ psect macro_code_call,0,0,0,0,0
+ vsect
+DEFS macro
+_S\1 dc.b "\1",0
+ endm
+ ends
+ DEFS one
+ ends

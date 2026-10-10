@@ -1,0 +1,8 @@
+* Register names in any case (as takes lower or upper case only).
+* fixed: e99ca29 2026-10-09 r68togas: dots in names, exg.l, register names in any case, macro labels in a vsect
+* expect text: 2f00 201f 3081 4e71
+ psect reg_case,0,0,0,0,0
+ move.l d0,-(Sp)
+ move.l (sP)+,D0
+ move.w D1,(A0)
+ ends

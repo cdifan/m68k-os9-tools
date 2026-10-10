@@ -1,0 +1,11 @@
+* com: a common block, an ELF common symbol.
+* fixed: 194231a 2026-10-09 r68togas: first fixes from comparisons with Microware's r68; m68k-os9-r68 -dialect=c32
+* expect text: 41ee0000
+* expect sym: C buffer 00000010
+* expect reloc: R_68K_16          buffer
+ psect com,0,0,0,0,0
+ vsect
+buffer: com.l 4
+ ends
+ lea buffer(a6),a0
+ ends

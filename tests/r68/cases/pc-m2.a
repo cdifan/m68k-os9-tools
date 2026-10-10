@@ -1,0 +1,11 @@
+* -m2: ext(pc) with a 16-bit and ext(pc,Xn) with an 8-bit displacement, as both Microware
+* assemblers make them, not gas's 68020 forms for a distance not known in its first pass.
+* fixed: 4283498 2026-10-10 r68togas, rof2elf, m68k-os9-r68, os9link: corpus fixes; l68's PC-relative error
+* options: -m2
+* expect text: 45fa0000 123b0000
+* expect reloc: R_68K_PC16        ext
+* expect reloc: R_68K_PC8         ext+0x00000001
+ psect pc_m2,0,0,0,0,0
+ lea ext(pc),a2
+ move.b ext(pc,d0.w),d1
+ ends

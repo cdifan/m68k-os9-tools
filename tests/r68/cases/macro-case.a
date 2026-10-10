@@ -1,0 +1,18 @@
+* Macro names are case-sensitive in r68, not in as: OS9 and the prelude's os9 are two macros.
+* fixed: 194231a 2026-10-09 r68togas: first fixes from comparisons with Microware's r68; m68k-os9-r68 -dialect=c32
+* expect text: 7001 4e40 0004 7002 7003 4e71
+ psect macro_case,0,0,0,0,0
+OS9 macro
+ moveq #1,d0
+ os9 \1
+ endm
+Mac macro
+ moveq #2,d0
+ endm
+MAC macro
+ moveq #3,d0
+ endm
+ OS9 4
+ Mac
+ MAC
+ ends
