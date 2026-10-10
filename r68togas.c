@@ -504,6 +504,21 @@ static int expression(struct buf *b, const char *e, size_t n)
 	return ok;
 }
 
+/* The length of the longest expression at the start of E (N chars), 0 if
+ * none: C 3.2's R68 takes a set's or equ's value up to there and ignores
+ * the rest (x set x+size*2(a0),a0). */
+static size_t expression_length(const char *e, size_t n)
+{
+	char *s = xstrndup(e, n);
+	struct lexer lx = { s, s, 1 };
+	struct buf out = { 0 };
+	parse_binary(&lx, &out, P_SHIFT, 1);
+	size_t len = lx.ok ? (size_t)(lx.p - s) : 0;
+	free(out.s);
+	free(s);
+	return len;
+}
+
 /* ----- Operands ----- */
 
 /* Whether text S (N chars) is a register as r68 writes one in an address
@@ -688,7 +703,9 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 		put_regs(b, s, n);
 		return;
 	}
-	if (n >= 4 && s[0] == '-' && s[1] == '(' && s[n - 1] == ')') {
+	if (n >= 4 && s[0] == '-' && s[1] == '(' && s[n - 1] == ')' && register_part(s + 2, n - 3)) {
+		/* -(An); not -(a-b)(An), a negated displacement,
+		 * which goes on as an address mode */
 		put_regs(b, s, n);
 		return;
 	}
@@ -745,10 +762,26 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				annotate = 1;
 				expression(b, s, open);
 				bputc(b, ')');
-			} else if (open > 0 && pc_register(inner, ilen)) {
+			} else if (open > 0 && pc_register(inner, ilen) && k == 1) {
+				/* label(pc): 16 bits, as r68 keeps it: for a 68020 as
+				 * would make a symbol whose distance it doesn't know
+				 * (a global's, an external's) the 32-bit (bd,PC) form;
+				 * (label).w(pc) is the same on a 68000. */
+				bputc(b, '(');
 				twin_mode = 1;
 				expression(b, s, open);
 				twin_mode = 0;
+				bputs(b, ").w");
+			} else if (open > 0 && pc_register(inner, ilen)) {
+				/* d(pc,Xn): 8 bits, the brief form, as r68 keeps it:
+				 * for a 68020 as would make a value it doesn't know in
+				 * its first pass (L12.-LI12., a label further on) the
+				 * full form with a 16-bit displacement. */
+				bputc(b, '(');
+				twin_mode = 1;
+				expression(b, s, open);
+				twin_mode = 0;
+				bputs(b, ").b");
 			} else if (open > 0) {
 				expression(b, s, open);
 			}
@@ -961,6 +994,7 @@ struct state {
 	struct buf globals;	/* xdef lines for the epilogue */
 	int masks;		/* r68__mask<n> symbols made */
 	struct buf epilogue_more;
+	struct buf macro_syms;	/* NAME equ 0 for macros defined as NAME: (exported) */
 	const char *search[64];	/* -u directories */
 	int nsearch;
 	int errors;
@@ -2792,11 +2826,28 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			int renamed = st.nmren > 0 && strcmp(st.mren_from[st.nmren - 1], l.label) == 0 &&
 				lab.s != NULL && strcmp(st.mren_to[st.nmren - 1], lab.s) == 0;
 			st.macros[st.nmacros++] = xstrdup(renamed ? lab.s : l.label);
+			if (l.global && st.in_psect && strchr(l.label, '\\') == NULL) {
+				/* NAME: macro: both r68s export NAME, value 0 (ROF's
+				 * symbol kind 7); its xdef (add_global) needs it
+				 * defined, before the epilogue's globals. */
+				struct buf nm = { 0 };
+				put_symbol(&nm, l.label, strlen(l.label));
+				bprintf(&st.macro_syms, "%s equ 0\n", nm.s);
+				free(nm.s);
+			}
 		}
-		if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0 || strcmp(base, "macro") == 0)
+		size_t len = 0, alen = strlen(l.args);
+		if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0 || strcmp(base, "macro") == 0) {
 			bputs(out, l.args);
-		else
+		} else if (st.c32 && (strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) &&
+			   (len = expression_length(l.args, alen)) > 0 && len < alen) {
+			/* -d c32: junk after the value, which C 3.2's R68 ignores
+			 * (Ultra C's r68 refuses the line) */
+			expression(out, l.args, len);
+			annotate = 1;
+		} else {
 			expression_list(out, l.args, 0);
+		}
 		bputs(out, rest);
 		goto done;
 	}
@@ -3350,6 +3401,7 @@ int main(int argc, char **argv)
 			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", to, to);
 		fputs(" section .text\n", out);
 	}
+	fputs(st.macro_syms.s ? st.macro_syms.s : "", out);
 	fputs(st.globals.s ? st.globals.s : "", out);
 	if (st.twins.s)
 		fprintf(out, "%s\n", st.twins.s + 1);

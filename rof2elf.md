@@ -49,6 +49,8 @@ resolves them: link with those libraries.
 | common definitions | common symbols |
 | external and local references | RELA relocations |
 
+- **Absolute symbols** also come from kind 7, the name of a macro defined with a colon (`NAME:
+  macro`, value 0), which both Microware assemblers export.
 - **Relocations:** `R_68K_8`, `R_68K_16`, `R_68K_32`, or `R_68K_PC8`, `R_68K_PC16`, `R_68K_PC32`
   for relative references; the addend is taken from the object's bytes.
 

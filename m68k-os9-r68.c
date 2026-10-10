@@ -159,16 +159,22 @@ static void note_ignored(const struct option *o, const char *value)
 	args_addf(&st.notes, "-%s%s", o->name, value != NULL ? value : "");
 }
 
+/* --x: r68 turns flag x off again (measured 2026-10-10: -bt --bt, --b, -q --q,
+ * -y --y; the last one given wins). Makefiles pass -bt and --bt (xcc
+ * -as=-bt), which leaves branch sizing off. */
+static int flag_off;
+
 static void apply(const struct option *o, const char *value)
 {
+	int on = !flag_off;
 	switch (o->id) {
 	case O_A: args_add(&st.defs, "-a"); args_add(&st.defs, value); break;
-	case O_B: case O_BT: st.branch_sizing = 1; break;
-	case O_C: st.conditionals = 1; break;
-	case O_D: case O_E: case O_F: case O_N: case O_P: note_ignored(o, value); break;
-	case O_G: st.all_bytes = 1; break;
-	case O_L: st.listing = 1; break;
-	case O_J: note_ignored(o, value); break;
+	case O_B: case O_BT: st.branch_sizing = on; break;
+	case O_C: st.conditionals = on; break;
+	case O_D: case O_E: case O_F: case O_N: case O_P: if (on) note_ignored(o, value); break;
+	case O_G: st.all_bytes = on; break;
+	case O_L: st.listing = on; break;
+	case O_J: if (on) note_ignored(o, value); break;
 	case O_M:
 		if (strlen(value) != 1 || strchr("012346", value[0]) == NULL)
 			error("-m%s: the CPU is 0, 1, 2, 3, 4 or 6", value);
@@ -176,23 +182,24 @@ static void apply(const struct option *o, const char *value)
 		st.cpu_given = 1;
 		break;
 	case O_O: st.out = value != NULL ? value : "output.r"; break;
-	case O_Q: os9_quiet = 1; break;
-	case O_R: error("-r (registers written with %%) isn't supported"); break;
-	case O_S: st.symbols = 1; break;
+	case O_Q: os9_quiet = on; break;
+	case O_R: if (on) error("-r (registers written with %%) isn't supported"); break;
+	case O_S: st.symbols = on; break;
 	case O_U: args_add(&st.dirs, "-u"); args_add(&st.dirs, value); break;
 	case O_V:
 		printf("%s: Microware r68's options; r68togas and GNU as (%s) assemble\n", os9_who, AS);
 		break;
-	case O_X: st.macros = 1; break;
-	case O_Y: error("-y (all branches long) isn't supported"); break;
+	case O_X: st.macros = on; break;
+	case O_Y: if (on) error("-y (all branches long) isn't supported"); break;
 	case O_Z: read_z(value); break;
 	}
 }
 
 static void option(const char *arg)
 {
-	/* --bt: xcc -as=-bt passes it so, and r68 takes it. */
+	/* --x: the flag x off (see flag_off); options with values the same */
 	const char *text = arg[1] == '-' && arg[2] != '\0' ? arg + 2 : arg + 1;
+	flag_off = text == arg + 2;
 	const struct option *best = NULL;
 	const char *value = NULL;
 	size_t bestlen = 0;
@@ -441,7 +448,8 @@ static struct args output_lines(struct args *argv)
 	char *out = os9_temp(".out");
 	int show = os9_show;
 	os9_show = 0;
-	int status = os9_run(argv, out, NULL);
+	/* its messages discarded (readelf -p warns of a section not there) */
+	int status = os9_run(argv, out, os9_temp(".err"));
 	os9_show = show;
 	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
 	if (fp == NULL)

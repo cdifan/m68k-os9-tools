@@ -70,6 +70,8 @@
 #define T_CODE		0x0004
 #define T_SET		0x0005	/* a set label: an absolute value, like equ */
 #define T_EQU		0x0006
+#define T_MACRO		0x0007	/* a label on a macro line (NAME: macro): both
+				   Microware assemblers export it, value 0 */
 #define T_COMMON	0x0100
 #define R_SIZE		0x0018	/* reference size */
 #define R_BYTE		0x0008
@@ -850,7 +852,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
       if (d->type & T_COMMON)
 	add_sym (&e, d->name, 2, d->value, INFO (STB_GLOBAL, STT_OBJECT),
 		 SHN_COMMON);
-      else if (kind == T_EQU || kind == T_SET)
+      else if (kind == T_EQU || kind == T_SET || kind == T_MACRO)
 	add_sym (&e, d->name, d->value, 0, INFO (STB_GLOBAL, STT_NOTYPE),
 		 SHN_ABS);
       else if (target_section (kind) >= 0)
@@ -1009,6 +1011,18 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	    }
 	  for (n = size - 1; n >= 0; n--, addend >>= 8)
 	    p[n] = addend;
+	  continue;
+	}
+      if (!pos && neg->ext < 0 && (neg->type & T_KIND) == T_CODE
+	  && !(neg->type & R_REL) && sec == S_TEXT)
+	{
+	  /* A constant less this ROF's code (K-*, both r68s write it so):
+	     PC-relative to the absolute zero, symbol 0, as GNU as writes it
+	     (*ABS*).  */
+	  addend += off;
+	  type = size == 1 ? R_68K_PC8 : size == 2 ? R_68K_PC16 : R_68K_PC32;
+	  add_rela (&e, sec, off, 0, type, addend);
+	  memset (p, 0, size);
 	  continue;
 	}
       if (!pos)

@@ -313,6 +313,36 @@ static int r68x_definitions(struct os9link *l, const char *log)
 	return bad ? -1 : count;
 }
 
+/* PC-relative references to absolute symbols (bsr EQU, lea EQU(pc): an
+ * equate, or a macro's name defined as NAME:), which ld reports as
+ * truncated (the code is at 0x400000): reported as l68 reports them
+ * ("relative reference to symbol 'X' in the absolute (equ) area", both
+ * Microware linkers, measured 2026-10-10), not as far calls for a jump
+ * table. 1 if there are any. */
+static int absolute_relative(const char *path, const char *who)
+{
+	FILE *fp = fopen(path, "r");
+	if (fp == NULL)
+		return 0;
+	char line[1024];
+	int found = 0;
+	while (fgets(line, sizeof line, fp) != NULL) {
+		char *t = strstr(line, ": relocation truncated to fit: R_68K_PC");
+		char *a = strstr(line, " defined in *ABS* section");
+		char *q = strstr(line, " against symbol `");
+		if (t == NULL || a == NULL || q == NULL)
+			continue;
+		char *s = q + strlen(" against symbol `"), *e = strchr(s, '\'');
+		if (e == NULL)
+			continue;
+		fprintf(stderr, "%s: relative reference to symbol '%.*s' in the absolute (equ) area, at %.*s\n",
+			who, (int)(e - s), s, (int)(t - line), line);
+		found = 1;
+	}
+	fclose(fp);
+	return found;
+}
+
 int os9_link(struct os9link *l)
 {
 	char *log = os9_temp(".log");
@@ -335,6 +365,8 @@ int os9_link(struct os9link *l)
 		cat_stderr(log);
 		return status;
 	}
+	if (absolute_relative(log, l->who))
+		return 1;
 	if (!file_contains(log, "R_68K_PC16") && !file_contains(log, "R_68K_PLT16")) {
 		/* Only absolute references truncated: from the code to code
 		 * labels (dc.w Init), linked at 0x400000; elf2mod puts the
