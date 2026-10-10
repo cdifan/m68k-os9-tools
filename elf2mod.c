@@ -187,6 +187,17 @@ typedef struct lsref {
 	int64_t addend;
 } LsRef;
 
+// An absolute reference from the code to a code label (dc.w Init in a
+// driver's entry table, dc.l, move.w #label): the label's offset in the
+// module goes into the field, as both Microware linkers write it (measured
+// 2026-10-09; no relocation at load, the code being position independent).
+// The link puts the code at its VMA (0x400000), so the field is set here.
+typedef struct coderef {
+	uint32_t addr; // in .text
+	int type;      // R_68K_32, R_68K_16, R_68K_8
+	bfd_vma value; // the label's VMA plus the addend
+} CodeRef;
+
 size_t make_idrefs(Vec *vec, IdRef *refs, size_t nrefs, int for_text) {
 	size_t iblock = vec_space(vec, 4);
 	size_t ihi = iblock;
@@ -565,6 +576,8 @@ int main(int argc, char *argv[]) {
 	char *refd = calloc(nsyms + 1, 1); // symbols that relocations refer to (for -g)
 	LsRef *tls = NULL, *dls = NULL; // references to linker symbols in .text, data
 	size_t ntls = 0, ndls = 0;
+	CodeRef *crefs = NULL; // absolute references from the code to code labels
+	size_t ncrefs = 0;
 	int64_t etext_entry = -1; // the jump table entry for etext: its offset in the data area
 	for(long i = 0; i < ntrels; i++) {
 		arelent *rel = trels[i];
@@ -584,7 +597,14 @@ int main(int argc, char *argv[]) {
 			printf("undefined symbol %s (.text+%08lx)\n", rel->sym_ptr_ptr[0]->name, rel->address);
 			return 1;
 		}
-		int constant = bfd_is_abs_section(ssec) || ssec == data || ssec == bss || (ssec && (ssec == rdata || ssec == rbss));
+		if(!opt_raw && ssec == text && (rel->howto->type == 1 /* R_68K_32 */ || rel->howto->type == 2 /* R_68K_16 */
+		                                || rel->howto->type == 3 /* R_68K_8 */)) {
+			// a code label's module offset (see CodeRef), checked when set
+			crefs = realloc(crefs, (ncrefs + 1) * sizeof(CodeRef));
+			crefs[ncrefs++] = (CodeRef){ rel->address, rel->howto->type, bfd_asymbol_value(rel->sym_ptr_ptr[0]) + rel->addend };
+			continue;
+		}
+		int constant =bfd_is_abs_section(ssec) || ssec == data || ssec == bss || (ssec && (ssec == rdata || ssec == rbss));
 		if(!(ssec == text || rel->howto->type == 2 /* R_68K_16(%a6) */
 		     || ((rel->howto->type == 1 /* R_68K_32 */ || rel->howto->type == 3 /* R_68K_8 */) && constant))) {
 			printf(".text inter-section relocation not allowed: %s %08lx %s@%s+%08lx\n", rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name, rel->sym_ptr_ptr[0]->section->name, rel->addend);
@@ -709,6 +729,21 @@ int main(int argc, char *argv[]) {
 		bfd_perror("could not read .text");
 		return 1;
 	}
+	// Absolute references from the code to code labels: their module offsets.
+	for(size_t i = 0; i < ncrefs; i++) {
+		CodeRef *c = &crefs[i];
+		int64_t off = (int64_t)c->value - (int64_t)tvma + (int64_t)itext;
+		int size = c->type == 1 ? 4 : c->type == 2 ? 2 : 1;
+		if(size < 4 && (off < 0 || off > (size == 2 ? 0xFFFF : 0xFF))) {
+			printf("%s at .text+%08x: the code label's module offset %lld doesn't fit\n",
+			       size == 2 ? "R_68K_16" : "R_68K_8", c->addr, (long long)off);
+			return 1;
+		}
+		unsigned char *p = (unsigned char*)vec->buf + itext + c->addr;
+		for(int k = 0; k < size; k++)
+			p[k] = (unsigned char)((uint64_t)off >> (8 * (size - 1 - k)));
+	}
+	free(crefs);
 	if(opt_raw) {
 		iname = itext; // no name: bname is the code's start
 	} else if(namelast) {

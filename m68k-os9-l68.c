@@ -24,6 +24,7 @@
 
 #define GCC	"m68k-elfos9-gcc"
 #define NM	"m68k-elfos9-nm"
+#define OBJCOPY	"m68k-elfos9-objcopy"
 #define ELF2MOD	"elf2mod"
 
 #define error os9_error
@@ -390,6 +391,89 @@ static struct header read_header(const char *path)
 	return h;
 }
 
+/* Library psects of equates only give way (measured 2026-10-09 with both
+ * Microware linkers, m68k-os9-l68.md, "Duplicate symbols"): a library member
+ * that defines nothing but equates is taken in as any other, but its
+ * equates clash with no earlier definition: an object's, or an earlier
+ * member's, value wins (sys.l's io member and a driver's own V_ equate).
+ * Duplicates between objects, and with a member that has code or data, stay
+ * errors. Here: a copy of the archive ARCHIVE with those members' global
+ * symbols weak (names also defined, in another member, as code or data, are
+ * left strong); ARCHIVE itself where there are none. */
+static char *equate_library(const char *archive)
+{
+	char *out = os9_temp(".nm");
+	struct args argv = { 0 };
+	args_add(&argv, NM);
+	args_add(&argv, "-g");
+	args_add(&argv, "--defined-only");
+	args_add(&argv, archive);
+	int dry = os9_dry_run, show = os9_show;
+	os9_dry_run = os9_show = 0;
+	int status = os9_run(&argv, out, NULL);
+	args_free(&argv);
+	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
+	if (fp == NULL) {
+		os9_dry_run = dry, os9_show = show;
+		return xstrdup(archive);
+	}
+	/* per member (nm's "name:" lines): its names, and whether all are equates */
+	struct args equates = { 0 }, others = { 0 }, member = { 0 };
+	int only_abs = 1;
+	char line[512];
+	for (int done = 0; !done;) {
+		done = fgets(line, sizeof line, fp) == NULL;
+		line[strcspn(line, "\r\n")] = '\0';
+		size_t n = strlen(line);
+		if (done || (n > 0 && line[n - 1] == ':') || n == 0) {
+			/* a member ends: its names go to equates or others */
+			for (int i = 0; i < member.n; i++)
+				args_add(only_abs ? &equates : &others, member.v[i]);
+			args_free(&member);
+			member = (struct args){ 0 };
+			only_abs = 1;
+			continue;
+		}
+		unsigned long value;
+		char type, name[256];
+		if (sscanf(line, "%lx %c %255s", &value, &type, name) != 3)
+			continue;
+		args_add(&member, name);
+		if (type != 'A')
+			only_abs = 0;
+	}
+	fclose(fp);
+	FILE *list = NULL;
+	char *names = os9_temp(".sym");
+	for (int i = 0; i < equates.n; i++) {
+		int other = 0;
+		for (int j = 0; j < others.n && !other; j++)
+			other = strcmp(equates.v[i], others.v[j]) == 0;
+		if (other)
+			continue;
+		if (list == NULL && (list = fopen(names, "w")) == NULL)
+			error("cannot write %s", names);
+		fprintf(list, "%s\n", equates.v[i]);
+	}
+	args_free(&equates);
+	args_free(&others);
+	if (list == NULL) {
+		os9_dry_run = dry, os9_show = show;
+		return xstrdup(archive);
+	}
+	fclose(list);
+	char *copy = os9_temp(".a");
+	args_add(&argv, OBJCOPY);
+	args_addf(&argv, "--weaken-symbols=%s", names);
+	args_add(&argv, archive);
+	args_add(&argv, copy);
+	os9_dry_run = dry, os9_show = show;
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("%s: making its equates give way failed", archive);
+	args_free(&argv);
+	return copy;
+}
+
 /* ----- Linking ----- */
 
 /* The linker script, laid out as elf2mod expects (as m68k-os9-xcc's): code
@@ -481,6 +565,11 @@ int main(int argc, char **argv)
 		const char *file = st.files.v[i];
 		int library = is_library(file);
 		char *elf = os9conv_as_elf(file, library);
+		if (library) {
+			char *e = equate_library(elf);
+			free(elf);
+			elf = e;
+		}
 		args_add(&objects, elf);
 		whole[i] = library;
 		if (!library) {
@@ -538,7 +627,9 @@ int main(int argc, char **argv)
 	/* -l= libraries after all files, in one pass in their order, as l68
 	 * searches them; then libgcc, for objects GCC compiled. */
 	for (int i = 0; i < st.libs.n; i++) {
-		char *lib = os9conv_as_elf(st.libs.v[i], 1);
+		char *lib0 = os9conv_as_elf(st.libs.v[i], 1);
+		char *lib = equate_library(lib0);
+		free(lib0);
 		add_input(&l.link, lib);
 		free(lib);
 	}

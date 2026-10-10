@@ -41,6 +41,14 @@ in the chosen header is an error.
   `.data`, whichever comes first; the -0x8000 bias is the linker script's, not `elf2mod`'s.
   `.bss` must be next to `.data` and have no contents.
 - **Relocations** must be applied but kept: GNU `ld`'s `-q`.
+- **In `.text`:** `R_68K_16` relocations to the data (a6-relative), `R_68K_32` and `R_68K_8` to data
+  or absolute symbols (link-time constants: a6-relative offsets, equates), and PC-relative ones.
+  Values must fit their fields (a6-relative `R_68K_16` from -0x8000 to 0x7FFF, `R_68K_8`,
+  `R_68K_PC8`): GNU `ld` doesn't check all of these, and `elf2mod` reports them. An absolute
+  reference from the code to a code symbol (`dc.w Init` in a driver's entry table) holds the
+  symbol's offset in the module, as Microware's linkers write it, whatever address `.text` has (not
+  with `--raw`, where the code runs at its address); a 16-bit one doesn't fit at link time, so link
+  with `--noinhibit-exec`.
 - **In `.data`:** only `R_68K_32`. To code or data: relocated when OS-9 loads the module (listed in
   the pointer tables). To absolute symbols (equates) or undefined weak symbols (0): kept as they
   are. Undefined symbols are errors.

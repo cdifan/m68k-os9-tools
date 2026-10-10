@@ -335,6 +335,17 @@ int os9_link(struct os9link *l)
 		cat_stderr(log);
 		return status;
 	}
+	if (!file_contains(log, "R_68K_PC16") && !file_contains(log, "R_68K_PLT16")) {
+		/* Only absolute references truncated: from the code to code
+		 * labels (dc.w Init), linked at 0x400000; elf2mod puts the
+		 * labels' module offsets into them, as l68 does. No far calls,
+		 * so no jump table. */
+		if (link_elf(l, 0, os9_temp(".log")) != 0) {
+			cat_stderr(log);
+			return status;
+		}
+		return make_module(l, NULL);
+	}
 	if (l->no_jmptbl) {
 		fprintf(stderr, "%s: the code is too large for 16-bit calls and needs a jump table, "
 			"which -j forbids\n", l->who);
