@@ -975,6 +975,7 @@ struct state {
 	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
 	int nmren;
 	int c32;		/* -d c32: C 3.2's R68's encodings */
+	int cpu_given;		/* -m given (r68 without -m pads as with -m1..6, with nop) */
 	int rept_fold, rept_state;	/* a rept of one dc line folded: its count; 1: the dc
 					   next, 2: the endr */
 	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
@@ -3129,14 +3130,23 @@ static void usage(void)
 	printf("  Translates a Microware r68 source to a GNU as source for as --mri\n");
 	printf("  (\".mri 1\" inside), keeping its line numbers; see r68togas.md.\n");
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
-	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060)\n");
+	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060); also the\n");
+	printf("             padding of the sections (ucc: 2 with -m0, else 4, nop without -m)\n");
 	printf("  -e FILE    equates (NAME VALUE lines, as sys.l's) set in the prelude\n");
 	printf("  -b         r68's -b/-bt: branches to this source's labels sized by as\n");
 	printf("  -B         with -b: also to its global labels (as relaxes those)\n");
 	printf("  -d D       the dialect: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68:\n");
-	printf("             its encodings where they differ)\n");
+	printf("             its encodings where they differ, sections padded to 2)\n");
 	printf("  -u DIR     search DIR for use files (r68's -u)\n");
 	printf("  -o OUTPUT  write to OUTPUT (default: standard output)\n");
+}
+
+/* What the Microware assemblers pad each section of a psect to: 2 for C
+ * 3.2's R68 (-d c32) and Ultra C's r68 -m0, 4 for Ultra C's r68 otherwise
+ * (m68k-os9-r68's section_alignment follows the same rule). */
+static int pad_alignment(void)
+{
+	return st.c32 || (st.cpu_given && st.cpu_level == 0) ? 2 : 4;
 }
 
 int main(int argc, char **argv)
@@ -3199,6 +3209,7 @@ int main(int argc, char **argv)
 				die("-m takes 0, 1, 2, 3, 4 or 6");
 			arch = archs[d[0] - '0'];
 			st.cpu_level = (d[0] - '0') * 10;
+			st.cpu_given = 1;
 		}
 		else if (strncmp(argv[i], "-u", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
@@ -3320,6 +3331,25 @@ int main(int argc, char **argv)
 			st.cond_depth > 1 ? "s" : "");
 	for (; st.cond_depth > 0; st.cond_depth--)
 		fputs(" endc\n", out);
+	/* Each section padded as the Microware assemblers pad a psect's
+	 * (measured 2026-10-09): C 3.2's R68 and Ultra C's r68 -m0 to 2; Ultra
+	 * C's r68 otherwise to 4, the code with nop (without -m) or trapf
+	 * (-m1..6), after a zero byte where the size is odd. m68k-os9-r68
+	 * gives the sections that alignment too. */
+	{
+		int to = pad_alignment();
+		unsigned fill = st.cpu_given ? 0x51FC : 0x4E71;
+		fprintf(out, "* padding: each section to %d, as %s\n", to,
+			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0" : st.cpu_given ? "Ultra C's r68 -m1..6" : "Ultra C's r68");
+		if (to == 2)
+			fprintf(out, " section .text\n balign 2,0\n");
+		else
+			fprintf(out, " section .text\n balignw %d,$%04X\n", to, fill);
+		fprintf(out, " section .data\n balign %d,0\n section .bss\n balign %d\n", to, to);
+		if (st.used_remote)
+			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", to, to);
+		fputs(" section .text\n", out);
+	}
 	fputs(st.globals.s ? st.globals.s : "", out);
 	if (st.twins.s)
 		fprintf(out, "%s\n", st.twins.s + 1);

@@ -12,6 +12,7 @@
 #include "hostsys.h"
 #include "os9conv.h"
 #include "os9link.h"
+#include "r68x_note.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -26,6 +27,7 @@
 #define ELF2ROF	"elf2rof"
 #define NM	"m68k-elfos9-nm"
 #define OBJCOPY	"m68k-elfos9-objcopy"
+#define OBJDUMP	"m68k-elfos9-objdump"
 
 #define error os9_error
 
@@ -80,6 +82,7 @@ static struct {
 	struct args defs;	/* -a=, as r68togas -a */
 	struct args dirs;	/* -u=, as r68togas -u */
 	int cpu;		/* -m */
+	int cpu_given;		/* -m given: r68 pads differently without it */
 	int branch_sizing;	/* -b, -bt */
 	int listing, symbols, conditionals, all_bytes, macros;
 	const char *out;	/* -o= ("output.r" for a bare -o); null: none */
@@ -116,8 +119,8 @@ static void usage(void)
 	printf("Options of this program:\n");
 	usage_line("-sysl=<lib>", "the library whose equates are folded in (default CLIB's sys.l;\n"
 		"                      none: none), as rof2elf -e folds them into ROFs");
-	usage_line("-dialect=<d>", "whose encodings where Microware's assemblers differ: ucc\n"
-		"                      (Ultra C's r68, the default) or c32 (C 3.2's R68)");
+	usage_line("-dialect=<d>", "whose encodings and padding where Microware's assemblers\n"
+		"                      differ: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68)");
 	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
 		"                      translated source, for m68k-os9-as; standard output\n"
 		"                      without -o)");
@@ -170,6 +173,7 @@ static void apply(const struct option *o, const char *value)
 		if (strlen(value) != 1 || strchr("012346", value[0]) == NULL)
 			error("-m%s: the CPU is 0, 1, 2, 3, 4 or 6", value);
 		st.cpu = value[0] - '0';
+		st.cpu_given = 1;
 		break;
 	case O_O: st.out = value != NULL ? value : "output.r"; break;
 	case O_Q: os9_quiet = 1; break;
@@ -429,6 +433,120 @@ static int relaxes_globals(void)
 	return text == 4;
 }
 
+/* The lines of command ARGV's standard output, in a list (empty if it
+ * fails: the caller's next step reports it). */
+static struct args output_lines(struct args *argv)
+{
+	struct args lines = { 0 };
+	char *out = os9_temp(".out");
+	int show = os9_show;
+	os9_show = 0;
+	int status = os9_run(argv, out, NULL);
+	os9_show = show;
+	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
+	if (fp == NULL)
+		return lines;
+	char line[1024];
+	while (fgets(line, sizeof line, fp) != NULL) {
+		line[strcspn(line, "\r\n")] = '\0';
+		args_add(&lines, line);
+	}
+	fclose(fp);
+	return lines;
+}
+
+/* Undefined symbols that no relocation uses are removed: the Microware
+ * assemblers write an external reference only where one is used, and a
+ * link takes in a library member for any undefined symbol (an equate of an
+ * external, Size2 equ Size1, or the twin of a label a conditional left
+ * out, lab__r68pc equ lab, leave one in as's object). */
+static void unreferenced_externals(const char *object)
+{
+	struct args argv = { 0 };
+	args_add(&argv, NM);
+	args_add(&argv, "-u");
+	args_add(&argv, object);
+	struct args undefined = output_lines(&argv);
+	args_free(&argv);
+	if (undefined.n == 0)
+		return;
+	args_add(&argv, OBJDUMP);
+	args_add(&argv, "-r");
+	args_add(&argv, object);
+	struct args relocs = output_lines(&argv);
+	args_free(&argv);
+	/* the terms of link-time expressions: used through .r68x's notes, kept
+	 * (as rof2elf keeps them) */
+	args_add(&argv, READELF);
+	args_add(&argv, "-p");
+	args_add(&argv, R68X_SECTION);
+	args_add(&argv, object);
+	struct args notes = output_lines(&argv);
+	args_free(&argv);
+	struct args strip = { 0 };
+	for (int i = 0; i < undefined.n; i++) {
+		/* "         U name" */
+		const char *name = strrchr(undefined.v[i], ' ');
+		name = name != NULL ? name + 1 : undefined.v[i];
+		if (*name == '\0')
+			continue;
+		size_t n = strlen(name);
+		int used = 0;
+		for (int j = 0; j < relocs.n && !used; j++) {
+			/* "OFFSET TYPE VALUE", VALUE the symbol and an addend */
+			const char *v = strrchr(relocs.v[j], ' ');
+			if (v == NULL || strncmp(relocs.v[j], "RELOCATION", 10) == 0)
+				continue;
+			v++;
+			used = strncmp(v, name, n) == 0 && (v[n] == '\0' || v[n] == '+' || v[n] == '-');
+		}
+		for (int j = 0; j < notes.n && !used; j++) {
+			/* "  [  0]  r68x_xxxxxxxx=-lab_b+lab_a\n..." */
+			for (const char *p = strstr(notes.v[j], name); p != NULL && !used; p = strstr(p + 1, name)) {
+				char before = p == notes.v[j] ? ' ' : p[-1], after = p[n];
+				used = (before == '=' || before == '+' || before == '-' || before == '*' || before == ' ') &&
+					(after == '\0' || after == '+' || after == '-' || after == '\\' || after == ' ');
+			}
+		}
+		if (!used)
+			args_addf(&strip, "--strip-symbol=%s", name);
+	}
+	if (strip.n > 0) {
+		args_add(&argv, OBJCOPY);
+		args_append(&argv, &strip);
+		args_add(&argv, object);
+		if (os9_run(&argv, NULL, NULL) != 0)
+			error("removing unreferenced symbols from %s failed", object);
+		args_free(&argv);
+	}
+	args_free(&strip);
+	args_free(&undefined);
+	args_free(&relocs);
+	args_free(&notes);
+}
+
+/* The sections' alignment as the Microware assemblers pad a psect's
+ * (r68togas pads them, see its pad_alignment): 2 for C 3.2's R68
+ * (-dialect=c32) and Ultra C's r68 -m0, so that the linker places the next
+ * psect's after it, as l68 does; as gives them 4, the other dialect's. */
+static void section_alignment(const char *object)
+{
+	int c32 = st.dialect != NULL && strcmp(st.dialect, "c32") == 0;
+	if (!c32 && !(st.cpu_given && st.cpu == 0))
+		return;
+	static const char *const sections[] = { ".text", ".data", ".bss", ".remote.data", ".remote.bss", NULL };
+	struct args argv = { 0 };
+	args_add(&argv, OBJCOPY);
+	for (const char *const *s = sections; *s; s++) {
+		args_add(&argv, "--set-section-alignment");
+		args_addf(&argv, "%s=2", *s);
+	}
+	args_add(&argv, object);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("setting the sections' alignment in %s failed", object);
+	args_free(&argv);
+}
+
 /* GNU as's options for r68's -m<n>: the CPU, with the FPU (r68 takes its
  * instructions for any CPU). */
 static void cpu_options(struct args *argv)
@@ -478,7 +596,8 @@ static void assemble(const char *source)
 	struct args argv = { 0 };
 	args_add(&argv, R68TOGAS);
 	args_append(&argv, &st.defs);
-	args_addf(&argv, "-m%d", st.cpu);
+	if (st.cpu_given)
+		args_addf(&argv, "-m%d", st.cpu);
 	if (st.dialect != NULL) {
 		args_add(&argv, "-d");
 		args_add(&argv, st.dialect);
@@ -524,6 +643,8 @@ static void assemble(const char *source)
 	args_free(&argv);
 
 	register_names(object);
+	unreferenced_externals(object);
+	section_alignment(object);
 
 	/* 3. A ROF, named for the psect. */
 	if (out != NULL && rof) {
