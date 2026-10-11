@@ -239,6 +239,7 @@ static int twin_mode;	/* in a PC-relative displacement or a branch target: globa
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int p1_name(struct buf *b, const char *s, size_t n);
 static int in_macro_def(void);
+static void char_param(struct buf *b, int n);
 static int shift_masked(void);
 
 static void parse_unary(struct lexer *lx, struct buf *b)
@@ -345,10 +346,11 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		lx->p = q;
 		return;
 	}
-	if (*p == '\'' && p[1] == '\\' && isdigit((unsigned char)p[2]) && p[3] == '\'' && in_macro_def()) {
-		/* '\1' in a macro body (CHOOSE's case.b: cmpi.b #'\1',d0): the
-		 * argument's character, as written, for as to substitute. */
-		bput(b, p, 4);
+	if (*p == '\'' && p[1] == '\\' && p[2] >= '1' && p[2] <= '9' && p[3] == '\'' && in_macro_def()) {
+		/* '\1' in a macro body (cmpi.b #'\1',d0;
+		 * move.l #'\1',(a5)+): the value of the argument's
+		 * characters, an alias each call sets (char_aliases) */
+		char_param(b, p[2] - '0');
 		lx->p = p + 4;
 		return;
 	}
@@ -1033,6 +1035,10 @@ struct state {
 	int nequates;
 	int nmacros;
 	char *macro_narg;	/* per macro: its body uses \# (narg_capture) */
+	int macro_variant;	/* translating one variant of a macro body's dc/ds */
+	char *macro_viaL;	/* per macro: its body calls a macro through r68L */
+	unsigned *macro_chars;	/* per macro: the parameters (bit n-1 for \n) its body
+				   uses as '\n' (char_param) */
 	unsigned *macro_ops;	/* per macro: the parameters (bit n-1 for \n) its body
 				   uses as an operation (b\2, \1.w): mnemonic arguments */
 	/* as's MRI mode aligns at any directive after an odd dc.b, a line
@@ -1063,6 +1069,19 @@ static struct state st;
 static int in_macro_def(void)
 {
 	return st.in_macro;
+}
+
+/* '\N' in the body of the macro being defined: .Lr68c<macro>_<N>, which
+ * each call sets to the value of its argument's characters (char_aliases). */
+static void char_param(struct buf *b, int n)
+{
+	int m = st.nmacros - 1;
+	if (m < 0) {
+		bprintf(b, "'\\%d'", n);
+		return;
+	}
+	st.macro_chars[m] |= 1u << (n - 1);
+	bprintf(b, ".Lr68c%d_%d", m, n);
 }
 
 /* Whether shift counts are taken modulo 32 (Ultra C's r68, the default
@@ -1101,24 +1120,14 @@ static int name_match(const char *pat, const char *n, size_t len)
 	return len > 0 && *pat == *n && name_match(pat + 1, n + 1, len - 1);
 }
 
-/* Whether scanned name PAT is only macro parameters (\1:, LABMAC's): it
- * would match every name; the names its calls make are scanned instead
- * (scan_macro_labels). */
-static int only_params(const char *pat)
-{
-	if (*pat != '\\')
-		return 0;
-	for (; *pat; pat += 2)
-		if (pat[0] != '\\' || pat[1] == '\0')
-			return 0;
-	return 1;
-}
-
 /* Whether name S (n chars) is external: defined nowhere in the source or
- * its use files (scan_labels: labels, equ and set names; a name a macro
- * makes, _C\1, as a pattern) nor so far (equ, set), and no register. r68
- * leaves such a name to the link, also in a sum (ext_tab+TabEnt,
- * chose_continue-bas_add): a link-time expression. Not a name with a dot
+ * its use files (scan_labels: labels, equ and set names; the names macro
+ * calls make, scan_macro_labels: _C\1 called with one is _Cone) nor so far
+ * (equ, set), and no register. A name made of parameters (_C\1, V_\1,
+ * a macro's \1:) matched every name with that prefix as a pattern, which
+ * left the source with no externals (V_Play+BASE). r68
+ * leaves such a name to the link, also in a sum (ext_a+EXT_B,
+ * lab_a-lab_b): a link-time expression. Not a name with a dot
  * (written as __dot__, see put_symbol). */
 static int external_name(const char *s, size_t n)
 {
@@ -1134,7 +1143,7 @@ static int external_name(const char *s, size_t n)
 	int counts[] = { st.nlocals, st.ngl, st.nsets, st.nequates };
 	for (int l = 0; l < 4; l++)
 		for (int i = 0; i < counts[l]; i++)
-			if (!only_params(lists[l][i]) && name_match(lists[l][i], s, n))
+			if (strchr(lists[l][i], '\\') == NULL && name_match(lists[l][i], s, n))
 				return 0;
 	return 1;
 }
@@ -1940,46 +1949,53 @@ static int read_text(const char *path, struct buf *text)
 	return 1;
 }
 
-/* The global labels macro calls make (LABMAC Fail, whose body has
- * \1: bsr.s past\1), which -b and the twins need to know as the source's
- * own (macro-label-pcrel). From a line of the pre-scan, its LABEL (null if
- * none; GLOBAL if with ':') and its statement from the operation, OP: a
- * macro's global labels made of parameters noted, a call outside macro
- * definitions giving its arguments' names. */
-static void scan_macro_labels(const char *label, int global, const char *op, char ***globals, int *nglobals)
+/* The names macro calls make (LAB Bad, whose body has \1: bsr.s
+ * past\1; VAR X_Y: with V_\1 ds.l 1; a macro calling Flag \3, which
+ * has m\1 equ 1<<.), which -b, the twins and external_name need to know as
+ * the source's own (macro-label-pcrel). From a line of the pre-scan, its
+ * LABEL (null if none; GLOBAL if with ':') and its statement from the
+ * operation, OP: a macro's labels made of parameters and the statements of
+ * its body noted; a call outside macro definitions expanded for its names,
+ * the calls in the body too. */
+static struct gmacro {
+	char *name;
+	char *pat[16];		/* labels with parameters */
+	char glob[16];
+	int npat;
+	char *call[32];		/* the body's statements: "op args" */
+	int ncall;
+} *gm;
+static int ngm;
+
+/* TEXT with \1..\9 replaced by ARGS (LENS), into a new string. */
+static char *gm_subst(const char *text, const char *const *args, const size_t *lens)
 {
-	static struct gmacro { char *name; char *pat[8]; char glob[8]; int npat; } *gm;
-	static int ngm, cur = -1;
-	size_t n = strcspn(op, " \t");
-	if (n == 5 && strncasecmp(op, "macro", 5) == 0) {
-		cur = -1;
-		if (label == NULL)
-			return;
-		gm = xrealloc(gm, (ngm + 1) * sizeof *gm);
-		gm[ngm] = (struct gmacro){ xstrdup(label), { NULL }, { 0 }, 0 };
-		cur = ngm++;
-		return;
-	}
-	if (n == 4 && strncasecmp(op, "endm", 4) == 0) {
-		cur = -1;
-		return;
-	}
-	if (cur >= 0) {
-		if (label && strchr(label, '\\') && strstr(label, "\\@") == NULL && gm[cur].npat < 8) {
-			gm[cur].glob[gm[cur].npat] = (char)global;
-			gm[cur].pat[gm[cur].npat++] = xstrdup(label);
+	struct buf nm = { 0 };
+	for (const char *q = text; *q; q++) {
+		if (q[0] == '\\' && q[1] >= '1' && q[1] <= '9') {
+			int k = q[1] - '1';
+			if (args[k])
+				bput(&nm, args[k], lens[k]);
+			q++;
+		} else {
+			bputc(&nm, *q);
 		}
-		return;
 	}
-	if (n == 0)
+	return nm.s ? nm.s : xstrdup("");
+}
+
+/* The call of macro OP (N chars) with the arguments in A (blank-ended):
+ * its names into GLOBALS or st.locals, its body's calls in turn. */
+static void gm_call(const char *op, size_t n, const char *a, char ***globals, int *nglobals, int depth)
+{
+	if (depth > 8)
 		return;
 	int m = -1;
 	for (int i = 0; i < ngm; i++)
-		if (gm[i].npat > 0 && strlen(gm[i].name) == n && strncasecmp(gm[i].name, op, n) == 0)
+		if (strlen(gm[i].name) == n && strncasecmp(gm[i].name, op, n) == 0)
 			m = i;
-	if (m < 0)
+	if (m < 0 || (gm[m].npat == 0 && gm[m].ncall == 0))
 		return;
-	const char *a = op + n;
 	while (*a == ' ' || *a == '\t')
 		a++;
 	size_t alen = strcspn(a, " \t");
@@ -1997,31 +2013,68 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 		alen -= c + 1;
 	}
 	for (int i = 0; i < gm[m].npat; i++) {
-		struct buf nm = { 0 };
-		for (const char *q = gm[m].pat[i]; *q; q++) {
-			if (q[0] == '\\' && q[1] >= '1' && q[1] <= '9') {
-				int k = q[1] - '1';
-				if (args[k])
-					bput(&nm, args[k], lens[k]);
-				q++;
-			} else {
-				bputc(&nm, *q);
-			}
+		char *nm = gm_subst(gm[m].pat[i], args, lens);
+		size_t len = strlen(nm);
+		/* an argument with a colon (VAR X_Y: with V_\1 ds.l
+		 * 1): a global label */
+		int glob = gm[m].glob[i];
+		if (len > 1 && nm[len - 1] == ':') {
+			nm[--len] = '\0';
+			glob = 1;
 		}
-		if (nm.s && *nm.s) {
-			if (gm[m].glob[i]) {
-				*globals = xrealloc(*globals, (*nglobals + 1) * sizeof **globals);
-				(*globals)[(*nglobals)++] = nm.s;
-			} else {
-				/* a local one (RegMac's \1 do.b BW): known as a name of
-				 * the source, not as external */
-				st.locals = xrealloc(st.locals, (st.nlocals + 1) * sizeof *st.locals);
-				st.locals[st.nlocals++] = nm.s;
-			}
+		if (*nm == '\0' || strchr(nm, '\\') != NULL) {
+			free(nm);
+		} else if (glob) {
+			/* exported (a vsect's label made by the macro has no
+			 * xdef of its own) */
+			add_global(nm);
+			*globals = xrealloc(*globals, (*nglobals + 1) * sizeof **globals);
+			(*globals)[(*nglobals)++] = nm;
 		} else {
-			free(nm.s);
+			st.locals = xrealloc(st.locals, (st.nlocals + 1) * sizeof *st.locals);
+			st.locals[st.nlocals++] = nm;
 		}
 	}
+	for (int i = 0; i < gm[m].ncall; i++) {
+		char *c = gm_subst(gm[m].call[i], args, lens);
+		size_t cn = strcspn(c, " \t");
+		gm_call(c, cn, c + cn, globals, nglobals, depth + 1);
+		free(c);
+	}
+}
+
+static void scan_macro_labels(const char *label, int global, const char *op, char ***globals, int *nglobals)
+{
+	static int cur = -1;
+	size_t n = strcspn(op, " \t");
+	if (n == 5 && strncasecmp(op, "macro", 5) == 0) {
+		cur = -1;
+		if (label == NULL)
+			return;
+		gm = xrealloc(gm, (ngm + 1) * sizeof *gm);
+		memset(&gm[ngm], 0, sizeof *gm);
+		gm[ngm].name = xstrdup(label);
+		cur = ngm++;
+		return;
+	}
+	if (n == 4 && strncasecmp(op, "endm", 4) == 0) {
+		cur = -1;
+		return;
+	}
+	if (cur >= 0) {
+		if (label && strchr(label, '\\') && strstr(label, "\\@") == NULL && gm[cur].npat < 16) {
+			gm[cur].glob[gm[cur].npat] = (char)global;
+			gm[cur].pat[gm[cur].npat++] = xstrdup(label);
+		}
+		if (n > 0 && gm[cur].ncall < 32) {
+			size_t e = n + strspn(op + n, " \t");
+			e += strcspn(op + e, " \t");
+			gm[cur].call[gm[cur].ncall++] = xstrndup(op, e);
+		}
+		return;
+	}
+	if (n > 0)
+		gm_call(op, n, op + n, globals, nglobals, 0);
 }
 
 /* Collects the labels PATH and the files it uses define without ':' (for
@@ -2523,8 +2576,13 @@ static void put_angle(struct buf *b, const char *s, size_t n)
 }
 
 
-static void macro_arguments(struct buf *b, const char *args, const char *name)
+static void macro_arguments(struct buf *out_b, const char *args, const char *name)
 {
+	struct buf *b = out_b;
+	int lmacro = is_lmacro(name);
+	for (int i = 0; i < st.nmacros && !lmacro; i++)
+		if ((ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) && st.macro_viaL[i])
+			lmacro = 1;
 	const char *pieces[64];
 	size_t lens[64];
 	/* \' is a quote (MAC.w #\'@7\' in a macro body,
@@ -2553,17 +2611,22 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		if (i < 9 && (fold & (1u << i)))
 			fold_all = 1;
 		if (i)
-			bputc(b, ',');
+			bputc(out_b, ',');
+		/* the argument's text, in <> where angled (put_angle) */
+		struct buf arg = { 0 };
+		int angled = 0;
+		b = &arg;
 		if (lens[i] == 0 && k > 1) {
 			/* an empty argument (MAC X,Y,,,,,,,): <>, as
 			 * as's MRI macros drop a bare one, which counts in r68's
 			 * \# and moves the later ones */
-			bputs(b, "<>");
+			angled = 1;
 		} else if (lens[i] >= 2 && ((pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') ||
 					    (pieces[i][0] == '\'' && pieces[i][lens[i] - 1] == '\''))) {
 			/* r68 strips either kind of quotes from an argument
 			 * (TrW '@7' with #'\1' in the body: '@7') */
-			put_angle(b, pieces[i] + 1, lens[i] - 2);
+			bput(b, pieces[i] + 1, lens[i] - 2);
+			angled = 1;
 		} else if (memchr(pieces[i], '"', lens[i]) != NULL) {
 			/* quotes inside an argument (MAC.l #"'"Done"'":
 			 * #'Done'): r68 strips them too */
@@ -2576,7 +2639,8 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		} else if (memchr(pieces[i], '=', lens[i]) != NULL) {
 			/* = (Mac >150,=,.b,V_Done(a2)): a keyword argument
 			 * to as's macros; in <> */
-			put_angle(b, pieces[i], lens[i]);
+			bput(b, pieces[i], lens[i]);
+			angled = 1;
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
 			   (lens[i] == 4 || pieces[i][4] == '.') && i < 9 && (ops & (1u << i))) {
 			/* A mnemonic argument (MAC subi.w,#1,V_Count): as in
@@ -2594,10 +2658,64 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		} else {
 			operand(b, pieces[i], lens[i], 0);
 		}
+		b = out_b;
+		const char *t = arg.s ? arg.s : "";
+		if (lmacro && (angled || strpbrk(t, "!<>") != NULL)) {
+			/* through r68L, which passes it on in <> again: its
+			 * !, < and > escaped twice (Trace Hdr_,Err!) */
+			bputc(b, '<');
+			for (const char *c = t; *c; c++) {
+				if (*c == '!' || *c == '<' || *c == '>')
+					bputs(b, "!!!");
+				bputc(b, *c);
+			}
+			bputc(b, '>');
+		} else if (angled) {
+			put_angle(b, t, arg.n);
+		} else {
+			bput(b, t, arg.n);
+		}
+		free(arg.s);
 		fold_all = save;
 	}
 	r68x_ok = save_ok;
 	free(unesc);
+}
+
+/* Whether the macro body in TEXT (up to its endm line) calls a macro
+ * through r68L (one using \Ln, so far): its arguments pass two levels of
+ * <> (Mac Hdr_,Err! to Sub). */
+static int calls_lmacro(const char *text)
+{
+	if (text == NULL)
+		return 0;
+	for (const char *p = text; *p;) {
+		const char *e = p + strcspn(p, "\r\n");
+		const char *w = p;
+		if (*w != '*' && *w != ';') {
+			if (!isspace((unsigned char)*w))
+				while (w < e && !isspace((unsigned char)*w))
+					w++;
+			while (w < e && isspace((unsigned char)*w))
+				w++;
+			size_t n = 0;
+			while (w + n < e && !isspace((unsigned char)w[n]))
+				n++;
+			if (n == 4 && strncasecmp(w, "endm", 4) == 0)
+				return 0;
+			if (n > 0 && n < 64) {
+				char op[64];
+				memcpy(op, w, n);
+				op[n] = '\0';
+				if (is_lmacro(op))
+					return 1;
+			}
+		}
+		p = e;
+		while (*p == '\r' || *p == '\n')
+			p++;
+	}
+	return 0;
 }
 
 /* The parameters (bit n-1 for \n) the macro body in TEXT (up to its endm
@@ -2679,6 +2797,50 @@ static void narg_set(const char *name, const char *args)
 		return;
 	bprintf(&line_before, "r68__narg set %d\nr68__nset set 1\n", k);
 	put_marker(&line_before);
+}
+
+/* A call of macro NAME with ARGS whose body uses '\N' (char_param): for
+ * each such N, a line before (line_before) setting .Lr68c<macro>_<N> to the
+ * value of argument N's characters as r68 takes them (its quotes stripped,
+ * the last four characters: 'ecode' is 'code'); an argument \K in a macro
+ * body is that macro's alias for K in turn. */
+static void char_aliases(const char *name, const char *args)
+{
+	int m = -1;
+	for (int i = 0; i < st.nmacros; i++)
+		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name)))
+			m = i;
+	if (m < 0 || st.macro_chars[m] == 0)
+		return;
+	const char *pieces[64];
+	size_t lens[64];
+	int k = *args ? split_commas(args, strlen(args), pieces, lens, 64) : 0;
+	struct buf pre = { 0 };
+	for (int n = 1; n <= 9; n++) {
+		if (!(st.macro_chars[m] & (1u << (n - 1))))
+			continue;
+		bprintf(&pre, ".Lr68c%d_%d set ", m, n);
+		const char *a = n <= k ? pieces[n - 1] : "";
+		size_t an = n <= k ? lens[n - 1] : 0;
+		if (st.in_macro && an == 2 && a[0] == '\\' && a[1] >= '1' && a[1] <= '9') {
+			char_param(&pre, a[1] - '0');
+		} else {
+			/* r68's argument text: quotes stripped, \' a quote */
+			unsigned long v = 0;
+			int whole = an >= 2 && (a[0] == '"' || a[0] == '\'') && a[an - 1] == a[0];
+			for (size_t c = whole; c < an - whole; c++) {
+				if (a[c] == '"' || (a[c] == '\\' && c + 1 < an && a[c + 1] == '\''))
+					continue;
+				v = (v << 8 | (unsigned char)a[c]) & 0xffffffffUL;
+			}
+			bprintf(&pre, "$%lx", v);
+		}
+		bputc(&pre, '\n');
+	}
+	if (pre.n > 0 && !st.in_macro)
+		put_marker(&pre);
+	bput(&line_before, pre.s, pre.n);
+	free(pre.s);
 }
 
 /* A call of macro NAME with ARGS: for each of the macro's link-time
@@ -3096,13 +3258,17 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		st.in_vsect = 1;
 		st.remote = ci_eq(l.args, "remote");
 		st.used_remote |= st.remote;
-		bprintf(out, "*%s", text);
+		/* r68__vs: where a macro's dc and ds go (see there) */
+		bprintf(out, "r68__vs set %d\t;%s", st.remote ? 2 : 1, text);
 		goto done;
 	}
 	if (strcmp(base, "ends") == 0 || strcmp(base, "endsect") == 0) {
 		if (st.in_vsect) {
 			st.in_vsect = 0;
 			st.remote = 0;
+			bputs(&line_before, "r68__vs set 0\n");
+			if (!st.in_macro)
+				put_marker(&line_before);
 			if (same_section(".text"))
 				bprintf(out, "*%s", text);
 			else
@@ -3268,6 +3434,37 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		expression(out, l.args, strlen(l.args));
 		bputs(out, rest);
 		free(nm.s);
+		goto done;
+	}
+	if (st.in_macro && !st.macro_variant &&
+	    (strcmp(base, "ds") == 0 || strcmp(base, "dc") == 0 || strcmp(base, "dz") == 0)) {
+		/* In a macro body: r68 puts a dc or ds where the macro is
+		 * called, in a vsect (remote or not) or in the code; the
+		 * translation for each, chosen by r68__vs when the body
+		 * expands. A global label (_C\1:) is exported in a vsect too. */
+		struct buf v[3] = { { 0 } };
+		int sv = st.in_vsect, sr = st.remote;
+		st.macro_variant = 1;
+		for (int k = 0; k < 3; k++) {
+			st.in_vsect = k < 2;
+			st.remote = k == 1;
+			st.section = NULL;
+			if (k < 2 && l.label && l.global) {
+				struct buf nm = { 0 };
+				put_symbol(&nm, l.label, strlen(l.label));
+				bprintf(&v[k], " xdef %s\n", nm.s);
+				free(nm.s);
+			}
+			translate_line(text, &v[k], path, lineno, fp, depth);
+		}
+		st.macro_variant = 0;
+		st.in_vsect = sv;
+		st.remote = sr;
+		st.section = NULL;
+		bprintf(out, " ifeq r68__vs-2\n%s\n else\n ifne r68__vs\n%s\n else\n%s\n endc\n endc", v[1].s ? v[1].s : "",
+			v[0].s ? v[0].s : "", v[2].s ? v[2].s : "");
+		for (int k = 0; k < 3; k++)
+			free(v[k].s);
 		goto done;
 	}
 	if (st.in_vsect && (strcmp(base, "ds") == 0 || strcmp(base, "dc") == 0 || strcmp(base, "dz") == 0)) {
@@ -3461,6 +3658,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_narg[st.nmacros] = uses_narg(st.rest_of_file);
 			st.macro_ops = xrealloc(st.macro_ops, (st.nmacros + 1) * sizeof *st.macro_ops);
 			st.macro_ops[st.nmacros] = op_params(st.rest_of_file);
+			st.macro_viaL = xrealloc(st.macro_viaL, (st.nmacros + 1) * sizeof *st.macro_viaL);
+			st.macro_viaL[st.nmacros] = (char)calls_lmacro(st.rest_of_file);
+			st.macro_chars = xrealloc(st.macro_chars, (st.nmacros + 1) * sizeof *st.macro_chars);
+			st.macro_chars[st.nmacros] = 0;
 			st.narg_pending = st.macro_narg[st.nmacros];
 			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
 			st.macro_shapes[st.nmacros] = (struct buf){ 0 };
@@ -3591,6 +3792,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				macro_aliases(l.op, l.args);
 			}
 			narg_set(l.op, l.args);
+			char_aliases(l.op, l.args);
+			/* where its lines leave the section isn't known */
+			st.section = NULL;
 			bputs(out, rest);
 			goto done;
 		}
@@ -3612,6 +3816,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			macro_arguments(out, l.args, l.op);
 			macro_aliases(l.op, l.args);
 			narg_set(l.op, l.args);
+			char_aliases(l.op, l.args);
+			/* where its lines leave the section isn't known */
+			st.section = NULL;
 		} else if (strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0) {
 			movem_operands(out, l.args);
 		} else {
@@ -3831,6 +4038,8 @@ static const char prelude[] =
 	"r68__ofs set 0\n"
 	"* \\# where a call has an empty argument (narg_set)\n"
 	"r68__nset set 0\n"
+	"* where a macro's dc and ds go: 0 code, 1 vsect, 2 remote vsect\n"
+	"r68__vs set 0\n"
 	"r68do macro\n"
 	" ifne \\2-1\n"
 	"r68__ofs set (r68__ofs+1)/2*2\n"

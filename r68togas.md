@@ -230,6 +230,10 @@ sets the alias to an expression of the outer macro's alias.
 - **Macro names** are case-sensitive in r68, not in `gas`: a macro whose name only the case tells
   from another (a macro `OS9` beside r68's `os9`) is defined and called as `NAME__r68m<n>`. A
   macro whose name has a dot (`DO_IT.w`) is called by that name, not as `DO_IT` with a size.
+- **Labels a macro makes** (`_X\1:`): a global one is exported by each expansion. The pre-scan
+  expands macro calls, nested ones too, to know the names their bodies make, for `-b`, the twins
+  and the externals; names a body defines by `equ` (`m\1 equ 1<<.`) are written so that their
+  values are known where `moveq` or `move.b` need the byte.
 - **`dc`, `ds` and `dz` in a macro body** go where the macro is called, in the code or a vsect:
   each is written for all three places and chosen when the body expands.
 - A macro called with a size (`MAC.w`) is an error in r68 and stays one.

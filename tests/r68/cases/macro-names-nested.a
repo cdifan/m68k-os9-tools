@@ -1,0 +1,39 @@
+* Names macro calls make, nested calls too (Reg3 calling Flag \2, whose body has m\1 equ: mXB is
+* the source's, not external; it was a pattern matching every m... name, and W_\1 every W_...),
+* a label made global by its argument's colon (ACT AP_X: with W_\1 ds.l 1 in a vsect);
+* arguments passed on through r68L in <> twice (Bad! kept its !) and '\1' as the value of the
+* argument's last four characters (xcode is code), set before each call (.Lr68c<m>_<n>).
+* fixed: cda8de1 2026-10-11 r68togas: names nested macro calls make; char parameters; r68L arguments
+* expect text: 303c0003 2afc4261 64212afc 636f6465 41ee0000 2c2a0000
+* expect sym: B W_AP_X 00000000
+Flag	macro
+m\1	equ	1<<\2
+	endm
+Reg3	macro
+	Flag	\2,0
+	Flag	\3,1
+	endm
+ACT	macro
+W_\1	ds.l	1
+	endm
+TrL	macro
+	move.l	#'\1',(a5)+
+	endm
+Tr	macro
+	TrL	\1
+	endm
+LEN	macro
+	dc.b	\L1
+	endm
+ psect macro_names_nested,0,0,0,0,0
+ vsect
+	ACT	AP_X:
+	ACT	AP_Y
+ ends
+	Reg3	X0,XA,XB
+	move.w	#mXA+mXB,d0
+	Tr	Bad!
+	Tr	xcode
+	lea	W_AP_X(a6),a0
+	move.l	W_AP_Y(a2),d6
+ ends

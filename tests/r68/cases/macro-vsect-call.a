@@ -1,6 +1,6 @@
 * A macro defined in code and called in a vsect: r68 puts its dc and ds in the vsect, as a
 * macro's lines go where it is called.
-* known: open (found 2026-10-10): r68togas translates a macro's dc/ds by the section where it is defined
+* fixed: (not committed) 2026-10-11 r68togas: a macro's dc and ds where it is called
 * expect text: 41ee0000
 * expect data: 6f6e6500
 * expect size: .bss 4
