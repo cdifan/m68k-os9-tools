@@ -1849,6 +1849,27 @@ static int local_label(const char *target)
 
 static char *use_file(const char *arg, const char *from);
 
+/* PATH's text into TEXT; 0 if it can't be read. A Ctrl-Z ends it (DOS's
+ * end of file, after the last line of sources edited on DOS; r68 stops
+ * there). */
+static int read_text(const char *path, struct buf *text)
+{
+	FILE *fp = fopen(path, "rb");
+	if (fp == NULL)
+		return 0;
+	char chunk[8192];
+	size_t n;
+	while ((n = fread(chunk, 1, sizeof chunk, fp)) > 0)
+		bput(text, chunk, n);
+	fclose(fp);
+	const char *z = text->n ? memchr(text->s, 0x1A, text->n) : NULL;
+	if (z != NULL) {
+		text->n = (size_t)(z - text->s);
+		text->s[text->n] = '\0';
+	}
+	return 1;
+}
+
 /* Collects the labels PATH and the files it uses define without ':' (for
  * -b), conditionals not considered; a name also defined with ':' is left
  * out (global). */
@@ -1856,13 +1877,20 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 {
 	if (depth > 16)
 		return;
-	FILE *fp = fopen(path, "rb");
-	if (fp == NULL)
+	struct buf text = { 0 };
+	if (!read_text(path, &text))
 		return;
-	char line[1024];
-	while (fgets(line, sizeof line, fp) != NULL) {
-		line[strcspn(line, "\r\n")] = '\0';
+	/* lines end in CR, LF or CR LF (OS-9's own files in CR) */
+	for (size_t i = 0, j; i < text.n; i = j + (j < text.n && text.s[j] == '\r' && j + 1 < text.n && text.s[j + 1] == '\n') + 1) {
+		j = i;
+		while (j < text.n && text.s[j] != '\r' && text.s[j] != '\n')
+			j++;
+		char *line = xstrndup(text.s + i, j - i);
 		char *p = line;
+		if (*p == '\0' || *p == '*' || *p == ';') {
+			free(line);
+			continue;
+		}
 		if (*p == '\0' || *p == '*' || *p == ';')
 			continue;
 		if (!isspace((unsigned char)*p)) {
@@ -1903,8 +1931,9 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 				scan_labels(f, depth + 1, globals, nglobals);
 			free(f);
 		}
+		free(line);
 	}
-	fclose(fp);
+	free(text.s);
 }
 
 /* Whether BASE (lower case) is bra, bsr or a b<cc>. */
@@ -3267,15 +3296,9 @@ static void translate_file(const char *path, FILE *out, int depth)
 {
 	if (depth > 16)
 		die("%s: use nested too deeply", path);
-	FILE *fp = fopen(path, "rb");
-	if (fp == NULL)
-		die("cannot read %s", path);
 	struct buf text = { 0 };
-	char chunk[8192];
-	size_t n;
-	while ((n = fread(chunk, 1, sizeof chunk, fp)) > 0)
-		bput(&text, chunk, n);
-	fclose(fp);
+	if (!read_text(path, &text))
+		die("cannot read %s", path);
 	fprintf(out, "# 1 \"%s\"\n", path);
 	struct buf line = { 0 };
 	int lineno = 0;
