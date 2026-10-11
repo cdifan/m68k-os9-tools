@@ -1,7 +1,7 @@
 * A parameter alone in a dc.b string ("\2") with an empty argument: r68 makes no byte (as read
 * the '' it became as a quote character). The dc line is split, each such string in ifnc; a
 * label before it on a dz.b 0, in the code or a vsect as the dc.
-* fixed: (pending) 2026-10-12 r68togas: an empty argument in a dc.b string
+* fixed: df3f773 2026-10-12 r68togas: section statements only where the section changes; an empty argument in a dc.b string
 * expect text: 61626300 00010261 62636162 00636400 01636402 61626364 4e714e71
 * expect data: 78000001 02780000
 Mk macro
