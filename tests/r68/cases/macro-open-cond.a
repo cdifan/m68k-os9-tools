@@ -1,0 +1,19 @@
+* A macro body that leaves a conditional open (an iflt ... else without endc): r68 keeps it open
+* after the call, the rest of the source in it (assembled after a call that ends in the else
+* part, left out after one that doesn't: here the last nop); as refused the macro ("end of
+* macro inside conditional").
+* fixed: (pending) 2026-10-12 r68togas: conditionals a macro body leaves open
+* expect text: 01020304 05060700
+Mk macro
+ dc.b \1
+ iflt \#-2
+ dc.b 0
+ else
+ dc.b \2,\3
+ endm
+ psect macro_open_cond,0,0,0,0,0
+ Mk 1,2,3
+ Mk 4,5,6
+ Mk 7
+ nop
+ ends

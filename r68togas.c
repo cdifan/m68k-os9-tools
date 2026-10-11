@@ -236,6 +236,7 @@ static int annotate;
 static int global_label(const char *s, size_t n);
 static void put_twin(struct buf *b, const char *s, size_t n);
 static void mri_strings(struct buf *b, const char *text, size_t n);
+static int is_cond(const char *base);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int p1_name(struct buf *b, const char *s, size_t n);
@@ -528,6 +529,7 @@ static FILE *fold_log;			/* R68TOGAS_FOLDLOG: where the folds are listed */
 static const char *log_path = "";	/* the line being translated, for it */
 static int log_line;
 static struct buf line_before;	/* lines translate_file writes before the line's */
+static struct buf line_after;	/* and after it */
 static struct buf hoisted;	/* macro definitions moved before the source (translate_file) */
 
 /* Translates expression text E (N chars) into B; returns 0 when it isn't
@@ -1116,6 +1118,10 @@ struct state {
 	char *macro_narg;	/* per macro: its body uses \# (narg_capture) */
 	int macro_variant;	/* translating one variant of a macro body's dc/ds */
 	char *macro_viaL;	/* per macro: its body calls a macro through r68L */
+	char *macro_open;	/* per macro: its body leaves a conditional open */
+	int nends;		/* psect ends statements (.Lr68ends<n>) */
+	int ends_cond;		/* one in a conditional or macro body: whether one is
+				   assembled known only to as (r68__ended) */
 	unsigned *macro_twin;	/* per macro: the parameters it uses only as
 				   branch targets and on pc (twin_params) */
 	unsigned *macro_mem;	/* per macro: the parameters (bit n-1 for \n) its body
@@ -2138,8 +2144,35 @@ static struct gmacro {
 	int npat;
 	char *call[32];		/* the body's statements: "op args" */
 	int ncall;
+	int ifs;		/* conditionals the body leaves open (so far) */
 } *gm;
 static int ngm;
+
+/* Whether the macro NAME's body leaves a conditional open, or calls one
+ * that does (the pre-scan's view: also where the call is translated
+ * before the called macro's definition, a template's in a later use
+ * file). */
+static int gm_open(const char *name, int depth)
+{
+	if (depth > 8)
+		return 0;
+	for (int m = ngm; m-- > 0;) {
+		if (strcasecmp(gm[m].name, name) != 0)
+			continue;
+		if (gm[m].ifs > 0)
+			return 1;
+		for (int i = 0; i < gm[m].ncall; i++) {
+			size_t cn = strcspn(gm[m].call[i], " \t");
+			char *c = xstrndup(gm[m].call[i], cn);
+			int o = strcasecmp(c, name) != 0 && gm_open(c, depth + 1);
+			free(c);
+			if (o)
+				return 1;
+		}
+		return 0;
+	}
+	return 0;
+}
 
 /* TEXT with \1..\9 replaced by ARGS (LENS), into a new string. */
 static char *gm_subst(const char *text, const char *const *args, const size_t *lens)
@@ -2236,6 +2269,17 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 		return;
 	}
 	if (cur >= 0) {
+		char base[32];
+		size_t bn = strcspn(op, ". \t");
+		if (bn < sizeof base) {
+			for (size_t i = 0; i < bn; i++)
+				base[i] = (char)tolower((unsigned char)op[i]);
+			base[bn] = '\0';
+			if (is_cond(base))
+				gm[cur].ifs++;
+			else if (strcmp(base, "endc") == 0 && gm[cur].ifs > 0)
+				gm[cur].ifs--;
+		}
 		/* (a global label without parameters too:
 		 * Entry: equ *, exported where the macro is called) */
 		if (label && (strchr(label, '\\') || global) && strstr(label, "\\@") == NULL && gm[cur].npat < 16) {
@@ -3537,6 +3581,27 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 }
 
 /* Translates one statement line into OUT (one line, no newline). */
+/* A call of a macro whose body leaves a conditional open (macro_open):
+ * r68 assembles the rest of the source in it, which is left out where
+ * the body ended in a part left out. r68__mo cleared before the call,
+ * set by the body where it ends assembled; ifne r68__mo after it, open
+ * to the end of the source (or the macro body the call is in). */
+static void open_call(const char *name)
+{
+	for (int i = st.nmacros; i-- > 0;)
+		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) {
+			if (!st.macro_open[i] && !gm_open(macro_orig(name), 0))
+				return;
+			bputs(&line_before, "r68__mo set 0\n");
+			bputs(&line_after, " ifne r68__mo\n");
+			if (st.in_macro)
+				st.macro_ifs++;
+			else
+				st.cond_depth++;
+			return;
+		}
+}
+
 static int dc_split;	/* translating the pieces of a dc line split for "\N" */
 
 /* Whether a dc list ARGS has an element that is a parameter alone in
@@ -3747,6 +3812,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.section = ".text";
 		} else {
 			st.in_psect = 0;
+			/* a label alone, which as's MRI mode doesn't align at
+			 * (a set would be): whether this ends is assembled, for
+			 * the padding (r68__ended) */
+			bprintf(&line_before, ".Lr68ends%d\n", ++st.nends);
+			if (st.cond_depth > 0 || st.in_macro)
+				st.ends_cond = 1;
 			bprintf(out, "*%s", text);
 		}
 		goto done;
@@ -4151,6 +4222,20 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_ifs = 0;
 		} else if (strcmp(base, "endm") == 0) {
 			st.in_macro = 0;
+			/* conditionals the body leaves open (an iflt ... else
+			 * without endc): r68 keeps them open after the call,
+			 * the rest of the source in them; as refuses the
+			 * macro. Closed here, r68__mo set where the body ends
+			 * in an assembled part; each call followed by ifne
+			 * r68__mo, open to the end of the source (macro_open). */
+			if (st.macro_ifs > 0) {
+				bprintf(&line_before, "r68__mo set 1\n* closing %d conditional%s the macro body leaves open\n",
+					st.macro_ifs, st.macro_ifs > 1 ? "s" : "");
+				if (st.nmacros > 0)
+					st.macro_open[st.nmacros - 1] = 1;
+			}
+			for (; st.macro_ifs > 0; st.macro_ifs--)
+				bputs(&line_before, " endc\n");
 		} else if (!st.in_macro && is_cond(base)) {
 			st.cond_depth++;
 		} else if (!st.in_macro && strcmp(base, "endc") == 0) {
@@ -4223,6 +4308,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_mem[st.nmacros] = mem_params(st.rest_of_file);
 			st.macro_twin = xrealloc(st.macro_twin, (st.nmacros + 1) * sizeof *st.macro_twin);
 			st.macro_twin[st.nmacros] = twin_params(st.rest_of_file);
+			st.macro_open = xrealloc(st.macro_open, (st.nmacros + 1) * sizeof *st.macro_open);
+			st.macro_open[st.nmacros] = 0;
 			st.narg_pending = st.macro_narg[st.nmacros];
 			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
 			st.macro_shapes[st.nmacros] = (struct buf){ 0 };
@@ -4422,6 +4509,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			macro_aliases(l.op, l.args);
 			narg_set(l.op, l.args);
 			char_aliases(l.op, l.args);
+			open_call(l.op);
 			/* where its lines leave the section isn't known */
 			st.section = NULL;
 		} else if (strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0) {
@@ -4632,6 +4720,10 @@ static void translate_file(const char *path, FILE *out, int depth)
 				line.s + ln - rn);
 		} else {
 			bprintf(&whole, "%s\n", line.s ? line.s : "");
+		}
+		if (line_after.n > 0) {
+			bput(&whole, line_after.s, line_after.n);
+			line_after.n = 0;
 		}
 		if (hoisting) {
 			bput(&hoisted, whole.s, whole.n);
@@ -5024,10 +5116,14 @@ int main(int argc, char **argv)
 	r68x_ok = 0;
 	/* A psect without ends: the end of its code, before the line marker
 	 * (which as aligns after an odd dc.b, as any directive) */
-	int no_ends = pad_alignment() == 4 && st.in_psect && !st.in_vsect && (st.section == NULL || same_section(".text")) && st.cond_depth == 0;
-	if (no_ends)
-		fputs("r68__pend ds.b 0\n", out);
-	fprintf(out, "# 1 \"r68.epilogue\"\n");
+	/* Without ends where the source has none outside conditionals; where
+	 * one is in a conditional or a macro body (after a call of a macro
+	 * leaving a conditional open, which can leave the rest of the source
+	 * out), as tells: r68__ended. */
+	int open_conds = st.cond_depth;
+	int maybe_ends = pad_alignment() == 4 && !st.in_vsect && (st.section == NULL || same_section(".text"));
+	int no_ends = maybe_ends && st.in_psect && st.cond_depth == 0;
+	int dyn_ends = maybe_ends && !no_ends && st.npsects > 0 && (st.ends_cond || st.cond_depth > 0);
 	/* r68 ends a source in a conditional without a word
 	 * (ifne DEBUG): closed here, as doesn't. */
 	if (st.cond_depth > 0)
@@ -5035,6 +5131,15 @@ int main(int argc, char **argv)
 			st.cond_depth > 1 ? "s" : "");
 	for (; st.cond_depth > 0; st.cond_depth--)
 		fputs(" endc\n", out);
+	if (no_ends || dyn_ends)
+		fputs("r68__pend ds.b 0\n", out);
+	fprintf(out, "# 1 \"r68.epilogue\"\n");
+	if (dyn_ends) {
+		fputs("r68__ended set 0\n", out);
+		for (int k = 1; k <= st.nends; k++)
+			fprintf(out, " ifdef .Lr68ends%d\nr68__ended set 1\n endc\n", k);
+	}
+	(void)open_conds;
 	/* Each section padded as the Microware assemblers pad a psect's
 	 * (measured 2026-10-09): C 3.2's R68 and Ultra C's r68 -m0 to 2; Ultra
 	 * C's r68 otherwise to 4, the code with nop (without -m) or trapf
@@ -5047,6 +5152,12 @@ int main(int argc, char **argv)
 			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0" : st.cpu_given ? "Ultra C's r68 -m1..6" : "Ultra C's r68");
 		if (to == 2) {
 			fprintf(out, " section .text\n balign 2,0\n");
+		} else if (dyn_ends) {
+			fprintf(out, "* no ends assembled: an odd size filled with zeros\n section .text\n"
+				" ifeq r68__ended\n"
+				" ds.b ((r68__pend-r68__btext)&1)*(3-((r68__pend-r68__btext)&3))\n"
+				" endc\n"
+				" balignw %d,$%04X\n", to, fill);
 		} else if (no_ends) {
 			/* A psect without ends (descriptors of 1992-1994 ported
 			 * trees): Ultra C's r68 fills an odd size with zeros to
