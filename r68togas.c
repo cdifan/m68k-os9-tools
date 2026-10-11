@@ -509,6 +509,7 @@ static FILE *fold_log;			/* R68TOGAS_FOLDLOG: where the folds are listed */
 static const char *log_path = "";	/* the line being translated, for it */
 static int log_line;
 static struct buf line_before;	/* lines translate_file writes before the line's */
+static struct buf hoisted;	/* macro definitions moved before the source (translate_file) */
 
 /* Translates expression text E (N chars) into B; returns 0 when it isn't
  * one r68 would take whole (then copied as it is). */
@@ -3418,8 +3419,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			out->n = 0;
 			out->s[0] = '\0';
 			translate_file(found, fp, depth + 1);
-			/* The next line is the including file's next. */
-			bprintf(out, "# %d \"%s\"", lineno + 1, path);
+			/* The next line is the including file's next; after byte
+			 * data the marker is owed (as aligns at it, see maybe_odd)
+			 * and written before the next statement that aligns. */
+			if (st.maybe_odd) {
+				bputs(out, "*");
+				st.marker_owed = 1;
+			} else {
+				bprintf(out, "# %d \"%s\"", lineno + 1, path);
+			}
 		}
 		free(found);
 		goto done;
@@ -4070,6 +4078,7 @@ static void translate_file(const char *path, FILE *out, int depth)
 	fprintf(out, "# 1 \"%s\"\n", path);
 	struct buf line = { 0 };
 	int lineno = 0;
+	int hoisting = 0;
 	size_t i = 0;
 	while (i < text.n) {
 		size_t j = i;
@@ -4082,26 +4091,49 @@ static void translate_file(const char *path, FILE *out, int depth)
 			line.s[0] = '\0';
 		st.rest_of_file = text.s + j;
 		annotate = annotate_op = 0;
+		int was_macro = st.in_macro, cond = st.cond_depth;
 		translate_line(raw, &line, path, lineno, out, depth);
+		/* A macro defined outside conditionals and other macros: moved
+		 * before the source (hoisted), as's MRI mode aligning at its
+		 * macro statement after an odd dc.b (descriptor templates:
+		 * Mgr dc.b "Scf",0 then a Desc macro), which r68 doesn't;
+		 * a comment line keeps the source's line numbers. */
+		if (!was_macro && st.in_macro && cond == 0 && !hoisting) {
+			hoisting = 1;
+			bprintf(&hoisted, "# %d \"%s\"\n", lineno, path);
+		}
 		if (line_before.n > 0) {
-			fputs(line_before.s, out);
+			if (hoisting && was_macro)
+				bput(&hoisted, line_before.s, line_before.n);
+			else
+				fputs(line_before.s, out);
 			line_before.n = 0;
 		}
 		if (st.marker_owed && st.aligning) {
 			fprintf(out, "# %d \"%s\"\n", lineno, path);
 			st.marker_owed = 0;
 		}
+		struct buf whole = { 0 };
 		if ((annotate || annotate_op) && line.s && orig_stmt.n) {
 			/* on the same line, right after the operands, before the
 			 * line's own comment (a comment in MRI mode after ;) */
 			size_t ln = strlen(line.s), rn = line_rest.n;
 			if (rn == 0 || rn > ln || strcmp(line.s + ln - rn, line_rest.s) != 0)
 				rn = 0;
-			fprintf(out, "%.*s\t;[r68: %s]%s\n", (int)(ln - rn), line.s, annotate ? orig_stmt.s : orig_op.s,
+			bprintf(&whole, "%.*s\t;[r68: %s]%s\n", (int)(ln - rn), line.s, annotate ? orig_stmt.s : orig_op.s,
 				line.s + ln - rn);
 		} else {
-			fprintf(out, "%s\n", line.s ? line.s : "");
+			bprintf(&whole, "%s\n", line.s ? line.s : "");
 		}
+		if (hoisting) {
+			bput(&hoisted, whole.s, whole.n);
+			fputs("*\n", out);
+			if (!st.in_macro)
+				hoisting = 0;
+		} else {
+			fputs(whole.s, out);
+		}
+		free(whole.s);
 		free(raw);
 		if (j < text.n && text.s[j] == '\r' && j + 1 < text.n && text.s[j + 1] == '\n')
 			j++;
@@ -4439,6 +4471,7 @@ int main(int argc, char **argv)
 		}
 		st.nfolded = k2;
 	}
+	long source_at = ftell(out);
 	translate_file(source, out, 0);
 	r68x_ok = 0;
 	/* A psect without ends: the end of its code, before the line marker
@@ -4560,6 +4593,12 @@ int main(int argc, char **argv)
 	rewind(out);
 	char chunk[8192];
 	size_t got;
+	/* the prelude, the hoisted macro definitions, the source */
+	for (long left = source_at; left > 0 && (got = fread(chunk, 1, left < (long)sizeof chunk ? (size_t)left : sizeof chunk, out)) > 0;
+	     left -= (long)got)
+		fwrite(chunk, 1, got, final);
+	if (hoisted.n > 0)
+		fwrite(hoisted.s, 1, hoisted.n, final);
 	while ((got = fread(chunk, 1, sizeof chunk, out)) > 0)
 		fwrite(chunk, 1, got, final);
 	fclose(out);
