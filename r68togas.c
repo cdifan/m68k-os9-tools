@@ -4069,7 +4069,18 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
 			  strcmp(base, "bset") == 0) && l.args[0] == '#') ? 4 : 2;
 		if (is_lmacro(l.op)) {
-			/* through r68L, which counts the arguments' lengths */
+			/* through r68L, which counts the arguments' lengths; the
+			 * number of arguments set before (r68__Ln), as r68 counts
+			 * them: NARG leaves empty ones out (MAC ,Arg
+			 * called its macro with one argument) */
+			{
+				const char *pc[64];
+				size_t pl[64];
+				int k = *l.args ? split_commas(l.args, strlen(l.args), pc, pl, 64) : 0;
+				bprintf(&line_before, "r68__Ln set %d\n", k + 1);
+				if (!st.in_macro)
+					put_marker(&line_before);
+			}
 			bprintf(out, "%s r68L %s", labs, l.op);
 			if (*l.args) {
 				bputc(out, ',');
@@ -4369,6 +4380,8 @@ static const char prelude[] =
 	"r68__nset set 0\n"
 	"* where a macro's dc and ds go: 0 code, 1 vsect, 2 remote vsect\n"
 	"r68__vs set 0\n"
+	"* the arguments of a call through r68L, the name too\n"
+	"r68__Ln set 0\n"
 	"r68do macro\n"
 	" ifne \\2-1\n"
 	"r68__ofs set (r68__ofs+1)/2*2\n"
@@ -4593,7 +4606,7 @@ int main(int argc, char **argv)
 		fprintf(out, "r68__L%d set 0\n ifnc '\\%d',''\n irpc r68__ch,\\%d\nr68__L%d set r68__L%d+1\n endr\n endc\n",
 			a, a + 1, a + 1, a, a);
 	for (int n = 1; n <= 9; n++) {
-		fprintf(out, " ifeq NARG-%d\n \\1__r68", n);
+		fprintf(out, " ifeq r68__Ln-%d\n \\1__r68", n);
 		for (int a = 2; a <= n; a++)
 			fprintf(out, "%s<\\%d>", a == 2 ? " " : ",", a);
 		fputs("\n endc\n", out);
