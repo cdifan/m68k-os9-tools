@@ -235,6 +235,7 @@ static void skipsp(struct lexer *lx)
 static int annotate;
 static int global_label(const char *s, size_t n);
 static void put_twin(struct buf *b, const char *s, size_t n);
+static void mri_strings(struct buf *b, const char *text, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int p1_name(struct buf *b, const char *s, size_t n);
@@ -1042,6 +1043,10 @@ static int split_line(const char *text, struct line *l)
 				q++;
 			else if (*q == quote)
 				quote = 0;
+		} else if (*q == '\\' && (q[1] == '"' || q[1] == '\'')) {
+			/* an escaped quote, not one beginning a string
+			 * (MAC \""abc> \"") */
+			q++;
 		} else if (*q == '"' || *q == '\'') {
 			quote = *q;
 		} else if (isspace((unsigned char)*q)) {
@@ -2864,24 +2869,26 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 						c++;
 					bputc(&u, a[c]);
 				}
-				struct buf q = { 0 };
-				int in = 0;
-				for (size_t c = 0; c < u.n; c++) {
-					if (u.s[c] == '"') {
-						bputc(&q, '\'');
-						in = !in;
-					} else if (in && u.s[c] == '\'') {
-						bputs(&q, "''");
-					} else {
-						bputc(&q, u.s[c]);
-					}
-				}
-				bput(b, q.s ? q.s : "", q.n);
+				mri_strings(b, u.s ? u.s : "", u.n);
 				free(u.s);
-				free(q.s);
 			} else {
 				bput(b, a, an);
 			}
+			angled = 1;
+		} else if (lens[i] >= 2 && pieces[i][0] == '\\' && pieces[i][1] == '"') {
+			/* an escaped quote outside quotes (MAC
+			 * \""abc> \""): the quote, then quoted parts without
+			 * their quotes, a backslash taking the next character
+			 * ("abc> ") */
+			struct buf u = { 0 };
+			for (size_t c = 0; c < lens[i]; c++) {
+				if (pieces[i][c] == '\\' && c + 1 < lens[i])
+					bputc(&u, pieces[i][++c]);
+				else if (pieces[i][c] != '"')
+					bputc(&u, pieces[i][c]);
+			}
+			mri_strings(b, u.s ? u.s : "", u.n);
+			free(u.s);
 			angled = 1;
 		} else if (memchr(pieces[i], '"', lens[i]) != NULL) {
 			/* quotes inside an argument (MAC.l #"'"Done"'":
@@ -3154,6 +3161,22 @@ static unsigned twin_params(const char *text)
 			p++;
 	}
 	return twin & ~other;
+}
+
+/* TEXT (N) with its "..." strings as MRI's '...' (a ' in one doubled). */
+static void mri_strings(struct buf *b, const char *text, size_t n)
+{
+	int in = 0;
+	for (size_t c = 0; c < n; c++) {
+		if (text[c] == '"') {
+			bputc(b, '\'');
+			in = !in;
+		} else if (in && text[c] == '\'') {
+			bputs(b, "''");
+		} else {
+			bputc(b, text[c]);
+		}
+	}
 }
 
 /* Whether the macro body in TEXT (up to its endm line) uses \#. */
