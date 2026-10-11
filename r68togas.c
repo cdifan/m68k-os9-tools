@@ -868,11 +868,17 @@ static int string_params;
 static void string_operand(struct buf *b, const char *s, size_t n)
 {
 	char q = s[0];
-	bputc(b, '\'');
+	/* A backslash of the string goes as $5c between the parts
+	 * ('\'): as's scrubber takes \' in quotes for an escaped quote and
+	 * runs the string on, though MRI strings have no escapes. */
+	int open = 0, any = 0;
 	for (size_t i = 1; i < n; i++) {
 		char c = s[i];
 		if (string_params && c == '\\' && i + 1 < n && (isdigit((unsigned char)s[i + 1]) || s[i + 1] == '@' ||
 								 s[i + 1] == '#')) {
+			if (!open)
+				bputs(b, any++ ? ",'" : "'");
+			open = 1;
 			bput(b, s + i, 2);
 			i++;
 			continue;
@@ -886,11 +892,24 @@ static void string_operand(struct buf *b, const char *s, size_t n)
 		} else if (c == '\\' && q == '"' && i + 1 < n) {
 			c = s[++i];
 		}
+		if (c == '\\') {
+			if (open)
+				bputc(b, '\'');
+			open = 0;
+			bputs(b, any++ ? ",$5c" : "$5c");
+			continue;
+		}
+		if (!open)
+			bputs(b, any++ ? ",'" : "'");
+		open = 1;
 		if (c == '\'')
 			bputc(b, '\'');
 		bputc(b, c);
 	}
-	bputc(b, '\'');
+	if (open)
+		bputc(b, '\'');
+	else if (!any)
+		bputs(b, "''");
 }
 
 /* ----- Lines ----- */

@@ -1,0 +1,10 @@
+* A backslash in a dc string ('\', "a\b"): as's scrubber took \' in quotes for an escaped quote
+* and ran the string on ("junk at end of line"), though MRI strings have no escapes; written as
+* $5c between the string's parts.
+* fixed: 0407068 2026-10-11 r68togas: backslashes in dc strings
+* expect text: 005a5b60 595c0e33 2d5c5c3d 4e714e71
+ psect dc_backslash,0,0,0,0,0
+ dc.b 0,"Z[`Y",'\',$e,"3-"
+ dc.b "\\\\","="
+ nop
+ ends
