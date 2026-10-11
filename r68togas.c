@@ -238,6 +238,7 @@ static void put_twin(struct buf *b, const char *s, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int p1_name(struct buf *b, const char *s, size_t n);
+static int in_macro_def(void);
 
 static void parse_unary(struct lexer *lx, struct buf *b)
 {
@@ -338,6 +339,13 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		}
 		bput(b, p, q - p);
 		lx->p = q;
+		return;
+	}
+	if (*p == '\'' && p[1] == '\\' && isdigit((unsigned char)p[2]) && p[3] == '\'' && in_macro_def()) {
+		/* '\1' in a macro body (CHOOSE's case.b: cmpi.b #'\1',d0): the
+		 * argument's character, as written, for as to substitute. */
+		bput(b, p, 4);
+		lx->p = p + 4;
 		return;
 	}
 	if (*p == '\'') {
@@ -1028,6 +1036,11 @@ struct state {
 };
 
 static struct state st;
+
+static int in_macro_def(void)
+{
+	return st.in_macro;
+}
 
 /* sys.l's equates (-e) are left to the linker, as r68 leaves them, where an
  * ELF relocation (symbol + addend) can take them: in a sum whose only
@@ -1936,6 +1949,18 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 	free(text.s);
 }
 
+/* Whether BASE (lower case) is one of r68's conditionals: not any name
+ * beginning with "if" (a macro if.set, called as a statement). */
+static int is_cond(const char *base)
+{
+	static const char *const conds[] = { "ifeq", "ifne", "iflt", "ifle", "ifgt", "ifge", "ifdef", "ifndef",
+		"ifp1", NULL };
+	for (const char *const *c = conds; *c; c++)
+		if (strcmp(base, *c) == 0)
+			return 1;
+	return 0;
+}
+
 /* Whether BASE (lower case) is bra, bsr or a b<cc>. */
 static int is_branch(const char *base)
 {
@@ -2319,10 +2344,20 @@ static char *use_file(const char *arg, const char *from)
 
 /* Whether OP calls a macro defined so far (names in any case, as r68's
  * mnemonics). */
+/* The name a macro was defined with, for OP: a renamed macro's call (see
+ * the macro statement: a dotted name, a case clash) has its new name. */
+static const char *macro_orig(const char *op)
+{
+	for (int i = 0; i < st.nmren; i++)
+		if (strcmp(op, st.mren_to[i]) == 0)
+			return st.mren_from[i];
+	return op;
+}
+
 static int is_macro(const char *op)
 {
 	for (int i = 0; i < st.nmacros; i++)
-		if (ci_eq(st.macros[i], op))
+		if (ci_eq(st.macros[i], op) || ci_eq(st.macros[i], macro_orig(op)))
 			return 1;
 	return 0;
 }
@@ -2350,7 +2385,7 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
 	unsigned fold = 0;
 	for (int i = 0; i < st.nmacros; i++)
-		if (ci_eq(st.macros[i], name))
+		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name)))
 			fold = st.macro_fold[i];
 	int save_ok = r68x_ok;
 	r68x_ok = 0;	/* folded as before: see r68x_ok */
@@ -2395,7 +2430,7 @@ static void macro_aliases(const char *name, const char *args)
 {
 	int m = -1;
 	for (int i = 0; i < st.nmacros; i++)
-		if (ci_eq(st.macros[i], name))
+		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name)))
 			m = i;
 	if (m < 0 || st.macro_shapes[m].s == NULL)
 		return;
@@ -2678,7 +2713,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	static const char *const fold_ops[] = { "ds", "dz", "do", "lo", "org", "rept", "align", NULL };
 	static const char *const quick_ops[] = { "addq", "subq", "asl", "asr", "lsl", "lsr", "rol", "ror",
 		"roxl", "roxr", NULL };
-	fold_all = strncmp(base, "if", 2) == 0;
+	fold_all = is_cond(base);
 	for (int i = 0; fold_ops[i] && !fold_all; i++)
 		fold_all = strcmp(base, fold_ops[i]) == 0;
 	r68x_ok = strcmp(base, "equ") != 0 && strcmp(base, "set") != 0;
@@ -2991,7 +3026,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0 || strcmp(base, "ds") == 0 ||
-	    strncmp(base, "if", 2) == 0 || strcmp(base, "align") == 0 || strcmp(base, "else") == 0 ||
+	    is_cond(base) || strcmp(base, "align") == 0 || strcmp(base, "else") == 0 ||
 	    strcmp(base, "endc") == 0 || strcmp(base, "macro") == 0 || strcmp(base, "endm") == 0 ||
 	    strcmp(base, "endr") == 0 || strcmp(base, "os9") == 0 || strcmp(base, "tcall") == 0) {
 		/* A macro whose body uses \Ln: defined as NAME__r68, called
@@ -3041,7 +3076,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_ifs = 0;
 		} else if (strcmp(base, "endm") == 0) {
 			st.in_macro = 0;
-		} else if (!st.in_macro && strncmp(base, "if", 2) == 0) {
+		} else if (!st.in_macro && is_cond(base)) {
 			st.cond_depth++;
 		} else if (!st.in_macro && strcmp(base, "endc") == 0) {
 			/* An endc that closes nothing (also
@@ -3051,7 +3086,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				goto done;
 			}
 			st.cond_depth--;
-		} else if (st.in_macro && strncmp(base, "if", 2) == 0) {
+		} else if (st.in_macro && is_cond(base)) {
 			st.macro_ifs++;
 		} else if (st.in_macro && strcmp(base, "endc") == 0) {
 			if (st.macro_ifs == 0) {
