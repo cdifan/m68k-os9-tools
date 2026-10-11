@@ -1032,6 +1032,7 @@ struct state {
 	char *psect;		/* the psect line's fields */
 	char *psect_args;
 	char ps_captured[8];	/* the psect's values captured where it is (r68__ps<n>) */
+	int npsects;		/* psect statements (in conditionals: either) */
 	char **complete;	/* equ and set names whose value is known where they are */
 	int ncomplete;
 	struct buf globals;	/* xdef lines for the epilogue */
@@ -3278,6 +3279,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 
 	if (strcmp(base, "psect") == 0) {
 		st.in_psect = 1;
+		st.npsects++;
 		free(st.psect_args);
 		st.psect_args = xstrdup(l.args);
 		{
@@ -4457,6 +4459,10 @@ int main(int argc, char **argv)
 		int k = split_commas(st.psect_args, strlen(st.psect_args), pieces, lens, 8);
 		static const char *const names[] = { NULL, "__os9_typelang", "__os9_attrev", "__os9_edition",
 			"__os9_stack", "__os9_entry", "__os9_trapent" };
+		if (st.npsects > 1)
+			/* two psect statements (a source's in ifdef MODULE / else): which
+			 * one is assembled isn't known here, the values at the end */
+			memset(st.ps_captured, 0, sizeof st.ps_captured);
 		if (k >= 2) {
 			/* r68__ps<n>: the values at the psect statement where
 			 * they were known there (expr_complete), else the
