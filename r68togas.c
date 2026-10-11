@@ -2672,8 +2672,37 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		} else if (lens[i] >= 2 && ((pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') ||
 					    (pieces[i][0] == '\'' && pieces[i][lens[i] - 1] == '\''))) {
 			/* r68 strips either kind of quotes from an argument
-			 * (TrW '@7' with #'\1' in the body: '@7') */
-			bput(b, pieces[i] + 1, lens[i] - 2);
+			 * (MAC '@7' with #'\1' in the body: '@7'); in "...",
+			 * a backslash takes the next character, and a string
+			 * left in it ("\"ABC: \"", a macro's for a dc.b
+			 * \1) is one in as's quotes, '...' */
+			const char *a = pieces[i] + 1;
+			size_t an = lens[i] - 2;
+			if (pieces[i][0] == '"' && memchr(a, '\\', an) != NULL) {
+				struct buf u = { 0 };
+				for (size_t c = 0; c < an; c++) {
+					if (a[c] == '\\' && c + 1 < an)
+						c++;
+					bputc(&u, a[c]);
+				}
+				struct buf q = { 0 };
+				int in = 0;
+				for (size_t c = 0; c < u.n; c++) {
+					if (u.s[c] == '"') {
+						bputc(&q, '\'');
+						in = !in;
+					} else if (in && u.s[c] == '\'') {
+						bputs(&q, "''");
+					} else {
+						bputc(&q, u.s[c]);
+					}
+				}
+				bput(b, q.s ? q.s : "", q.n);
+				free(u.s);
+				free(q.s);
+			} else {
+				bput(b, a, an);
+			}
 			angled = 1;
 		} else if (memchr(pieces[i], '"', lens[i]) != NULL) {
 			/* quotes inside an argument (MAC.l #"'"Done"'":
