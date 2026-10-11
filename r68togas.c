@@ -2483,6 +2483,18 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 {
 	const char *pieces[64];
 	size_t lens[64];
+	/* \' in a macro body is a quote when it expands (MAC.w
+	 * #\'@7\'): as one here */
+	char *unesc = NULL;
+	if (st.in_macro && strstr(args, "\\'")) {
+		unesc = xstrdup(args);
+		char *w = unesc;
+		for (const char *r = args; *r; r++)
+			if (!(r[0] == '\\' && r[1] == '\''))
+				*w++ = *r;
+		*w = '\0';
+		args = unesc;
+	}
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
 	unsigned fold = 0;
 	for (int i = 0; i < st.nmacros; i++)
@@ -2501,7 +2513,10 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 			 * as's MRI macros drop a bare one, which counts in r68's
 			 * \# and moves the later ones */
 			bputs(b, "<>");
-		} else if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
+		} else if (lens[i] >= 2 && ((pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') ||
+					    (pieces[i][0] == '\'' && pieces[i][lens[i] - 1] == '\''))) {
+			/* r68 strips either kind of quotes from an argument
+			 * (TrW '@7' with #'\1' in the body: '@7') */
 			put_angle(b, pieces[i] + 1, lens[i] - 2);
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
 			   (lens[i] == 4 || pieces[i][4] == '.')) {
@@ -2521,6 +2536,7 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		fold_all = save;
 	}
 	r68x_ok = save_ok;
+	free(unesc);
 }
 
 /* Whether the macro body in TEXT (up to its endm line) uses \#. */
@@ -3271,6 +3287,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (strcmp(base, "equ") != 0 && strcmp(base, "set") != 0 && strcmp(base, "ds") != 0 &&
 		    strcmp(base, "os9") != 0 && strcmp(base, "tcall") != 0 && strcmp(base, "align") != 0)
 			st.section = NULL;
+		if (strcmp(base, "ifp1") == 0) {
+			/* r68's first pass only (defsfile: ifp1, use
+			 * oskdefs.d, endc): its definitions hold in the
+			 * second; as has one pass */
+			bprintf(out, "%s ifne 1%s", labs, rest);
+			annotate_op = 1;
+			goto done;
+		}
 		bprintf(out, "%s %s ", labs, l.op);
 		if (strcmp(base, "macro") == 0 && l.label) {
 			st.macros = xrealloc(st.macros, (st.nmacros + 1) * sizeof *st.macros);

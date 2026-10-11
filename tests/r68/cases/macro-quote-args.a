@@ -1,0 +1,26 @@
+* r68 strips single quotes from a macro argument as it does double ones (TrW 'Q5' with #'\1' in
+* the body: 'Q5'; it was made a number first); \' in a macro body is a quote when the body
+* expands (TrW \'Q5\'); ifp1 (r68's first pass) is a true conditional (a defs file's ifp1, use,
+* endc).
+* fixed: b4c9943 2026-10-11 r68togas: quoted macro arguments; \' in macro bodies; ifp1
+* expect text: 3afc5135 3afc6162 3afc5135 3afc6162 3afc0000 3afc0007
+TrW MACRO
+ move.w #'\1',(a5)+
+ endm
+TrN MACRO
+ move.w #\1,(a5)+
+ endm
+T2 macro * comment
+ TrW \'Q5\'	* a comment
+ TrW \'ab\'
+ endm
+ ifp1
+SEVEN equ 7
+ endc
+ psect macro_quote_args,0,0,0,0,0
+ TrW 'Q5'
+ TrW ab
+ T2
+ TrN "cd"
+ TrN SEVEN
+ ends
