@@ -236,6 +236,8 @@ static int annotate;
 static int global_label(const char *s, size_t n);
 static void put_twin(struct buf *b, const char *s, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
+static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
+static int p1_name(struct buf *b, const char *s, size_t n);
 
 static void parse_unary(struct lexer *lx, struct buf *b)
 {
@@ -395,6 +397,10 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			lx->p = q;
 			return;
 		}
+		if (p1_mode && p1_name(b, p, q - p)) {
+			lx->p = q;
+			return;
+		}
 		put_symbol(b, p, q - p);
 		if (forward_set(p, q - p))
 			bputs(b, "__final");
@@ -478,6 +484,7 @@ static char *fold_equates(const char *s);
 static FILE *fold_log;			/* R68TOGAS_FOLDLOG: where the folds are listed */
 static const char *log_path = "";	/* the line being translated, for it */
 static int log_line;
+static struct buf line_before;	/* lines translate_file writes before the line's */
 
 /* Translates expression text E (N chars) into B; returns 0 when it isn't
  * one r68 would take whole (then copied as it is). */
@@ -985,6 +992,8 @@ struct state {
 	int nset_done;
 	char **finals;		/* those referred to before their first set */
 	int nfinals;
+	char **p1s;		/* finals with a NAME__p1 (their value in r68's first pass) */
+	int np1s;
 	char **folded;		/* the names of -e (sys.l's equates) */
 	char **foldval;		/* and their values */
 	int nfolded;
@@ -1647,6 +1656,55 @@ static int forward_set(const char *s, size_t n)
 	return 1;
 }
 
+static int name_in(char **list, int n, const char *s, size_t len)
+{
+	for (int i = 0; i < n; i++)
+		if (strlen(list[i]) == len && strncmp(list[i], s, len) == 0)
+			return 1;
+	return 0;
+}
+
+/* In p1_mode, name S (N chars) as r68's first pass sees it, written to B:
+ * a set symbol not set yet is 0, one with a NAME__p1 that; 0 for the
+ * others (written as usual). */
+static int p1_name(struct buf *b, const char *s, size_t n)
+{
+	if (name_in(st.sets, st.nsets, s, n) && !name_in(st.set_done, st.nset_done, s, n)) {
+		bputs(b, "0");
+		return 1;
+	}
+	if (name_in(st.p1s, st.np1s, s, n)) {
+		put_symbol(b, s, n);
+		bputs(b, "__p1");
+		return 1;
+	}
+	return 0;
+}
+
+/* LABEL set ARGS (outside macro definitions) of a symbol referred to
+ * before its first set: r68 took the value it had at the end of its first
+ * pass there, where set symbols not set yet were 0 (X set Y with Y set
+ * later: 0, not Y's value). Its first-pass value LABEL__p1, set on a line
+ * before (line_before), which NAME__final takes at the end. */
+static void p1_set(const char *label, const char *args)
+{
+	if (!name_in(st.finals, st.nfinals, label, strlen(label)))
+		return;
+	struct buf pre = { 0 };
+	put_symbol(&pre, label, strlen(label));
+	bputs(&pre, "__p1 set ");
+	p1_mode = 1;
+	expression(&pre, args, strlen(args));
+	p1_mode = 0;
+	bprintf(&pre, "\n# %d \"%s\"\n", log_line, log_path);
+	bput(&line_before, pre.s, pre.n);
+	free(pre.s);
+	if (!name_in(st.p1s, st.np1s, label, strlen(label))) {
+		st.p1s = xrealloc(st.p1s, (st.np1s + 1) * sizeof *st.p1s);
+		st.p1s[st.np1s++] = xstrdup(label);
+	}
+}
+
 /* Whether the macro body in TEXT (up to its endm line) uses \Ln. */
 static int uses_length(const char *text)
 {
@@ -2255,7 +2313,6 @@ static void put_angle(struct buf *b, const char *s, size_t n)
 	bputc(b, '>');
 }
 
-static struct buf line_before;	/* lines translate_file writes before the line's */
 
 static void macro_arguments(struct buf *b, const char *args, const char *name)
 {
@@ -2806,6 +2863,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		/* set where it is assembled: not in a macro definition, whose
 		 * lines run where it is called */
 		if (!st.in_macro) {
+			if (strcmp(base, "set") == 0 && l.args)
+				p1_set(l.label, l.args);
 			st.set_done = xrealloc(st.set_done, (st.nset_done + 1) * sizeof *st.set_done);
 			st.set_done[st.nset_done++] = xstrdup(l.label);
 		}
@@ -3604,12 +3663,13 @@ int main(int argc, char **argv)
 		fprintf(out, "%s\n", st.twins.s + 1);
 	fputs(st.epilogue_more.s ? st.epilogue_more.s : "", out);
 	fputs("r68__0 equ 0\n", out);
-	/* set symbols referred to before their first set: their final value,
-	 * as r68 (two passes) takes it */
+	/* set symbols referred to before their first set: their value at the
+	 * end of r68's first pass (p1_set), as r68 (two passes) takes it */
 	for (int i = 0; i < st.nfinals; i++) {
 		struct buf nm = { 0 };
 		put_symbol(&nm, st.finals[i], strlen(st.finals[i]));
-		fprintf(out, "%s__final equ %s\n", nm.s, nm.s);
+		fprintf(out, "%s__final equ %s%s\n", nm.s, nm.s,
+			name_in(st.p1s, st.np1s, st.finals[i], strlen(st.finals[i])) ? "__p1" : "");
 		free(nm.s);
 	}
 	if (st.psect_args != NULL) {

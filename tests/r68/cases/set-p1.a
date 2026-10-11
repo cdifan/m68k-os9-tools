@@ -1,0 +1,13 @@
+* A set symbol used before its first set takes its value at the end of r68's first pass, where
+* set symbols not set yet were 0: X set Y+1 with Y set later is 1 there. After its set, X is Y's
+* final+1.
+* fixed: 2f92f5a 2026-10-11 r68togas: set symbols used before their set, as r68's first pass
+* expect text: 0001001f 001e4e71
+ psect set_p1,0,0,0,0,0
+ dc.w X
+X set Y+1
+ dc.w X
+Y set 25
+Y set 30
+ dc.w Y
+ ends
