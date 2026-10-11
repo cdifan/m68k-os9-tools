@@ -280,7 +280,10 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		if (*q != '\0')
 			q++;
 		if (p[1] == '#')
-			bputs(b, "NARG");
+			/* r68 counts empty arguments too, as's NARG doesn't:
+			 * the count the call set, captured by the expansion
+			 * (narg_capture) */
+			bputs(b, "r68__n\\@");
 		else if ((p[1] == 'L' || p[1] == 'l') && isdigit((unsigned char)p[2]))
 			/* \Ln: the length of argument n, counted by r68L */
 			bprintf(b, "r68__L%c", p[2]);
@@ -1019,6 +1022,14 @@ struct state {
 	char **equates;		/* names defined by equ, set, do, lo so far */
 	int nequates;
 	int nmacros;
+	char *macro_narg;	/* per macro: its body uses \# (narg_capture) */
+	/* as's MRI mode aligns at any directive after an odd dc.b, a line
+	 * marker too: after byte data (maybe_odd) the lines put before a
+	 * statement (line_before) get no marker; one is owed, written before
+	 * the next statement that aligns anyway (aligning: an instruction,
+	 * dc.w ...) */
+	int maybe_odd, marker_owed, aligning;
+	int narg_pending;	/* the macro defined on the line before uses \# */
 	unsigned *macro_fold;	/* per macro: the parameters (bit n-1 for \n) used where
 				   equates are folded in (see fold_equates) */
 	struct buf *macro_shapes;	/* per macro: its link-time expressions of parameters,
@@ -1669,6 +1680,16 @@ static int forward_set(const char *s, size_t n)
 	return 1;
 }
 
+/* The line marker after lines put before a statement (line_before), which
+ * keeps the line numbers; after byte data owed (see maybe_odd). */
+static void put_marker(struct buf *b)
+{
+	if (st.maybe_odd)
+		st.marker_owed = 1;
+	else
+		bprintf(b, "# %d \"%s\"\n", log_line, log_path);
+}
+
 static int name_in(char **list, int n, const char *s, size_t len)
 {
 	for (int i = 0; i < n; i++)
@@ -1709,7 +1730,8 @@ static void p1_set(const char *label, const char *args)
 	p1_mode = 1;
 	expression(&pre, args, strlen(args));
 	p1_mode = 0;
-	bprintf(&pre, "\n# %d \"%s\"\n", log_line, log_path);
+	bputc(&pre, '\n');
+	put_marker(&pre);
 	bput(&line_before, pre.s, pre.n);
 	free(pre.s);
 	if (!name_in(st.p1s, st.np1s, label, strlen(label))) {
@@ -2474,7 +2496,12 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 			fold_all = 1;
 		if (i)
 			bputc(b, ',');
-		if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
+		if (lens[i] == 0 && k > 1) {
+			/* an empty argument (MAC X,Y,,,,,,,): <>, as
+			 * as's MRI macros drop a bare one, which counts in r68's
+			 * \# and moves the later ones */
+			bputs(b, "<>");
+		} else if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
 			put_angle(b, pieces[i] + 1, lens[i] - 2);
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
 			   (lens[i] == 4 || pieces[i][4] == '.')) {
@@ -2494,6 +2521,53 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		fold_all = save;
 	}
 	r68x_ok = save_ok;
+}
+
+/* Whether the macro body in TEXT (up to its endm line) uses \#. */
+static int uses_narg(const char *text)
+{
+	if (text == NULL)
+		return 0;
+	for (const char *p = text; *p;) {
+		const char *e = p + strcspn(p, "\r\n");
+		const char *w = p;
+		if (!isspace((unsigned char)*w))
+			while (w < e && !isspace((unsigned char)*w))
+				w++;
+		while (w < e && isspace((unsigned char)*w))
+			w++;
+		if (e - w >= 4 && strncasecmp(w, "endm", 4) == 0 && (e - w == 4 || isspace((unsigned char)w[4])))
+			return 0;
+		if (*p != '*')
+			for (const char *c = p; c + 1 < e; c++)
+				if (c[0] == '\\' && c[1] == '#')
+					return 1;
+		p = e;
+		while (*p == '\r' || *p == '\n')
+			p++;
+	}
+	return 0;
+}
+
+/* A call of macro NAME with ARGS whose body uses \#: r68__narg set to the
+ * number of arguments as r68 counts them (empty ones too: RegMac
+ * CMD_A,DMA,,,,,,, has 9), on a line before (line_before), which the
+ * expansion's first line captures (r68__n\@, so that a call in the body
+ * doesn't change it). */
+static void narg_set(const char *name, const char *args)
+{
+	int m = -1;
+	for (int i = 0; i < st.nmacros; i++)
+		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name)))
+			m = i;
+	if (m < 0 || !st.macro_narg[m])
+		return;
+	const char *pieces[64];
+	size_t lens[64];
+	int k = *args ? split_commas(args, strlen(args), pieces, lens, 64) : 0;
+	bprintf(&line_before, "r68__narg set %d\n", k);
+	if (!st.in_macro)
+		put_marker(&line_before);
 }
 
 /* A call of macro NAME with ARGS: for each of the macro's link-time
@@ -2560,7 +2634,7 @@ static void macro_aliases(const char *name, const char *args)
 		free(text);
 	}
 	if (pre.n > 0 && !st.in_macro)
-		bprintf(&pre, "# %d \"%s\"\n", log_line, log_path);
+		put_marker(&pre);
 	bput(&line_before, pre.s, pre.n);
 	free(pre.s);
 }
@@ -2758,6 +2832,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	log_path = path;
 	log_line = lineno;
 	string_params = st.in_macro;
+	st.aligning = 0;
+	if (st.narg_pending && st.in_macro) {
+		/* the first line of a body that uses \#: the call's count */
+		bputs(&line_before, "r68__n\\@ set r68__narg\n");
+		st.narg_pending = 0;
+	}
 	if (!split_line(text, &l)) {
 		bputs(out, text);
 		return;
@@ -3196,6 +3276,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macros = xrealloc(st.macros, (st.nmacros + 1) * sizeof *st.macros);
 			st.macro_fold = xrealloc(st.macro_fold, (st.nmacros + 1) * sizeof *st.macro_fold);
 			st.macro_fold[st.nmacros] = 0;
+			st.macro_narg = xrealloc(st.macro_narg, (st.nmacros + 1) * sizeof *st.macro_narg);
+			st.macro_narg[st.nmacros] = uses_narg(st.rest_of_file);
+			st.narg_pending = st.macro_narg[st.nmacros];
 			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
 			st.macro_shapes[st.nmacros] = (struct buf){ 0 };
 			int renamed = st.nmren > 0 && strcmp(st.mren_from[st.nmren - 1], l.label) == 0 &&
@@ -3294,6 +3377,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				macro_arguments(out, l.args, l.op);
 				macro_aliases(l.op, l.args);
 			}
+			narg_set(l.op, l.args);
 			bputs(out, rest);
 			goto done;
 		}
@@ -3314,6 +3398,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (is_macro(l.op)) {
 			macro_arguments(out, l.args, l.op);
 			macro_aliases(l.op, l.args);
+			narg_set(l.op, l.args);
 		} else if (strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0) {
 			movem_operands(out, l.args);
 		} else {
@@ -3406,6 +3491,23 @@ done:
 		free(nm.s);
 		free(body);
 	}
+	if (l.op && !st.in_macro) {
+		static const char *const quiet[] = { "equ", "set", "macro", "endm", "ifeq", "ifne", "iflt", "ifle",
+			"ifgt", "ifge", "ifdef", "ifndef", "ifp1", "else", "endc", "opt", "nam", "ttl", "pag", "page",
+			"spc", "use", "xdef", "xref", "org", "do", "lo", "fail", "end", "spanreg", NULL };
+		int q = 0;
+		for (int i = 0; quiet[i] && !q; i++)
+			q = strcmp(base, quiet[i]) == 0;
+		if ((strcmp(base, "dc") == 0 || strcmp(base, "ds") == 0 || strcmp(base, "dz") == 0 ||
+		     strcmp(base, "dcb") == 0) && size == 'b')
+			st.maybe_odd = 1;
+		else if (is_macro(l.op) || is_lmacro(l.op))
+			st.maybe_odd = 1;
+		else if (!q) {
+			st.aligning = !st.in_vsect;
+			st.maybe_odd = 0;
+		}
+	}
 	free(lab.s);
 	free_line(&l);
 }
@@ -3438,6 +3540,10 @@ static void translate_file(const char *path, FILE *out, int depth)
 		if (line_before.n > 0) {
 			fputs(line_before.s, out);
 			line_before.n = 0;
+		}
+		if (st.marker_owed && st.aligning) {
+			fprintf(out, "# %d \"%s\"\n", lineno, path);
+			st.marker_owed = 0;
 		}
 		if ((annotate || annotate_op) && line.s && orig_stmt.n) {
 			/* on the same line, right after the operands, before the

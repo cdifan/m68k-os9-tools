@@ -53,6 +53,11 @@ behind a line marker:
 3. **The epilogue** (`# 1 "r68.epilogue"`): what one pass over the source learned, such as an
    `xdef` for each global label and generated symbols.
 
+A message naming `r68.prelude` or `r68.epilogue` is the translator's, not a line of the source.
+Two cases are a few lines off: after byte data of odd length a line marker would itself make
+`gas` align, so it is written before the next statement that aligns anyway (an instruction, a
+`dc.w`), and lines added before a macro call inside a macro body get no line marker.
+
 ### Separate files
 
 With `-s`, each file the source `use`s is translated into an output file of its own, and `use
@@ -62,6 +67,8 @@ looking at a translation file by file; `m68k-os9-r68` uses the inline output.
 
 - Each `use` file's output starts with `.mri 1` and the macros it defines; the top-level one gets
   the prelude and the one epilogue, with the `xdef`s of all files.
+- A `use` stays inline after byte data of odd length (an `include` there would align in MRI
+  mode) and in a macro body (`gas` would include the file at each expansion).
 
 ### Annotations
 

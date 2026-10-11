@@ -1,0 +1,19 @@
+* r68's \# counts empty arguments too (a,, is 3; a,b,,,,,,, is 9), as's NARG doesn't: the count
+* is set before the call (r68__narg) and captured by the expansion; an empty argument is <> (as's
+* MRI macros dropped a bare one from NARG); after byte data the lines put before a call get no
+* line marker (as aligns at one after an odd dc.b), one is written later.
+* fixed: 2b21de7 2026-10-11 r68togas: \# counts empty arguments
+* expect text: 01020309 09020000
+CNT macro
+ dc.b \#
+ endm
+ psect narg_empty,0,0,0,0,0
+ CNT a
+ CNT a,b
+ CNT a,,
+ CNT a,b,,,,,,,
+ CNT a,,,,,b,c,d,e
+ CNT ,b
+ CNT
+ dc.b 0
+ ends
