@@ -1,6 +1,6 @@
 * cc is r68's other name of ccr (ori #Flag,cc); and ccr, sr are the registers in an instruction
 * also where the source defines such a name (it went as an absolute address).
-* fixed: 477d13c 2026-10-11 r68togas: cc as ccr; register names defined as symbols
+* fixed: 55f07bf 2026-10-11 r68togas: cc as ccr; register names defined as symbols
 * expect text: 003c0001 023c0002 003c0004 4e714e71
 Flag equ 1
  psect ccr_names,0,0,0,0,0
