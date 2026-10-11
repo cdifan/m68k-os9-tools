@@ -1,6 +1,6 @@
 * A label of the source with a dot and a size letter (Fetch.w, Fetch.b) is the label as an
 * operand, not Fetch with a size (an external).
-* fixed: ef08082 2026-10-11 r68togas: dotted labels ending in a size
+* fixed: b350815 2026-10-11 r68togas: dotted labels ending in a size letter
 * expect text: 60024e71 4e714e71
  psect dot_size_label,0,0,0,0,0
  bra.s Fetch.w
