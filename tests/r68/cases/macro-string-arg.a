@@ -1,7 +1,7 @@
 * A double-quoted macro argument with escaped quotes ("\"ABCD: \"" for a dc.b \1 in the body):
 * r68 takes \" as ", so the argument is a string for the body's dc.b, in as's quotes '...'
 * (as crashed on the backslashes once: Internal error, Segmentation fault).
-* fixed: 39cc40d 2026-10-11 r68togas: escaped quotes in a quoted macro argument
+* fixed: d8567b7 2026-10-11 r68togas: escaped quotes in a quoted macro argument
 * expect text: 06414243 443a2002 27274e71
 STR	MACRO
 	  dc.b	Length\@
