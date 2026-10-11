@@ -2639,9 +2639,17 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 	if (strstr(args, "\\'")) {
 		unesc = xstrdup(args);
 		char *w = unesc;
-		for (const char *r = args; *r; r++)
-			if (!(r[0] == '\\' && r[1] == '\''))
+		for (const char *r = args; *r; r++) {
+			/* a quote of the argument's text, not one around it
+			 * (MAC.l \'AbCd\': 'AbCd', a number): \1 until the
+			 * argument is written */
+			if (r[0] == '\\' && r[1] == '\'') {
+				*w++ = '\1';
+				r++;
+			} else {
 				*w++ = *r;
+			}
+		}
 		*w = '\0';
 		args = unesc;
 	}
@@ -2732,10 +2740,27 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			/* a mnemonic with its size (MAC tst.b,V_Mine): as it is,
 			 * not a name with a dot (see put_symbol) */
 			bput(b, pieces[i], lens[i]);
+		} else if (lens[i] > 0 && (isalpha((unsigned char)pieces[i][0]) || pieces[i][0] == '_') &&
+			   strspn(pieces[i], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$") == lens[i] &&
+			   clashes(pieces[i], lens[i])) {
+			/* a name as takes for a register (TC: a bit TC,
+			 * which the body makes mTC and bTC): as it is, a part
+			 * of the names the body makes (NAME__r68 made bTC__r68) */
+			bput(b, pieces[i], lens[i]);
+		} else if (memchr(pieces[i], '\1', lens[i]) != NULL) {
+			char *t = xstrndup(pieces[i], lens[i]);
+			for (char *c = t; *c; c++)
+				if (*c == '\1')
+					*c = '\'';
+			operand(b, t, lens[i], 0);
+			free(t);
 		} else {
 			operand(b, pieces[i], lens[i], 0);
 		}
 		b = out_b;
+		for (size_t c = 0; c < arg.n; c++)
+			if (arg.s[c] == '\1')
+				arg.s[c] = '\'';
 		const char *t = arg.s ? arg.s : "";
 		if (lmacro && (angled || strpbrk(t, "!<>") != NULL)) {
 			/* through r68L, which passes it on in <> again: its

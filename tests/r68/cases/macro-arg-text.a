@@ -1,0 +1,16 @@
+* Escaped quotes are the argument's own (TR.l \'AbCd\': 'AbCd', a number as an address, not
+* quotes r68 strips around it); a name as takes for a register (TC) passed as it is, a part of
+* the names the body makes (it was TC__r68: bTC__r68, and bTC undefined).
+* fixed: 97eb95a 2026-10-11 r68togas: escaped quotes in arguments; register-named arguments
+* expect text: 2af94162 43640800 00034e71
+TR.l macro
+ move.l \1,(a5)+
+ endm
+Mk macro
+b\1 equ \2
+ endm
+ psect macro_arg_text,0,0,0,0,0
+ TR.l \'AbCd\'
+ Mk TC,3
+ btst #bTC,d0
+ ends
