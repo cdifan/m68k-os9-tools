@@ -4095,8 +4095,16 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				int abs_here = (absolute ? i == 0 : addr_op && memchr(pieces[i], '\\', lens[i]) == NULL) &&
 					pieces[i][0] != '#' &&
 					(memchr(pieces[i], '(', lens[i]) == NULL || paren_address(pieces[i], lens[i])) &&
-					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
-				if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
+					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.') &&
+					/* ccr, sr: the registers, also where the source
+					 * defines a name ccr (ori #Carry,ccr) */
+					!is_r68_register(pieces[i], lens[i]);
+				if (lens[i] == 2 && strncasecmp(pieces[i], "cc", 2) == 0) {
+					/* cc: r68's other name of ccr (ori
+					 * #Carry,cc) */
+					bputs(out, "ccr");
+					annotate = 1;
+				} else if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
 					/* No instruction takes a string: a call of a macro
 					 * defined later (SBFDesc ...,"sbgiga" in a macro body),
 					 * whose quoted argument r68 passes without quotes. */
