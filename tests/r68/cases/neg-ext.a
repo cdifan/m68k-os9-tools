@@ -1,0 +1,18 @@
+* A lone external name negated (-M$Exec(a2,d2.l), -P$ProcSz(sp), #-E$Abort, also in parentheses
+* and with a number): a link-time expression, as r68's negative reference; it relied on folding
+* sys.l's value before (-sysl=none: "can't resolve `0' - `M$Exec'").
+* fixed: (not committed) 2026-10-10 r68togas: macro arguments in link-time expressions
+* expect text: 47f22800 4fef0000 303c0000 4fef0000 41e80000 4e75 4e71
+* expect reloc: 00000003 R_68K_8           r68x_32c6f538
+* expect reloc: 00000006 R_68K_16          r68x_a754973d
+* expect reloc: 0000000a R_68K_16          r68x_eaf2de15
+* expect reloc: 0000000e R_68K_16          r68x_a754973d
+* expect reloc: 00000012 R_68K_16          r68x_a754973d+0x00000004
+ psect neg_ext,0,0,0,0,0
+ lea -M$Exec(a2,d2.l),a3
+ lea -P$ProcSz(sp),sp
+ move.w #-E$Abort,d0
+ lea -(P$ProcSz)(sp),sp
+ lea -P$ProcSz+4(a0),a0
+ rts
+ ends

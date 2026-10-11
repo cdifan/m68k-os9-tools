@@ -1,0 +1,35 @@
+* A macro argument in a link-time expression of the body (\1+\1+\1+\1(a3)): through an alias
+* each call sets before it (.Lr68xm<k>), the same r68x_ names as rof2elf makes of r68's
+* references; two lines of one expression, a call repeated, a label on the call, a number, two
+* parameters and one negated, a call in another macro's body with that macro's argument.
+* fixed: (not committed) 2026-10-10 r68togas: macro arguments in link-time expressions
+* expect text: 2f2b0000266b0000 2f2b0000266b0000 2f2b0000266b0000 2f2b0028266b0428 000000000000 2f2b0000266b0000 4e75
+* expect reloc: 00000002 R_68K_16          r68x_3fbf59ac
+* expect reloc: 00000006 R_68K_16          r68x_3fbf59ac+0x00000400
+* expect reloc: 0000000a R_68K_16          r68x_3fbf59ac
+* expect reloc: 00000012 R_68K_16          r68x_649e642b
+* expect reloc: 00000020 R_68K_32          r68x_b0c80d1f+0x00000008
+* expect reloc: 00000024 R_68K_16          r68x_f714269e
+* expect reloc: 0000002c R_68K_16          r68x_c6fb34fd+0x00000400
+* expect sym: T Here 00000010
+* expect nosym: .Lr68xm1
+ psect macro_ext_sum,0,0,0,0,0
+SVC macro
+ move.l \1+\1+\1+\1(a3),-(a7)
+ movea.l \1+\1+\1+\1+256*4(a3),a3
+ endm
+SUM2 macro
+ dc.l \1+\2+8
+ dc.w -\1
+ endm
+OUTER macro
+ SVC \1
+ endm
+ SVC F$Sleep
+ SVC F$Sleep
+Here: SVC F$Send
+ SVC 10
+ SUM2 Ext1,Ext2
+ OUTER F$Link
+ rts
+ ends

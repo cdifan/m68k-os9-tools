@@ -1,0 +1,26 @@
+* Arguments other than a name for a macro's link-time expression of its parameters (0,0,-1;
+* 10+10,7+17,d0): any expression, a quoted one; the alias is set to it before the call (an
+* expression of external names: its r68x_ name, a number: the value).
+* fixed: 707d890 2026-10-10 r68togas: macro arguments in link-time expressions
+* expect text: 2f2b0000266b0000 2f2b0000266b0000 2f2b0050266b0450 2f2bfffc266b03fc 0000 0106 00ad 004a 0001 0106 0000 0000 4e75 4e71
+* expect reloc: 00000002 R_68K_16          r68x_3fbf59ac+0x00000004
+* expect reloc: 00000006 R_68K_16          r68x_3fbf59ac+0x00000404
+* expect reloc: 0000000a R_68K_16          r68x_649e642b
+* expect reloc: 0000002c R_68K_16          F$Link+0x000000ad
+* expect reloc: 0000002e R_68K_16          r68x_5ab18faa+0x0000004b
+ psect macro_ext_args,0,0,0,0,0
+SVC macro
+ move.l \1+\1+\1+\1(a3),-(a7)
+ movea.l \1+\1+\1+\1+256*4(a3),a3
+ endm
+SUMS macro
+ dc.w \2,262,167+6+\1,69+6+\1+\3
+ endm
+ SVC F$Sleep+1
+ SVC "F$Send"
+ SVC 10+10
+ SVC -1
+ SUMS 0,0,-1
+ SUMS F$Link,1,F$Fork
+ rts
+ ends

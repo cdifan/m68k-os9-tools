@@ -1004,6 +1004,9 @@ struct state {
 	int nmacros;
 	unsigned *macro_fold;	/* per macro: the parameters (bit n-1 for \n) used where
 				   equates are folded in (see fold_equates) */
+	struct buf *macro_shapes;	/* per macro: its link-time expressions of parameters,
+					   lines "K TEXT" (see macro_shape) */
+	int nshapes;
 	char **gl;		/* the labels defined with ':' (scan_labels) */
 	int ngl;
 	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
@@ -1079,6 +1082,7 @@ static int external_name(const char *s, size_t n)
  * in fields where they are folded). */
 static int r68x_ok;
 static struct buf r68x_notes;	/* the .r68x section's lines */
+static int lin_params;	/* a macro parameter \1..\9 is a term (macro_shape) */
 
 struct lin {
 	struct r68x x;
@@ -1112,6 +1116,11 @@ static void lin_unary(struct lin *v)
 			v->p++;
 		else
 			v->ok = 0;
+		return;
+	}
+	if (lin_params && *p == '\\' && p[1] >= '1' && p[1] <= '9') {
+		r68x_add(&v->x, p, 2, 1);
+		v->p = p + 2;
 		return;
 	}
 	unsigned long n = 0;
@@ -1238,6 +1247,54 @@ static char *r68x_expression(const char *s)
 	return b.s;
 }
 
+/* In a macro definition, expression text S with parameters that is a
+ * link-time expression whatever names the arguments are (a macro's
+ * \1+\1+\1+\1+256*4, 4*\1): .Lr68xm<k> plus the numbers, an alias that
+ * each call sets for its arguments before the expansion (macro_aliases;
+ * as keeps the value an earlier use saw); <k> numbers the macro's
+ * distinct expressions of terms (two lines may share one). Null if
+ * it isn't one: another symbol of the source, another operator, one
+ * term. */
+static char *macro_shape(const char *s)
+{
+	struct lin v = { { NULL, 0 }, 0, 1, s };
+	lin_params = 1;
+	lin_binary(&v, P_SHIFT);
+	lin_params = 0;
+	unsigned mask = 0;
+	for (int i = 0; i < v.x.n; i++)
+		if (v.x.t[i].sym[0] == '\\')
+			mask |= 1u << (v.x.t[i].sym[1] - '1');
+	if (!v.ok || *v.p != '\0' || mask == 0 || !r68x_needed(&v.x)) {
+		r68x_free(&v.x);
+		return NULL;
+	}
+	char *text = r68x_text(&v.x);
+	r68x_free(&v.x);
+	struct buf *sh = &st.macro_shapes[st.nmacros - 1];
+	int k = 0;
+	for (const char *p = sh->s; p != NULL && *p != '\0' && k == 0;) {
+		const char *e = strchr(p, '\n');
+		int kk, at = 0;
+		if (sscanf(p, "%d %n", &kk, &at) == 1 && at > 0 && (size_t)(e - p - at) == strlen(text) &&
+		    strncmp(p + at, text, e - p - at) == 0)
+			k = kk;
+		p = e + 1;
+	}
+	if (k == 0) {
+		k = ++st.nshapes;
+		bprintf(sh, "%d %s\n", k, text);
+	}
+	free(text);
+	struct buf b = { 0 };
+	bprintf(&b, ".Lr68xm%d", k);
+	long c = (long)(int32_t)(v.c & 0xffffffffUL);
+	unsigned long a = c < 0 ? -(unsigned long)c : (unsigned long)c;
+	if (c != 0)
+		bprintf(&b, a < 10 ? "%c%lu" : "%c$%lx", c < 0 ? '-' : '+', a);
+	return b.s;
+}
+
 /* Expression text S with the folded equates that must be folded replaced by
  * their values; null if nothing is replaced. */
 static char *fold_equates(const char *s)
@@ -1291,12 +1348,14 @@ static char *fold_equates(const char *s)
 			 * file after a macro that uses it) */
 			for (int e = 0; e < st.nsets && !known; e++)
 				known = strlen(st.sets[e]) == j - i && strncmp(st.sets[e], s + i, j - i) == 0;
-			if (!known)
+			if (!known) {
 				nsym++;
-			int k = folded_index(s + i, j - i);
-			if (k >= 0) {
+				/* subtracted (-E$Abort, -M$Exec(a2,d2.l)) */
 				if (prev == '-')
 					neg = 1;
+			}
+			int k = folded_index(s + i, j - i);
+			if (k >= 0) {
 				if (nf < 64) {
 					at[nf] = i;
 					len[nf] = j - i;
@@ -1329,15 +1388,27 @@ static char *fold_equates(const char *s)
 	}
 	if (!(fold_all || nsym > 1 || other_op || neg))
 		return NULL;
-	/* in a macro definition: the arguments for these parameters are
-	 * folded in where the macro is called */
+	/* in a macro definition: a link-time expression of the arguments,
+	 * through an alias each call defines */
+	if (params && st.in_macro && st.nmacros > 0 && r68x_ok && !fold_all) {
+		char *x = macro_shape(s);
+		if (x != NULL) {
+			if (fold_log != NULL)
+				fprintf(fold_log, "%s:%d\tr68xm\t%s\t%s\n", log_path, log_line, s, x);
+			annotate = 1;
+			return x;
+		}
+	}
+	/* otherwise the arguments for these parameters are folded in where
+	 * the macro is called */
 	if (params && st.in_macro && st.nmacros > 0 && st.nfolded > 0)
 		st.macro_fold[st.nmacros - 1] |= params;
 	if (nf == 0) {
-		/* no equate of sys.l's: a sum of external names (ext_tab+TabEnt,
-		 * chose_continue-bas_add), which no relocation takes, as a
-		 * link-time expression too */
-		char *x = !fold_all && !params && r68x_ok && nsym > 1 ? r68x_expression(s) : NULL;
+		/* no equate of sys.l's: a sum of external names (ext_a+EXT_B,
+		 * lab_a-lab_b) or one subtracted (-M$Exec), which no
+		 * relocation takes, as a link-time expression too */
+		char *x = !fold_all && !params && r68x_ok && (nsym > 1 || (nsym == 1 && (neg || other_op))) ?
+			r68x_expression(s) : NULL;
 		if (x != NULL) {
 			if (fold_log != NULL)
 				fprintf(fold_log, "%s:%d\tr68x\t%s\t%s\n", log_path, log_line, s, x);
@@ -2155,6 +2226,8 @@ static void put_angle(struct buf *b, const char *s, size_t n)
 	bputc(b, '>');
 }
 
+static struct buf line_before;	/* lines translate_file writes before the line's */
+
 static void macro_arguments(struct buf *b, const char *args, const char *name)
 {
 	const char *pieces[64];
@@ -2192,6 +2265,75 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		fold_all = save;
 	}
 	r68x_ok = save_ok;
+}
+
+/* A call of macro NAME with ARGS: for each of the macro's link-time
+ * expressions of parameters (macro_shape), a line before the call
+ * (line_before) setting its alias .Lr68xm<k> to the expression for these
+ * arguments, a link-time expression where it is one (a system call macro with F$Sleep:
+ * .Lr68xm1 set r68x_3fbf59ac, 4*F$Sleep), else the expression itself (a
+ * number: mac 0,0,-1). A linemarker after it keeps the call's line
+ * number; not in a macro definition, where an argument may be a parameter
+ * \n of the macro defined, the expression one of that macro's in turn
+ * (macro_shape). */
+static void macro_aliases(const char *name, const char *args)
+{
+	int m = -1;
+	for (int i = 0; i < st.nmacros; i++)
+		if (ci_eq(st.macros[i], name))
+			m = i;
+	if (m < 0 || st.macro_shapes[m].s == NULL)
+		return;
+	const char *pieces[64];
+	size_t lens[64];
+	int na = split_commas(args, strlen(args), pieces, lens, 64);
+	struct buf pre = { 0 };
+	for (const char *p = st.macro_shapes[m].s; *p != '\0';) {
+		const char *e = strchr(p, '\n');
+		int k, tat = 0;
+		if (sscanf(p, "%d %n", &k, &tat) != 1 || tat == 0)
+			break;
+		char *text = xstrndup(p + tat, e - p - tat);
+		p = e + 1;
+		/* the expression for these arguments (a quoted one without its
+		 * quotes, as r68 passes it) */
+		struct buf x = { 0 };
+		for (const char *t = text; *t != '\0'; t++) {
+			if (*t == '\\' && t[1] >= '1' && t[1] <= '9') {
+				int i = t[1] - '1';
+				const char *a = i < na ? pieces[i] : "";
+				size_t n = i < na ? lens[i] : 0;
+				if (n >= 2 && a[0] == '"' && a[n - 1] == '"')
+					a++, n -= 2;
+				bputc(&x, '(');
+				if (n > 0)
+					bput(&x, a, n);
+				else
+					bputc(&x, '0');
+				bputc(&x, ')');
+				t++;
+			} else {
+				bputc(&x, *t);
+			}
+		}
+		/* as an operand: a link-time expression (in a macro definition,
+		 * of its parameters in turn), the equates folded where none can
+		 * take them */
+		bprintf(&pre, ".Lr68xm%d set ", k);
+		int save_ok = r68x_ok, save_all = fold_all;
+		r68x_ok = 1;
+		fold_all = 0;
+		expression(&pre, x.s, x.n);
+		r68x_ok = save_ok;
+		fold_all = save_all;
+		bputc(&pre, '\n');
+		free(x.s);
+		free(text);
+	}
+	if (pre.n > 0 && !st.in_macro)
+		bprintf(&pre, "# %d \"%s\"\n", log_line, log_path);
+	bput(&line_before, pre.s, pre.n);
+	free(pre.s);
 }
 
 /* The movem register mask as l68 reads it: a register list stays, a mask
@@ -2823,6 +2965,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macros = xrealloc(st.macros, (st.nmacros + 1) * sizeof *st.macros);
 			st.macro_fold = xrealloc(st.macro_fold, (st.nmacros + 1) * sizeof *st.macro_fold);
 			st.macro_fold[st.nmacros] = 0;
+			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
+			st.macro_shapes[st.nmacros] = (struct buf){ 0 };
 			int renamed = st.nmren > 0 && strcmp(st.mren_from[st.nmren - 1], l.label) == 0 &&
 				lab.s != NULL && strcmp(st.mren_to[st.nmren - 1], lab.s) == 0;
 			st.macros[st.nmacros++] = xstrdup(renamed ? lab.s : l.label);
@@ -2911,6 +3055,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			if (*l.args) {
 				bputc(out, ',');
 				macro_arguments(out, l.args, l.op);
+				macro_aliases(l.op, l.args);
 			}
 			bputs(out, rest);
 			goto done;
@@ -2931,6 +3076,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		int need = cpu_needed(base, size, l.args);
 		if (is_macro(l.op)) {
 			macro_arguments(out, l.args, l.op);
+			macro_aliases(l.op, l.args);
 		} else if (strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0) {
 			movem_operands(out, l.args);
 		} else {
@@ -3058,6 +3204,10 @@ static void translate_file(const char *path, FILE *out, int depth)
 		st.rest_of_file = text.s + j;
 		annotate = annotate_op = 0;
 		translate_line(raw, &line, path, lineno, out, depth);
+		if (line_before.n > 0) {
+			fputs(line_before.s, out);
+			line_before.n = 0;
+		}
 		if ((annotate || annotate_op) && line.s && orig_stmt.n) {
 			/* on the same line, right after the operands, before the
 			 * line's own comment (a comment in MRI mode after ;) */
