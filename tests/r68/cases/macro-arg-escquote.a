@@ -1,7 +1,7 @@
 * An escaped quote outside quotes in a macro argument (STR \""ab> \""): a quote, not the start
 * of a string (the operand field went to the blank in it); r68 takes the quote, then the quoted
 * part without its quotes, \" in it a quote: "ab> ".
-* fixed: 1b639cc 2026-10-11 r68togas: an escaped quote outside quotes
+* fixed: 1ddc2ae 2026-10-11 r68togas: an escaped quote outside quotes in a macro argument
 * expect text: 0461623e 20055859 5a3a2000 4e714e71
 STR macro
  dc.b Len\@
