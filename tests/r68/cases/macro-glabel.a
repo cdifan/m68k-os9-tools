@@ -1,0 +1,14 @@
+* A global label without parameters in a macro body (Entry: equ *) is exported where the macro is
+* called, as r68 does.
+* fixed: 5ec7df0 2026-10-11 r68togas: global labels in macro bodies exported
+* expect sym: T Entry 00000002
+* expect sym: T ent2 00000002
+mkent macro
+Entry: equ *
+\1: equ *
+ endm
+ psect macro_glabel,0,0,0,0,0
+ nop
+ mkent ent2
+ nop
+ ends

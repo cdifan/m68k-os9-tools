@@ -2168,7 +2168,9 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 		return;
 	}
 	if (cur >= 0) {
-		if (label && strchr(label, '\\') && strstr(label, "\\@") == NULL && gm[cur].npat < 16) {
+		/* (a global label without parameters too:
+		 * Entry: equ *, exported where the macro is called) */
+		if (label && (strchr(label, '\\') || global) && strstr(label, "\\@") == NULL && gm[cur].npat < 16) {
 			gm[cur].glob[gm[cur].npat] = (char)global;
 			gm[cur].pat[gm[cur].npat++] = xstrdup(label);
 		}
