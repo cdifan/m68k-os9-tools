@@ -1273,6 +1273,10 @@ struct lin {
 
 static void lin_binary(struct lin *v, int prec);
 
+static int lin_depth;
+static const char *equate_text(const char *s, size_t n);
+static void lin_binary(struct lin *v, int prec);
+
 static void lin_unary(struct lin *v)
 {
 	const char *p = v->p;
@@ -1332,7 +1336,26 @@ static void lin_unary(struct lin *v)
 		while (symchar((unsigned char)*q))
 			q++;
 		/* only sys.l's equates and external names: a label, a set
-		 * symbol, the location don't go in a note */
+		 * symbol, the location don't go in a note; an equate of
+		 * external names goes as its expression (PD_Mine
+		 * equ PD_Base+18 in M$DTyp+PD_Mine-PD_OPT) */
+		const char *eq = folded_index(p, q - p) < 0 && !external_name(p, q - p) ? equate_text(p, q - p) : NULL;
+		if (eq != NULL && lin_depth < 8) {
+			struct lin sub = { { NULL, 0 }, 0, 1, eq };
+			lin_depth++;
+			lin_binary(&sub, P_SHIFT);
+			lin_depth--;
+			if (!sub.ok || *sub.p != '\0') {
+				v->ok = 0;
+			} else {
+				for (int t = 0; t < sub.x.n; t++)
+					r68x_add(&v->x, sub.x.t[t].sym, strlen(sub.x.t[t].sym), sub.x.t[t].coef);
+				v->c = sub.c;
+			}
+			r68x_free(&sub.x);
+			v->p = q;
+			return;
+		}
 		if (folded_index(p, q - p) < 0 && !external_name(p, q - p))
 			v->ok = 0;
 		else
@@ -2395,6 +2418,19 @@ static int cv_expr(const char **p, long *v)
 }
 
 /* Notes the value of NAME equ ARGS if it is a constant. */
+/* The equ statements' expressions (outside macro bodies), for link-time
+ * expressions of equates of external names (equate_text). */
+static char **eq_names, **eq_texts;
+static int neq;
+
+static const char *equate_text(const char *s, size_t n)
+{
+	for (int i = neq; i-- > 0;)
+		if (strlen(eq_names[i]) == n && strncmp(eq_names[i], s, n) == 0)
+			return eq_texts[i];
+	return NULL;
+}
+
 static void note_value(const char *name, const char *args)
 {
 	const char *p = args;
@@ -3675,6 +3711,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		add_equate(l.label);
 		if (!st.in_macro && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0) && l.args)
 			note_value(l.label, l.args);
+		if (!st.in_macro && strcmp(base, "equ") == 0 && l.args && *l.args) {
+			eq_names = xrealloc(eq_names, (neq + 1) * sizeof *eq_names);
+			eq_texts = xrealloc(eq_texts, (neq + 1) * sizeof *eq_texts);
+			eq_names[neq] = xstrdup(l.label);
+			eq_texts[neq++] = xstrndup(l.args, expression_length(l.args, strlen(l.args)) ?
+						   expression_length(l.args, strlen(l.args)) : strlen(l.args));
+		}
 		if (!st.in_macro && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0) && l.args) {
 			int c = expr_complete(l.args);
 			int had = name_in(st.complete, st.ncomplete, l.label, strlen(l.label));

@@ -1,0 +1,11 @@
+* An equate of external names in a link-time expression goes as its expression (X_Off equ
+* X_Base+18, in lea A$Bcd+X_Off-X_Opt(a1),a5): the sum of the three externals and 18, one note;
+* as had two undefined symbols to add ("invalid operands").
+* fixed: 718bfaf 2026-10-11 r68togas: equates of externals in link-time expressions
+* expect text: 4be90000 4e714e71
+* expect reloc: r68x_e1f7ffd9+0x00000012
+ psect equ_ext,0,0,0,0,0
+X_Off equ X_Base+18
+ lea A$Bcd+X_Off-X_Opt(a1),a5
+ nop
+ ends
