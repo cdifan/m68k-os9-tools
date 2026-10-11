@@ -1,0 +1,10 @@
+* The psect's header values are the ones at the psect statement, where r68 takes them: a value
+* set again after the psect statement gave the later value (the epilogue named the expression).
+* fixed: ca1a357 2026-10-11 r68togas: psect values at the psect statement
+* expect sym: A __os9_attrev 00008000
+* expect text: 00014e71
+AtRv set $8000
+ psect psect_values,$101,AtRv,0,0,0
+AtRv set $8002
+ dc.w 1
+ ends

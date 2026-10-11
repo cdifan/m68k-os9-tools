@@ -3016,6 +3016,23 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		st.in_psect = 1;
 		free(st.psect_args);
 		st.psect_args = xstrdup(l.args);
+		{
+			/* the header values as they are here, where r68 takes
+			 * them (a descriptor template's Attr_Rev, set again by
+			 * the source after it: r68 has the earlier value), as
+			 * r68__ps<n> on lines before, which the epilogue's
+			 * __os9_ symbols name */
+			const char *pieces[8];
+			size_t lens[8];
+			int k = split_commas(l.args, strlen(l.args), pieces, lens, 8);
+			for (int i = 1; i < k && i < 7; i++) {
+				bprintf(&line_before, "r68__ps%d set ", i);
+				expression(&line_before, pieces[i], lens[i]);
+				bputc(&line_before, '\n');
+			}
+			if (k > 1 && !st.in_macro)
+				put_marker(&line_before);
+		}
 		st.section = ".text";
 		bprintf(out, " section .text%s", rest);
 		goto done;
@@ -4045,20 +4062,15 @@ int main(int argc, char **argv)
 		static const char *const names[] = { NULL, "__os9_typelang", "__os9_attrev", "__os9_edition",
 			"__os9_stack", "__os9_entry", "__os9_trapent" };
 		if (k >= 2) {
-			struct buf tl = { 0 };
-			expression(&tl, pieces[1], lens[1]);
-			fprintf(out, " ifne %s\n", tl.s);
+			/* r68__ps<n>: the values at the psect statement */
+			fprintf(out, " ifne r68__ps1\n");
 			for (int i = 1; i < k && i < 7; i++) {
-				struct buf e = { 0 };
-				expression(&e, pieces[i], lens[i]);
 				/* The entry points are code offsets: a number is one
 				 * from the start of the code, as in rof2elf's object. */
 				int code = (i == 5 || i == 6) && is_number(pieces[i], lens[i]);
-				fprintf(out, " xdef %s\n%s equ %s%s\n", names[i], names[i], code ? "r68__btext+" : "", e.s);
-				free(e.s);
+				fprintf(out, " xdef %s\n%s equ %sr68__ps%d\n", names[i], names[i], code ? "r68__btext+" : "", i);
 			}
 			fprintf(out, " endc\n");
-			free(tl.s);
 		}
 		if (k >= 1)
 			psect_name = xstrndup(pieces[0], lens[0]);
