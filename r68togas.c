@@ -4232,13 +4232,18 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				 * assemblers, as takes a short one for a small value.
 				 * Not a branch's target. */
 				int addr_op = memory_instruction(base);
+				/* the address without a bit field ({offset:width}:
+				 * bftst d0{29:3}) */
+				size_t alen = lens[i];
+				if (alen > 2 && pieces[i][alen - 1] == '}' && memchr(pieces[i], '{', alen) != NULL)
+					alen = (size_t)((const char *)memchr(pieces[i], '{', alen) - pieces[i]);
 				int abs_here = (absolute ? i == 0 : addr_op && memchr(pieces[i], '\\', lens[i]) == NULL) &&
-					pieces[i][0] != '#' &&
-					(memchr(pieces[i], '(', lens[i]) == NULL || paren_address(pieces[i], lens[i])) &&
-					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.') &&
+					pieces[i][0] != '#' && alen > 0 &&
+					(memchr(pieces[i], '(', alen) == NULL || paren_address(pieces[i], alen)) &&
+					!register_list(pieces[i], alen) && !(alen > 2 && pieces[i][alen - 2] == '.') &&
 					/* ccr, sr: the registers, also where the source
 					 * defines a name ccr (ori #Carry,ccr) */
-					!is_r68_register(pieces[i], lens[i]);
+					!is_r68_register(pieces[i], alen);
 				if (lens[i] == 2 && strncasecmp(pieces[i], "cc", 2) == 0) {
 					/* cc: r68's other name of ccr (ori
 					 * #Carry,cc) */
@@ -4267,6 +4272,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					twin_mode = 1;
 					operand(out, pieces[i], lens[i], abs_here);
 					twin_mode = 0;
+				} else if (abs_here && alen < lens[i]) {
+					operand(out, pieces[i], alen, 1);
+					operand(out, pieces[i] + alen, lens[i] - alen, 0);
 				} else
 					operand(out, pieces[i], lens[i], abs_here);
 				/* only where as could take it for moveq: a data register;

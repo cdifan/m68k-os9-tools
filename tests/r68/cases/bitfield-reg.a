@@ -1,0 +1,11 @@
+* A bit field operand ({offset:width}) after a data register is the register (bftst d0{29:3}
+* was taken for an address, (d0{29:3}).l); after a bare address that address is long, with the
+* bit field after it.
+* fixed: a04b380 2026-10-11 r68togas: bit field operands
+* options: -m2
+* expect text: e8c00743 e8eb0142 0004e8f9 00420000 004051fc
+ psect bitfield_reg,0,0,0,0,0
+ bftst d0{29:3} a comment
+ bftst 4(a3){5:2}
+ bftst $40{1:2}
+ ends
