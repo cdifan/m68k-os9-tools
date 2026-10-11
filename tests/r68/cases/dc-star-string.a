@@ -1,0 +1,13 @@
+* * in a dc list is the statement's start in r68, also after a string element (dc.w "xy",L-*-4):
+* the string's length, rounded up to the element size, is counted.
+* fixed: b0a664a 2026-10-11 r68togas: * after a string in a dc list
+* expect text: 7879001c 0001001c 00070008 00006162 63126162 6300000e 61620000 00000008 4e714e71
+ psect dc_star_string,0,0,0,0,0
+E dc.w "xy",L-*-4
+ dc.w 1,L-*
+ dc.w 7,8,*
+ dc.b "abc",L-*
+ dc.w "abc",L-*
+ dc.l "ab",L-*
+L nop
+ ends

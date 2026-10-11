@@ -1779,7 +1779,26 @@ static void expression_list(struct buf *b, const char *args, int chars)
 		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars)) &&
 		    whole_quoted(pieces[i], lens[i])) {
 			string_operand(b, pieces[i], lens[i]);
-			offset = -1;	/* a string's length: not counted */
+			/* its length, rounded to the element size (dc.w "er",
+			 * Err-*-4: * is the statement's start) */
+			if (offset >= 0 && dc_size > 0) {
+				long chars = 0;
+				char q = pieces[i][0];
+				for (size_t c = 1; c < lens[i]; c++) {
+					if (pieces[i][c] == q) {
+						if (c + 1 < lens[i] && pieces[i][c + 1] == q)
+							c++;
+						else
+							break;
+					} else if (pieces[i][c] == '\\' && q == '"' && c + 1 < lens[i]) {
+						c++;
+					}
+					chars++;
+				}
+				offset += (chars + dc_size - 1) / dc_size * dc_size;
+			} else {
+				offset = -1;
+			}
 		} else {
 			int save = fold_all;
 			if (i == 0 && fold_first)
