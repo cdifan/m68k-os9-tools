@@ -3553,6 +3553,11 @@ int main(int argc, char **argv)
 	}
 	translate_file(source, out, 0);
 	r68x_ok = 0;
+	/* A psect without ends: the end of its code, before the line marker
+	 * (which as aligns after an odd dc.b, as any directive) */
+	int no_ends = pad_alignment() == 4 && st.in_psect && same_section(".text") && st.cond_depth == 0;
+	if (no_ends)
+		fputs("r68__pend ds.b 0\n", out);
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
 	/* r68 ends a source in a conditional without a word
 	 * (ifne DEBUG): closed here, as doesn't. */
@@ -3571,10 +3576,23 @@ int main(int argc, char **argv)
 		unsigned fill = st.cpu_given ? 0x51FC : 0x4E71;
 		fprintf(out, "* padding: each section to %d, as %s\n", to,
 			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0" : st.cpu_given ? "Ultra C's r68 -m1..6" : "Ultra C's r68");
-		if (to == 2)
+		if (to == 2) {
 			fprintf(out, " section .text\n balign 2,0\n");
-		else
+		} else if (no_ends) {
+			/* A psect without ends (descriptors of 1992-1994 ported
+			 * trees): Ultra C's r68 fills an odd size with zeros to
+			 * 4, an even one as with ends (measured 2026-10-11). The
+			 * line marker added the zero byte (as's MRI alignment
+			 * after an odd dc.b), ds.b the rest where the size at
+			 * r68__pend was 1 mod 4. The label is on a ds.b, which
+			 * isn't aligned (a label alone would move with the
+			 * alignment). */
+			fprintf(out, "* no ends: an odd size filled with zeros\n section .text\n"
+				" ds.b ((r68__pend-r68__btext)&1)*(3-((r68__pend-r68__btext)&3))\n"
+				" balignw %d,$%04X\n", to, fill);
+		} else {
 			fprintf(out, " section .text\n balignw %d,$%04X\n", to, fill);
+		}
 		fprintf(out, " section .data\n balign %d,0\n section .bss\n balign %d\n", to, to);
 		if (st.used_remote)
 			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", to, to);

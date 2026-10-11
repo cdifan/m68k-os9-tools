@@ -1,0 +1,7 @@
+* Padding of a psect without ends (the source just ends): Ultra C's r68 fills an odd-sized code
+* section with zeros to 4 (with ends: a zero byte, then nop).
+* fixed: fe60e36 2026-10-11 r68togas: a psect without ends padded with zeros
+* expect text: 4e710102 03000000
+ psect pad_noends,0,0,0,0,0
+ nop
+ dc.b 1,2,3
