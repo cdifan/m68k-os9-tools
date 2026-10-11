@@ -461,18 +461,35 @@ static void parse_binary(struct lexer *lx, struct buf *b, int prec, int top)
 		lx->p += len;
 		parse_binary(lx, &right, prec + 1, 0);
 		struct buf both = { 0 };
-		bputs(&both, left.s ? left.s : "");
-		bputs(&both, as);
-		if (prec == P_SHIFT && shift_masked() && right.s && !(isdigit((unsigned char)right.s[0]) &&
-								  strspn(right.s, "0123456789") == strlen(right.s) &&
-								  atoi(right.s) < 32)) {
+		struct buf count = { 0 };
+		int small = right.s && isdigit((unsigned char)right.s[0]) &&
+			    strspn(right.s, "0123456789") == strlen(right.s) && atoi(right.s) < 32;
+		if (prec == P_SHIFT && shift_masked() && right.s && !small) {
 			/* Ultra C's r68 shifts as the x86 does, the count
 			 * modulo 32 (1<<8+199 is 1<<15); C 3.2's
 			 * R68 and as give 0 */
-			bprintf(&both, "((%s)&31)", right.s);
+			bprintf(&count, "((%s)&31)", right.s);
 		} else {
-			bputs(&both, right.s ? right.s : "");
+			bputs(&count, right.s ? right.s : "");
 		}
+		if (prec == P_SHIFT && strcmp(as, ">>") == 0 && left.s) {
+			/* Both r68s shift a 32-bit signed value: arithmetic
+			 * ($80000000>>4 is $f8000000); as's >> is logical on
+			 * 64 bits. Sign-extended X, (X-(X&(2^n-1)))/2^n. */
+			struct buf x = { 0 };
+			bprintf(&x, "((((%s)+$80000000)&$ffffffff)-$80000000)", left.s);
+			if (small)
+				bprintf(&both, "((%s-(%s&%lu))/%lu)", x.s, x.s,
+					(1ul << atoi(right.s)) - 1, 1ul << atoi(right.s));
+			else
+				bprintf(&both, "((%s-(%s&((1<<%s)-1)))/(1<<%s))", x.s, x.s, count.s, count.s);
+			free(x.s);
+		} else {
+			bputs(&both, left.s ? left.s : "");
+			bputs(&both, as);
+			bputs(&both, count.s ? count.s : "");
+		}
+		free(count.s);
 		free(left.s);
 		free(right.s);
 		left = both;
