@@ -3133,7 +3133,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			}
 		}
 		size_t len = 0, alen = strlen(l.args);
-		if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0 || strcmp(base, "macro") == 0) {
+		if (strcmp(base, "macro") == 0) {
+			/* r68's macro takes no operand: what follows is a comment
+			 * (MAC macro * for old ...), which
+			 * as would take for a parameter list */
+			if (*l.args)
+				bprintf(out, ";%s", l.args);
+		} else if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0) {
 			bputs(out, l.args);
 		} else if (st.c32 && (strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) &&
 			   (len = expression_length(l.args, alen)) > 0 && len < alen) {

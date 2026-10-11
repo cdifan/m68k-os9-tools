@@ -1,0 +1,15 @@
+* What follows macro on its line is a comment (r68's macro takes no operand), with or without
+* a star (TR macro * any comment); as took it for a parameter list ("Bad parameter list for
+* macro").
+* fixed: 952df59 2026-10-11 r68togas: a comment after macro
+* expect text: 2ac04e71
+TR	macro	* a comment of several words
+	move.l	\1,(a5)+
+	endm
+T2 macro a comment without a star
+ nop
+ endm
+ psect macro_comment,0,0,0,0,0
+ TR d0
+ T2
+ ends
