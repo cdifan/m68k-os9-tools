@@ -2525,6 +2525,29 @@ static int small_number(const char *s, size_t n)
 	return v >= -128 && v <= 127;
 }
 
+/* A moveq value of a number 128..255 added to more terms ($80+Ext):
+ * r68 takes the byte, as wants -128..127. */
+static int moveq_high_sum(const char *s, size_t n)
+{
+	const char *p = s, *end = s + n;
+	int radix = 10;
+	if (p < end && (*p == '$' || *p == '%')) {
+		radix = *p == '$' ? 16 : 2;
+		p++;
+	}
+	long v = 0;
+	const char *d = p;
+	for (; p < end && isxdigit((unsigned char)*p); p++) {
+		int c = isdigit((unsigned char)*p) ? *p - '0' : (tolower((unsigned char)*p) - 'a' + 10);
+		if (c >= radix)
+			return 0;
+		v = v * radix + c;
+		if (v > 255)
+			return 0;
+	}
+	return p > d && p < end && (*p == '+' || *p == '-') && v >= 128;
+}
+
 static int known_value(const char *s, size_t n)
 {
 	for (size_t i = 0; i < n;) {
@@ -4262,6 +4285,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					expression(&e, pieces[i] + 1, lens[i] - 1);
 					bprintf(out, "#((%s)&$ff)-(((%s)&$80)<<1)", e.s, e.s);
 					free(e.s);
+					annotate = 1;
+				} else if (strcmp(base, "moveq") == 0 && i == 0 && pieces[i][0] == '#' &&
+					   moveq_high_sum(pieces[i] + 1, lens[i] - 1)) {
+					/* moveq #$80+Ext (an external): the same byte
+					 * with the constant less 256, which as takes */
+					bputs(out, "#-$100+(");
+					expression(out, pieces[i] + 1, lens[i] - 1);
+					bputc(out, ')');
 					annotate = 1;
 				} else if (byte_imm && i == 0 && known_value(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "#(");

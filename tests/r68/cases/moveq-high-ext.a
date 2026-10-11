@@ -1,0 +1,9 @@
+* moveq of a number 128..255 plus an external (moveq #$80+Ext1,d1): r68 takes the byte (a byte
+* reference to Ext1-$80), as refused $80 as out of range.
+* fixed: 7e1b987 2026-10-11 r68togas: moveq #$80+external
+* expect text: 72007400 4e714e71
+ psect moveq_high_ext,0,0,0,0,0
+ moveq #$80+Ext1,d1
+ moveq #200-Ext,d2
+ nop
+ ends
