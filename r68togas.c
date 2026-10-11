@@ -1883,6 +1883,81 @@ static int read_text(const char *path, struct buf *text)
 	return 1;
 }
 
+/* The global labels macro calls make (LABMAC Fail, whose body has
+ * \1: bsr.s past\1), which -b and the twins need to know as the source's
+ * own (macro-label-pcrel). From a line of the pre-scan, its LABEL (null if
+ * none; GLOBAL if with ':') and its statement from the operation, OP: a
+ * macro's global labels made of parameters noted, a call outside macro
+ * definitions giving its arguments' names. */
+static void scan_macro_labels(const char *label, int global, const char *op, char ***globals, int *nglobals)
+{
+	static struct gmacro { char *name; char *pat[8]; int npat; } *gm;
+	static int ngm, cur = -1;
+	size_t n = strcspn(op, " \t");
+	if (n == 5 && strncasecmp(op, "macro", 5) == 0) {
+		cur = -1;
+		if (label == NULL)
+			return;
+		gm = xrealloc(gm, (ngm + 1) * sizeof *gm);
+		gm[ngm] = (struct gmacro){ xstrdup(label), { NULL }, 0 };
+		cur = ngm++;
+		return;
+	}
+	if (n == 4 && strncasecmp(op, "endm", 4) == 0) {
+		cur = -1;
+		return;
+	}
+	if (cur >= 0) {
+		if (label && global && strchr(label, '\\') && strstr(label, "\\@") == NULL && gm[cur].npat < 8)
+			gm[cur].pat[gm[cur].npat++] = xstrdup(label);
+		return;
+	}
+	if (n == 0)
+		return;
+	int m = -1;
+	for (int i = 0; i < ngm; i++)
+		if (gm[i].npat > 0 && strlen(gm[i].name) == n && strncasecmp(gm[i].name, op, n) == 0)
+			m = i;
+	if (m < 0)
+		return;
+	const char *a = op + n;
+	while (*a == ' ' || *a == '\t')
+		a++;
+	size_t alen = strcspn(a, " \t");
+	const char *args[9] = { NULL };
+	size_t lens[9] = { 0 };
+	for (int k = 0; k < 9 && alen > 0; k++) {
+		size_t c = strcspn(a, ",");
+		if (c > alen)
+			c = alen;
+		args[k] = a;
+		lens[k] = c;
+		if (c == alen)
+			break;
+		a += c + 1;
+		alen -= c + 1;
+	}
+	for (int i = 0; i < gm[m].npat; i++) {
+		struct buf nm = { 0 };
+		for (const char *q = gm[m].pat[i]; *q; q++) {
+			if (q[0] == '\\' && q[1] >= '1' && q[1] <= '9') {
+				int k = q[1] - '1';
+				if (args[k])
+					bput(&nm, args[k], lens[k]);
+				q++;
+			} else {
+				bputc(&nm, *q);
+			}
+		}
+		if (nm.s && *nm.s) {
+			*globals = xrealloc(*globals, (*nglobals + 1) * sizeof **globals);
+			(*globals)[(*nglobals)++] = nm.s;
+		} else {
+			free(nm.s);
+		}
+	}
+}
+
 /* Collects the labels PATH and the files it uses define without ':' (for
  * -b), conditionals not considered; a name also defined with ':' is left
  * out (global). */
@@ -1904,8 +1979,8 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 			free(line);
 			continue;
 		}
-		if (*p == '\0' || *p == '*' || *p == ';')
-			continue;
+		char *label = NULL;
+		int label_global = 0;
 		if (!isspace((unsigned char)*p)) {
 			if (*p == '=')
 				p++;
@@ -1922,6 +1997,8 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 					st.sets[st.nsets++] = xstrndup(p, n);
 				}
 			}
+			label = xstrndup(p, n);
+			label_global = p[n] == ':';
 			char **list = p[n] == ':' ? *globals : st.locals;
 			int *count = p[n] == ':' ? nglobals : &st.nlocals;
 			list = xrealloc(list, (*count + 1) * sizeof *list);
@@ -1934,6 +2011,8 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 		}
 		while (*p && (isspace((unsigned char)*p) || *p == ':'))
 			p++;
+		scan_macro_labels(label, label_global, p, globals, nglobals);
+		free(label);
 		if (strncasecmp(p, "use", 3) == 0 && isspace((unsigned char)p[3])) {
 			char *a = p + 3;
 			while (isspace((unsigned char)*a))
