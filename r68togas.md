@@ -39,6 +39,10 @@ A construct the translation doesn't cover is an error naming it, never silently 
 - **Register names are symbols** in MRI mode: a symbol named like a `gas` register (`val`,
   `mask`, `acc`, also `d0` in a source with `-r`) is written `NAME__r68`, and `m68k-os9-r68` gives
   the object's symbols their names back.
+- **MRI mode aligns** at any directive after byte data of odd length, which r68 doesn't: hence the
+  delayed line markers, the empty macros for statements `gas` must not see, macro definitions
+  moved to the file's start, and section switches written only where the section changes.
+- **MRI macros** treat `<...>` and `!` specially: macro arguments are escaped accordingly.
 
 ### Line numbers
 
@@ -130,6 +134,8 @@ Most instruction lines need no change. Where the same text means something else 
   `add` and `sub`, for which `gas` chooses the same); `move.l #n,Dn` stays `move.l` (where `gas`
   would use `moveq`); `d(An)` stays 16 bits, also when 0 (written `(d).w(An)`); `ori.w #x,ccr` is
   `ori.b`.
+- **`moveq #128..255`:** r68 takes the byte; written sign-extended where it isn't a plain small
+  number, and a number plus an external (`moveq #$80+Ext,d1`) as the number less 256.
 - **`movem` with a mask** instead of a register list: r68 reads a mask in register order and
   reverses it for `-(An)` (`#$113` gives `$C880`; `gas` stores `$0113`). With `-(An)` the operand
   becomes a generated symbol (`<symbol>__rev`, or `r68__mask<n>` for an expression), which the
@@ -197,6 +203,8 @@ align it down to even after counting.
 
 - **Precedence:** r68 evaluates `<<` and `>>` after `+` and `-`; MRI before: `1<<8+1` is `$200` in
   r68 and `$101` in `gas`. Every expression is written fully parenthesized by r68's precedence.
+- **`>>`** shifts a 32-bit signed value in both Microware assemblers (`$80000000>>4` is
+  `$f8000000`), `gas` logically on 64 bits: written as a division of the sign-extended value.
 - **`|`** is OR in r68 and starts a comment in `gas`: written `!`. Unary **`^`** (not) is `~`.
   C-style hex **`0x112`** is `$112`. **`$` without a hex digit** takes the value after it.
 - **Strings:** `"..."` is r68's string, written `'...'` in string contexts (`dc.b`, string
@@ -227,6 +235,9 @@ sets the alias to an expression of the outer macro's alias.
 - `\1` ... `\9` work as they are; `\#` (the argument count) is `NARG`.
 - **`\L<n>`** (an argument's length) has no MRI equivalent: a macro using it is called through the
   prelude's `r68L`, which passes the lengths (counting a renamed `@`, `_at_`, as one character).
+- **Quoted arguments** (`"(a1,d1.w)"`) are passed without their quotes, as `<...>`; `!`, `<` and
+  `>` inside are escaped with `!`. An escaped quote outside quotes (`\""ab> \""`) is not the start
+  of a string.
 - **Character constants of parameters** (`cmpi.b #'\1',d0`): each call sets a symbol to the
   argument's value as r68 takes it (quotes stripped, `\'` a quote, the last four characters).
 - **Macro names** are case-sensitive in r68, not in `gas`: a macro whose name only the case tells
@@ -238,6 +249,9 @@ sets the alias to an expression of the outer macro's alias.
   values are known where `moveq` or `move.b` need the byte.
 - **`dc`, `ds` and `dz` in a macro body** go where the macro is called, in the code or a vsect:
   each is written for all three places and chosen when the body expands.
+- **Conditionals a macro body leaves open** (an `iflt ... else` without `endc`): r68 keeps them
+  open after the call, with the rest of the source in them; emulated.
+- **`dc.b` strings of a parameter alone** (`"\2"`) with an empty argument make no byte, as in r68.
 - A macro called with a size (`MAC.w`) is an error in r68 and stays one.
 
 ### Directives
