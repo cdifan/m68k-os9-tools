@@ -1,0 +1,20 @@
+* A macro named as an instruction but for its case (ANDI; r68's macro names are case sensitive,
+* as's not: the instruction andi called it); swap.l (the size ignored); $# (andi.w $#M,d1, a
+* typo r68 takes for #); a psect whose type is set from names defined after it (TL set
+* (Dr<<8)+Ob before the definitions).
+* fixed: 0d8b507 2026-10-11 r68togas: macros named as instructions; swap.l; $#; psect values defined later
+* expect text: 0241ffff 024100e0 4841026b 00020000
+* expect sym: A __os9_typelang 00000e01
+ANDI MACRO
+ andi.w #\1,\2(a3)
+ ENDM
+TL set (Dr<<8)+Ob
+ psect instr_names,TL,0,0,0,0
+M equ $e0
+ andi.w #$ffff,d1
+ andi.w $#M,d1
+ swap.l d1
+ ANDI 2,0
+Dr equ $e
+Ob equ 1
+ ends

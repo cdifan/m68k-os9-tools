@@ -240,6 +240,7 @@ static int p1_mode;	/* an expression as r68's first pass: set symbols not set ye
 static int p1_name(struct buf *b, const char *s, size_t n);
 static int in_macro_def(void);
 static void char_param(struct buf *b, int n);
+static int name_in(char **list, int n, const char *s, size_t len);
 static int shift_masked(void);
 
 static void parse_unary(struct lexer *lx, struct buf *b)
@@ -720,6 +721,13 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 {
 	if (n == 0)
 		return;
+	if (n > 2 && s[0] == '$' && s[1] == '#') {
+		/* $#: r68 skips the $ without digits (andi.w
+		 * $#Mask,d1, a typo it takes for an immediate) */
+		s++;
+		n--;
+		annotate = 1;
+	}
 	if (*s == '#') {
 		bputc(b, '#');
 		int save = fold_all;
@@ -1023,6 +1031,9 @@ struct state {
 	const char *section;	/* the current section, null if not known */
 	char *psect;		/* the psect line's fields */
 	char *psect_args;
+	char ps_captured[8];	/* the psect's values captured where it is (r68__ps<n>) */
+	char **complete;	/* equ and set names whose value is known where they are */
+	int ncomplete;
 	struct buf globals;	/* xdef lines for the epilogue */
 	int masks;		/* r68__mask<n> symbols made */
 	struct buf epilogue_more;
@@ -1065,6 +1076,42 @@ struct state {
 };
 
 static struct state st;
+
+/* Whether the names of expression text S are all equ or set names whose
+ * values were known where they were defined (st.complete), numbers aside:
+ * as has its value there (a set to a name defined later would be 0). */
+static int expr_complete(const char *s)
+{
+	for (const char *p = s; *p;) {
+		if (*p == '$' && isxdigit((unsigned char)p[1])) {
+			p++;
+			while (isxdigit((unsigned char)*p))
+				p++;
+			continue;
+		}
+		if (*p == '\'' || *p == '"') {
+			char q = *p++;
+			while (*p && *p != q)
+				p++;
+			if (*p)
+				p++;
+			continue;
+		}
+		if (isalpha((unsigned char)*p) || *p == '_' || *p == '.' || *p == '@') {
+			const char *q = p;
+			while (isalnum((unsigned char)*q) || *q == '_' || *q == '.' || *q == '@' || *q == '$')
+				q++;
+			if (!name_in(st.complete, st.ncomplete, p, (size_t)(q - p)))
+				return 0;
+			p = q;
+			continue;
+		}
+		if (isspace((unsigned char)*p) || *p == ';')
+			break;
+		p++;
+	}
+	return 1;
+}
 
 static int in_macro_def(void)
 {
@@ -3243,6 +3290,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			size_t lens[8];
 			int k = split_commas(l.args, strlen(l.args), pieces, lens, 8);
 			for (int i = 1; i < k && i < 7; i++) {
+				/* equ of the expression in parentheses: as keeps it
+				 * as an expression, to be resolved at the end, of the
+				 * set symbols as they are here (a bare name set to
+				 * something not yet known would be its value now, 0) */
+				char *t = xstrndup(pieces[i], lens[i]);
+				st.ps_captured[i] = (char)expr_complete(t);
+				free(t);
+				if (!st.ps_captured[i])
+					continue;
 				bprintf(&line_before, "r68__ps%d set ", i);
 				expression(&line_before, pieces[i], lens[i]);
 				bputc(&line_before, '\n');
@@ -3395,6 +3451,18 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		add_equate(l.label);
 		if (!st.in_macro && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0) && l.args)
 			note_value(l.label, l.args);
+		if (!st.in_macro && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0) && l.args) {
+			int c = expr_complete(l.args);
+			int had = name_in(st.complete, st.ncomplete, l.label, strlen(l.label));
+			if (c && !had) {
+				st.complete = xrealloc(st.complete, (st.ncomplete + 1) * sizeof *st.complete);
+				st.complete[st.ncomplete++] = xstrdup(l.label);
+			} else if (!c && had) {
+				for (int i = 0; i < st.ncomplete; i++)
+					if (strcmp(st.complete[i], l.label) == 0)
+						st.complete[i][0] = '\0';
+			}
+		}
 		/* set where it is assembled: not in a macro definition, whose
 		 * lines run where it is called */
 		if (st.in_macro && strcmp(base, "set") == 0 && l.args && *l.args &&
@@ -3750,9 +3818,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			snprintf(opb, sizeof opb, "movea.l");
 			op = opb;
 			annotate_op = 1;
-		} else if (strcmp(base, "exg") == 0 && size) {
-			/* exg.l: r68 takes the size, as doesn't */
-			snprintf(opb, sizeof opb, "exg");
+		} else if ((strcmp(base, "exg") == 0 || strcmp(base, "swap") == 0) && size) {
+			/* exg.l, swap.l: r68 takes the
+			 * size, as doesn't */
+			snprintf(opb, sizeof opb, "%s", base);
 			op = opb;
 			annotate_op = 1;
 		} else if (strcmp(base, "addi") == 0 || strcmp(base, "subi") == 0) {
@@ -4091,6 +4160,19 @@ static int macro_name_clash(const char *name)
 	for (const char *const *d = directives; *d; d++)
 		if (strcasecmp(name, *d) == 0)
 			return 1;
+	/* and the instructions: r68's macro names are case sensitive, so
+	 * a macro ANDI leaves the instruction andi alone, as's call it */
+	static const char *const insns[] = { "abcd", "add", "adda", "addi", "addq", "addx", "and", "andi", "asl",
+		"asr", "bchg", "bclr", "bset", "btst", "bra", "bsr", "bhi", "bls", "bcc", "bcs", "bhs", "blo",
+		"bne", "beq", "bvc", "bvs", "bpl", "bmi", "bge", "blt", "bgt", "ble", "chk", "clr", "cmp", "cmpa",
+		"cmpi", "cmpm", "divs", "divu", "eor", "eori", "exg", "ext", "illegal", "jmp", "jsr", "lea", "link",
+		"lsl", "lsr", "move", "movea", "movem", "movep", "moveq", "muls", "mulu", "nbcd", "neg", "negx",
+		"nop", "not", "or", "ori", "pea", "reset", "rol", "ror", "roxl", "roxr", "rte", "rtr", "rts",
+		"sbcd", "stop", "sub", "suba", "subi", "subq", "subx", "swap", "tas", "trap", "trapv", "tst",
+		"unlk", "dbra", "dbf", "dbt", "st", "sf", "movec", "moves", "rtd", "extb", NULL };
+	for (const char *const *d = insns; *d; d++)
+		if (strcasecmp(name, *d) == 0 && strcmp(name, *d) != 0)
+			return 1;
 	for (int i = 0; i < st.nmacros; i++)
 		if (ci_eq(st.macros[i], name) && strcmp(st.macros[i], name) != 0)
 			return 1;
@@ -4376,13 +4458,28 @@ int main(int argc, char **argv)
 		static const char *const names[] = { NULL, "__os9_typelang", "__os9_attrev", "__os9_edition",
 			"__os9_stack", "__os9_entry", "__os9_trapent" };
 		if (k >= 2) {
-			/* r68__ps<n>: the values at the psect statement */
-			fprintf(out, " ifne r68__ps1\n");
+			/* r68__ps<n>: the values at the psect statement where
+			 * they were known there (expr_complete), else the
+			 * expression at the end, as before. No header symbols
+			 * for a type/language 0 (a library's psect). */
+			struct buf tl = { 0 };
+			if (st.ps_captured[1])
+				bputs(&tl, "r68__ps1");
+			else
+				expression(&tl, pieces[1], lens[1]);
+			fprintf(out, " ifne %s\n", tl.s);
+			free(tl.s);
 			for (int i = 1; i < k && i < 7; i++) {
 				/* The entry points are code offsets: a number is one
 				 * from the start of the code, as in rof2elf's object. */
 				int code = (i == 5 || i == 6) && is_number(pieces[i], lens[i]);
-				fprintf(out, " xdef %s\n%s equ %sr68__ps%d\n", names[i], names[i], code ? "r68__btext+" : "", i);
+				struct buf e = { 0 };
+				if (st.ps_captured[i])
+					bprintf(&e, "r68__ps%d", i);
+				else
+					expression(&e, pieces[i], lens[i]);
+				fprintf(out, " xdef %s\n%s equ %s%s\n", names[i], names[i], code ? "r68__btext+" : "", e.s);
+				free(e.s);
 			}
 			fprintf(out, " endc\n");
 		}
