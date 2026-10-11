@@ -1101,6 +1101,19 @@ static int name_match(const char *pat, const char *n, size_t len)
 	return len > 0 && *pat == *n && name_match(pat + 1, n + 1, len - 1);
 }
 
+/* Whether scanned name PAT is only macro parameters (\1:, LABMAC's): it
+ * would match every name; the names its calls make are scanned instead
+ * (scan_macro_labels). */
+static int only_params(const char *pat)
+{
+	if (*pat != '\\')
+		return 0;
+	for (; *pat; pat += 2)
+		if (pat[0] != '\\' || pat[1] == '\0')
+			return 0;
+	return 1;
+}
+
 /* Whether name S (n chars) is external: defined nowhere in the source or
  * its use files (scan_labels: labels, equ and set names; a name a macro
  * makes, _C\1, as a pattern) nor so far (equ, set), and no register. r68
@@ -1121,7 +1134,7 @@ static int external_name(const char *s, size_t n)
 	int counts[] = { st.nlocals, st.ngl, st.nsets, st.nequates };
 	for (int l = 0; l < 4; l++)
 		for (int i = 0; i < counts[l]; i++)
-			if (name_match(lists[l][i], s, n))
+			if (!only_params(lists[l][i]) && name_match(lists[l][i], s, n))
 				return 0;
 	return 1;
 }
@@ -1818,6 +1831,9 @@ static int cpu_needed(const char *base, char size, const char *args)
 		level = 20;
 	if (strncmp(base, "trap", 4) == 0 && base[4] != '\0' && strcmp(base, "trapv") != 0)
 		level = 20;
+	/* move ccr,<ea>: the 68010's */
+	if (strcmp(base, "move") == 0 && strncasecmp(args, "ccr,", 4) == 0)
+		level = 10;
 	/* movec's 68020 and 68040 control registers */
 	if (strcmp(base, "movec") == 0) {
 		static const struct { const char *reg; int level; } regs[] = {
@@ -1932,7 +1948,7 @@ static int read_text(const char *path, struct buf *text)
  * definitions giving its arguments' names. */
 static void scan_macro_labels(const char *label, int global, const char *op, char ***globals, int *nglobals)
 {
-	static struct gmacro { char *name; char *pat[8]; int npat; } *gm;
+	static struct gmacro { char *name; char *pat[8]; char glob[8]; int npat; } *gm;
 	static int ngm, cur = -1;
 	size_t n = strcspn(op, " \t");
 	if (n == 5 && strncasecmp(op, "macro", 5) == 0) {
@@ -1940,7 +1956,7 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 		if (label == NULL)
 			return;
 		gm = xrealloc(gm, (ngm + 1) * sizeof *gm);
-		gm[ngm] = (struct gmacro){ xstrdup(label), { NULL }, 0 };
+		gm[ngm] = (struct gmacro){ xstrdup(label), { NULL }, { 0 }, 0 };
 		cur = ngm++;
 		return;
 	}
@@ -1949,8 +1965,10 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 		return;
 	}
 	if (cur >= 0) {
-		if (label && global && strchr(label, '\\') && strstr(label, "\\@") == NULL && gm[cur].npat < 8)
+		if (label && strchr(label, '\\') && strstr(label, "\\@") == NULL && gm[cur].npat < 8) {
+			gm[cur].glob[gm[cur].npat] = (char)global;
 			gm[cur].pat[gm[cur].npat++] = xstrdup(label);
+		}
 		return;
 	}
 	if (n == 0)
@@ -1991,8 +2009,15 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 			}
 		}
 		if (nm.s && *nm.s) {
-			*globals = xrealloc(*globals, (*nglobals + 1) * sizeof **globals);
-			(*globals)[(*nglobals)++] = nm.s;
+			if (gm[m].glob[i]) {
+				*globals = xrealloc(*globals, (*nglobals + 1) * sizeof **globals);
+				(*globals)[(*nglobals)++] = nm.s;
+			} else {
+				/* a local one (RegMac's \1 do.b BW): known as a name of
+				 * the source, not as external */
+				st.locals = xrealloc(st.locals, (st.nlocals + 1) * sizeof *st.locals);
+				st.locals[st.nlocals++] = nm.s;
+			}
 		} else {
 			free(nm.s);
 		}
@@ -2502,10 +2527,10 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 {
 	const char *pieces[64];
 	size_t lens[64];
-	/* \' in a macro body is a quote when it expands (MAC.w
-	 * #\'@7\'): as one here */
+	/* \' is a quote (MAC.w #\'@7\' in a macro body,
+	 * MAC.l #\'Read\' outside): as one here */
 	char *unesc = NULL;
-	if (st.in_macro && strstr(args, "\\'")) {
+	if (strstr(args, "\\'")) {
 		unesc = xstrdup(args);
 		char *w = unesc;
 		for (const char *r = args; *r; r++)
@@ -2539,6 +2564,19 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 			/* r68 strips either kind of quotes from an argument
 			 * (TrW '@7' with #'\1' in the body: '@7') */
 			put_angle(b, pieces[i] + 1, lens[i] - 2);
+		} else if (memchr(pieces[i], '"', lens[i]) != NULL) {
+			/* quotes inside an argument (MAC.l #"'"Done"'":
+			 * #'Done'): r68 strips them too */
+			struct buf t = { 0 };
+			for (size_t c = 0; c < lens[i]; c++)
+				if (pieces[i][c] != '"')
+					bputc(&t, pieces[i][c]);
+			operand(b, t.s ? t.s : "", t.n, 0);
+			free(t.s);
+		} else if (memchr(pieces[i], '=', lens[i]) != NULL) {
+			/* = (Mac >150,=,.b,V_Done(a2)): a keyword argument
+			 * to as's macros; in <> */
+			put_angle(b, pieces[i], lens[i]);
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
 			   (lens[i] == 4 || pieces[i][4] == '.') && i < 9 && (ops & (1u << i))) {
 			/* A mnemonic argument (MAC subi.w,#1,V_Count): as in
@@ -3523,6 +3561,19 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			op = opb;
 			annotate_op = 1;
 		}
+		if (strcmp(base, "movep") == 0 && (l.args[0] == '(' || strstr(l.args, ",(") != NULL)) {
+			/* movep (a1),d0: r68 takes (An) as 0(An), as wants the
+			 * displacement */
+			struct buf a = { 0 };
+			for (const char *c = l.args; *c; c++) {
+				if (*c == '(' && (c == l.args || c[-1] == ','))
+					bputc(&a, '0');
+				bputc(&a, *c);
+			}
+			free(l.args);
+			l.args = a.s;
+			annotate = 1;
+		}
 		/* move.l #n,Dn: r68 doesn't make it moveq, as would. */
 		int no_moveq = strcmp(base, "move") == 0 && size == 'l';
 		/* move.b with a negative immediate: r68 writes the extension
@@ -3814,6 +3865,23 @@ static const char prelude[] =
  * differs from NAME only in case. */
 static int macro_name_clash(const char *name)
 {
+	/* as's own directives, which MRI mode knows without a dot and finds
+	 * before a macro (a macro ERROR: as's error, "argument must be a
+	 * string") */
+	static const char *const directives[] = { "error", "warning", "print", "fail", "abort", "include",
+		"incbin", "list", "nolist", "format", "noformat", "page", "nopage", "title", "sbttl", "eject",
+		"space", "skip", "fill", "zero", "string", "ascii", "asciz", "byte", "word", "long", "short",
+		"int", "quad", "octa", "float", "double", "single", "comm", "lcomm", "global", "globl",
+		"extern", "weak", "local", "section", "text", "data", "bss", "offset", "struct", "irp",
+		"irpc", "rept", "rep", "mexit", "purgem", "exitm", "line", "file", "ident", "version", "err",
+		"chip", "cpu", "even", "reg", "save", "restore", "mask2", "comline", "name", "llen", "plen",
+		"psize", "lflags", "func", "endfunc", "for", "endf", "repeat", "until", "while", "endw",
+		"endi", "elseif", "equiv", "eqv", "sleb128", "uleb128", "p2align", "balign", "balignw",
+		"balignl", "ds", "dcb", "dx", "dsb", "xcom", "xdef", "xref", "size", "type", "tag", "val",
+		"desc", "dim", "scl", "def", "endef", "loc", "debug", NULL };
+	for (const char *const *d = directives; *d; d++)
+		if (strcasecmp(name, *d) == 0)
+			return 1;
 	for (int i = 0; i < st.nmacros; i++)
 		if (ci_eq(st.macros[i], name) && strcmp(st.macros[i], name) != 0)
 			return 1;
