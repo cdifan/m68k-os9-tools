@@ -1,0 +1,21 @@
+* A set symbol used before its first set, set again in a macro body (after a default set): r68's
+* first pass ran the body too, so the earlier uses take its value; a set in a conditional the
+* expansion leaves out takes nothing (it was an undefined NAME__p1).
+* fixed: 1ba6287 2026-10-11 r68togas: first-pass values of sets in macro bodies; psect without ends
+* expect text: 00070000
+ psect set_p1_macro,0,0,0,0,0
+ dc.b Sides
+ dc.b Dev
+ dc.w 0
+Sides set 2
+DESC macro
+ ifeq \1-1
+Sides set 0
+ endc
+ ifeq \1-2
+Dev set 5
+ endc
+ endm
+ DESC 1
+Dev set 7
+ ends

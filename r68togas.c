@@ -3193,6 +3193,22 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			note_value(l.label, l.args);
 		/* set where it is assembled: not in a macro definition, whose
 		 * lines run where it is called */
+		if (st.in_macro && strcmp(base, "set") == 0 && l.args && *l.args &&
+		    name_in(st.finals, st.nfinals, l.label, strlen(l.label))) {
+			/* in a macro body (a descriptor template's Heads set 0 for
+			 * an autosize device): the first pass ran it too, where
+			 * the body expands; its value as is */
+			struct buf nm = { 0 };
+			put_symbol(&nm, l.label, strlen(l.label));
+			bprintf(&line_before, "%s__p1 set ", nm.s);
+			expression(&line_before, l.args, strlen(l.args));
+			bputc(&line_before, '\n');
+			free(nm.s);
+			if (!name_in(st.p1s, st.np1s, l.label, strlen(l.label))) {
+				st.p1s = xrealloc(st.p1s, (st.np1s + 1) * sizeof *st.p1s);
+				st.p1s[st.np1s++] = xstrdup(l.label);
+			}
+		}
 		if (!st.in_macro) {
 			if (strcmp(base, "set") == 0 && l.args)
 				p1_set(l.label, l.args);
@@ -4012,7 +4028,7 @@ int main(int argc, char **argv)
 	r68x_ok = 0;
 	/* A psect without ends: the end of its code, before the line marker
 	 * (which as aligns after an odd dc.b, as any directive) */
-	int no_ends = pad_alignment() == 4 && st.in_psect && same_section(".text") && st.cond_depth == 0;
+	int no_ends = pad_alignment() == 4 && st.in_psect && !st.in_vsect && (st.section == NULL || same_section(".text")) && st.cond_depth == 0;
 	if (no_ends)
 		fputs("r68__pend ds.b 0\n", out);
 	fprintf(out, "# 1 \"r68.epilogue\"\n");
@@ -4066,8 +4082,12 @@ int main(int argc, char **argv)
 	for (int i = 0; i < st.nfinals; i++) {
 		struct buf nm = { 0 };
 		put_symbol(&nm, st.finals[i], strlen(st.finals[i]));
-		fprintf(out, "%s__final equ %s%s\n", nm.s, nm.s,
-			name_in(st.p1s, st.np1s, st.finals[i], strlen(st.finals[i])) ? "__p1" : "");
+		/* (a NAME__p1 a conditional left out: NAME) */
+		if (name_in(st.p1s, st.np1s, st.finals[i], strlen(st.finals[i])))
+			fprintf(out, " ifdef %s__p1\n%s__final equ %s__p1\n else\n%s__final equ %s\n endc\n", nm.s, nm.s,
+				nm.s, nm.s, nm.s);
+		else
+			fprintf(out, "%s__final equ %s\n", nm.s, nm.s);
 		free(nm.s);
 	}
 	if (st.psect_args != NULL) {
