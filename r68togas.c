@@ -2129,6 +2129,32 @@ static char *join(const char *dir, size_t n, const char *name)
 	return r;
 }
 
+/* NAME with OS-9's multi-dot path components (... the parent's parent,
+ * .... one more up) as ../ ones; NAME itself freed. */
+static char *os9_dots(char *name)
+{
+	struct buf b = { 0 };
+	const char *p = name;
+	while (*p) {
+		const char *e = strchr(p, '/');
+		size_t n = e ? (size_t)(e - p) : strlen(p);
+		size_t dots = strspn(p, ".");
+		if (dots == n && n >= 3) {
+			for (size_t i = 1; i < n; i++)
+				bprintf(&b, i > 1 ? "/.." : "..");
+		} else {
+			bprintf(&b, "%.*s", (int)n, p);
+		}
+		p += n;
+		if (*p == '/') {
+			bprintf(&b, "/");
+			p++;
+		}
+	}
+	free(name);
+	return b.s ? b.s : xstrdup("");
+}
+
 /* The file of "use ARG" in the file FROM, by r68's rules: use x from the
  * working directory, use "x" from FROM's directory, use <x> from the -u
  * directories, then $MWOS/OS9/SRC/DEFS (Ultra C's r68 has \mwos there);
@@ -2149,6 +2175,9 @@ static char *use_file(const char *arg, const char *from)
 	for (char *c = name; *c; c++)
 		if (*c == '\\')
 			*c = '/';
+	/* OS-9's own r68 had .../x from the OS-9 path syntax (Ultra C's
+	 * r68.exe hasn't). */
+	name = os9_dots(name);
 	char *found = NULL;
 	if (isalpha((unsigned char)name[0]) && name[1] == ':' && name[2] == '/') {
 		/* A DOS path (use c:\os9\defs\oskdefs.d): the drive as

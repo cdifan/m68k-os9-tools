@@ -2,7 +2,7 @@
 * each call sets before it (.Lr68xm<k>), the same r68x_ names as rof2elf makes of r68's
 * references; two lines of one expression, a call repeated, a label on the call, a number, two
 * parameters and one negated, a call in another macro's body with that macro's argument.
-* fixed: (not committed) 2026-10-10 r68togas: macro arguments in link-time expressions
+* fixed: 320d50b 2026-10-11 r68togas: macro arguments in link-time expressions; a lone negated external
 * expect text: 2f2b0000266b0000 2f2b0000266b0000 2f2b0000266b0000 2f2b0028266b0428 000000000000 2f2b0000266b0000 4e75
 * expect reloc: 00000002 R_68K_16          r68x_3fbf59ac
 * expect reloc: 00000006 R_68K_16          r68x_3fbf59ac+0x00000400

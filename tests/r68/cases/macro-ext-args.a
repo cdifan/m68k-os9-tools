@@ -1,7 +1,7 @@
 * Arguments other than a name for a macro's link-time expression of its parameters (0,0,-1;
 * 10+10,7+17,d0): any expression, a quoted one; the alias is set to it before the call (an
 * expression of external names: its r68x_ name, a number: the value).
-* fixed: 707d890 2026-10-10 r68togas: macro arguments in link-time expressions
+* fixed: 320d50b 2026-10-11 r68togas: macro arguments in link-time expressions; a lone negated external
 * expect text: 2f2b0000266b0000 2f2b0000266b0000 2f2b0050266b0450 2f2bfffc266b03fc 0000 0106 00ad 004a 0001 0106 0000 0000 4e75 4e71
 * expect reloc: 00000002 R_68K_16          r68x_3fbf59ac+0x00000004
 * expect reloc: 00000006 R_68K_16          r68x_3fbf59ac+0x00000404
