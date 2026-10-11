@@ -1,7 +1,7 @@
 * A set symbol used before its first set, set again in a macro body (after a default set): r68's
 * first pass ran the body too, so the earlier uses take its value; a set in a conditional the
 * expansion leaves out takes nothing (it was an undefined NAME__p1).
-* fixed: 1ba6287 2026-10-11 r68togas: first-pass values of sets in macro bodies; psect without ends
+* fixed: 3d5d87a 2026-10-11 r68togas: first-pass values of sets in macro bodies; psect without ends
 * expect text: 00070000
  psect set_p1_macro,0,0,0,0,0
  dc.b Sides
