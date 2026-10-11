@@ -2,7 +2,7 @@
 * the body: 'Q5'; it was made a number first); \' in a macro body is a quote when the body
 * expands (TrW \'Q5\'); ifp1 (r68's first pass) is a true conditional (a defs file's ifp1, use,
 * endc).
-* fixed: b4c9943 2026-10-11 r68togas: quoted macro arguments; \' in macro bodies; ifp1
+* fixed: 0cc3d11 2026-10-11 r68togas: single-quoted macro arguments; \' in macro bodies; ifp1
 * expect text: 3afc5135 3afc6162 3afc5135 3afc6162 3afc0000 3afc0007
 TrW MACRO
  move.w #'\1',(a5)+
