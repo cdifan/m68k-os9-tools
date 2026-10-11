@@ -718,6 +718,8 @@ static void put_regs(struct buf *b, const char *s, size_t n)
 
 /* Translates one instruction operand. ABSOLUTE: a bare expression operand
  * is an absolute address (r68's jsr/jmp/lea/pea label: absolute long). */
+static int source_label(const char *s, size_t n);
+
 /* Whether operand S (N chars) is an address in parentheses without a
  * register ((4): move.l (4),a5), which r68 takes as an absolute
  * long address as a bare one; as as a short one. */
@@ -861,8 +863,9 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 			return;
 		}
 	}
-	/* An absolute address with a size (expr.w, expr.l, (expr).l). */
-	if (n > 2 && s[n - 2] == '.' && strchr("wlWL", s[n - 1])) {
+	/* An absolute address with a size (expr.w, expr.l, (expr).l); not a
+	 * label of the source with a dot (Get.w). */
+	if (n > 2 && s[n - 2] == '.' && strchr("wlWL", s[n - 1]) && !source_label(s, n)) {
 		expression(b, s, n - 2);
 		bput(b, s + n - 2, 2);
 		return;
@@ -1156,6 +1159,19 @@ static int expr_complete(const char *s)
 static int in_macro_def(void)
 {
 	return st.in_macro;
+}
+
+/* Whether S (N chars) is a label of the source as written (the pre-scan's
+ * names, local or global). */
+static int source_label(const char *s, size_t n)
+{
+	for (int i = 0; i < st.nlocals; i++)
+		if (strlen(st.locals[i]) == n && strncmp(st.locals[i], s, n) == 0)
+			return 1;
+	for (int i = 0; i < st.ngl; i++)
+		if (strlen(st.gl[i]) == n && strncmp(st.gl[i], s, n) == 0)
+			return 1;
+	return 0;
 }
 
 /* '\N' in the body of the macro being defined: .Lr68c<macro>_<N>, which
