@@ -2,7 +2,7 @@
 * as's not: the instruction andi called it); swap.l (the size ignored); $# (andi.w $#M,d1, a
 * typo r68 takes for #); a psect whose type is set from names defined after it (TL set
 * (Dr<<8)+Ob before the definitions).
-* fixed: 0d8b507 2026-10-11 r68togas: macros named as instructions; swap.l; $#; psect values defined later
+* fixed: 7aaa984 2026-10-11 r68togas: macros named as instructions; swap.l; $#; psect values defined later
 * expect text: 0241ffff 024100e0 4841026b 00020000
 * expect sym: A __os9_typelang 00000e01
 ANDI MACRO
