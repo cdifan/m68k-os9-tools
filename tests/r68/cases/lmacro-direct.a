@@ -1,0 +1,19 @@
+* A call of a macro using \Ln outside macro bodies: the argument lengths set before it (as r68
+* counts them: quotes stripped) and the macro called directly. Through r68L, its irpc aligned
+* after an odd dc.b, and its ifnc took no argument with a quote (MAC #2,"#'C'").
+* fixed: 908aaf9 2026-10-11 r68togas: macros using \Ln called directly
+* expect text: 07020403 04000001 00034e71
+LEN macro
+ dc.b \L1,\L2,\L3
+ endm
+W macro
+ dc.w \L1
+ endm
+ psect lmacro_direct,0,0,0,0,0
+ dc.b 7
+ LEN ab,"#'C'",'xyz'
+ dc.b 4
+ W a
+ W "a b"
+ nop
+ ends

@@ -2712,12 +2712,15 @@ static void put_angle(struct buf *b, const char *s, size_t n)
 }
 
 
+/* a call of a macro using \Ln made directly, not through r68L */
+static int direct_lcall;
+
 static void macro_arguments(struct buf *out_b, const char *args, const char *name)
 {
 	struct buf *b = out_b;
-	int lmacro = is_lmacro(name);
+	int lmacro = is_lmacro(name) && !direct_lcall;
 	for (int i = 0; i < st.nmacros && !lmacro; i++)
-		if ((ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) && st.macro_viaL[i])
+		if ((ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) && st.macro_viaL[i] && !direct_lcall)
 			lmacro = 1;
 	const char *pieces[64];
 	size_t lens[64];
@@ -4082,14 +4085,45 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			 * number of arguments set before (r68__Ln), as r68 counts
 			 * them: NARG leaves empty ones out (MAC ,Arg
 			 * called its macro with one argument) */
-			{
-				const char *pc[64];
-				size_t pl[64];
-				int k = *l.args ? split_commas(l.args, strlen(l.args), pc, pl, 64) : 0;
-				bprintf(&line_before, "r68__Ln set %d\n", k + 1);
-				if (!st.in_macro)
-					put_marker(&line_before);
+			const char *pc[64];
+			size_t pl[64];
+			int k = *l.args ? split_commas(l.args, strlen(l.args), pc, pl, 64) : 0;
+			if (!st.in_macro) {
+				/* Outside macro bodies the arguments are known: their
+				 * lengths set here (r68__L1..8, as r68 counts them:
+				 * quotes stripped), the macro called directly. r68L's
+				 * irpc aligns after an odd dc.b, and its ifnc took no
+				 * argument with a quote (MAC #"'"Init"'"). */
+				for (int a = 0; a < 8; a++) {
+					size_t len = 0;
+					if (a < k) {
+						const char *t = pc[a];
+						size_t tn = pl[a];
+						int whole = tn >= 2 && (t[0] == '"' || t[0] == '\'') && t[tn - 1] == t[0];
+						for (size_t c = whole; c < tn - whole; c++) {
+							if (t[c] == '"' || (t[c] == '\\' && c + 1 < tn && t[c + 1] == '\''))
+								continue;
+							len++;
+						}
+					}
+					bprintf(&line_before, "r68__L%d set %zu\n", a + 1, len);
+				}
+				put_marker(&line_before);
+				struct buf nm = { 0 };
+				put_symbol(&nm, l.op, strlen(l.op));
+				bprintf(out, "%s %s__r68 ", labs, nm.s);
+				free(nm.s);
+				direct_lcall = 1;
+				macro_arguments(out, l.args, l.op);
+				direct_lcall = 0;
+				macro_aliases(l.op, l.args);
+				narg_set(l.op, l.args);
+				char_aliases(l.op, l.args);
+				st.section = NULL;
+				bputs(out, rest);
+				goto done;
 			}
+			bprintf(&line_before, "r68__Ln set %d\n", k + 1);
 			bprintf(out, "%s r68L %s", labs, l.op);
 			if (*l.args) {
 				bputc(out, ',');
