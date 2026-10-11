@@ -239,6 +239,7 @@ static int twin_mode;	/* in a PC-relative displacement or a branch target: globa
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int p1_name(struct buf *b, const char *s, size_t n);
 static int in_macro_def(void);
+static int memory_instruction(const char *base);
 static void char_param(struct buf *b, int n);
 static int name_in(char **list, int n, const char *s, size_t len);
 static int shift_masked(void);
@@ -1091,6 +1092,8 @@ struct state {
 	char *macro_narg;	/* per macro: its body uses \# (narg_capture) */
 	int macro_variant;	/* translating one variant of a macro body's dc/ds */
 	char *macro_viaL;	/* per macro: its body calls a macro through r68L */
+	unsigned *macro_mem;	/* per macro: the parameters (bit n-1 for \n) its body
+				   uses only as a whole address operand (mem_params) */
 	unsigned *macro_chars;	/* per macro: the parameters (bit n-1 for \n) its body
 				   uses as '\n' (char_param) */
 	unsigned *macro_ops;	/* per macro: the parameters (bit n-1 for \n) its body
@@ -2709,11 +2712,12 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		args = unesc;
 	}
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
-	unsigned fold = 0, ops = 0;
+	unsigned fold = 0, ops = 0, mem = 0;
 	for (int i = 0; i < st.nmacros; i++)
 		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) {
 			fold = st.macro_fold[i];
 			ops = st.macro_ops[i];
+			mem = st.macro_mem[i];
 		}
 	int save_ok = r68x_ok;
 	r68x_ok = 0;	/* folded as before: see r68x_ok */
@@ -2809,6 +2813,12 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 					*c = '\'';
 			operand(b, t, lens[i], 0);
 			free(t);
+		} else if (i < 9 && (mem & (1u << i)) && pieces[i][0] != '#' && memchr(pieces[i], '(', lens[i]) == NULL &&
+			   !register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.')) {
+			/* an address for a parameter the body uses only as an
+			 * address operand (MAC.start 256: move.l
+			 * a5,\1): absolute long, as a bare one is */
+			operand(b, pieces[i], lens[i], 1);
 		} else {
 			operand(b, pieces[i], lens[i], 0);
 		}
@@ -2901,6 +2911,64 @@ static unsigned op_params(const char *text)
 			p++;
 	}
 	return mask;
+}
+
+/* The parameters (bit n-1 for \n) the macro body in TEXT (up to its endm
+ * line) uses only as a whole operand of an instruction that takes an
+ * address (memory_instruction), nowhere else. */
+static unsigned mem_params(const char *text)
+{
+	unsigned mem = 0, other = 0;
+	if (text == NULL)
+		return 0;
+	for (const char *p = text; *p;) {
+		const char *e = p + strcspn(p, "\r\n");
+		const char *w = p;
+		if (*w != '*' && *w != ';') {
+			if (!isspace((unsigned char)*w))
+				while (w < e && !isspace((unsigned char)*w))
+					w++;
+			while (w < e && isspace((unsigned char)*w))
+				w++;
+			const char *op = w;
+			while (w < e && !isspace((unsigned char)*w))
+				w++;
+			size_t on = (size_t)(w - op);
+			if (on == 4 && strncasecmp(op, "endm", 4) == 0)
+				break;
+			while (w < e && isspace((unsigned char)*w))
+				w++;
+			const char *a = w;
+			while (w < e && !isspace((unsigned char)*w))
+				w++;
+			char base[32];
+			size_t bn = strcspn(op, ". \t\r\n");
+			if (bn >= sizeof base)
+				bn = sizeof base - 1;
+			for (size_t i = 0; i < bn; i++)
+				base[i] = (char)tolower((unsigned char)op[i]);
+			base[bn] = '\0';
+			int memop = memory_instruction(base);
+			const char *pieces[16];
+			size_t lens[16];
+			int k = split_commas(a, (size_t)(w - a), pieces, lens, 16);
+			for (int i = 0; i < k; i++) {
+				for (size_t c = 0; c + 1 < lens[i]; c++) {
+					if (pieces[i][c] != '\\' || pieces[i][c + 1] < '1' || pieces[i][c + 1] > '9')
+						continue;
+					unsigned bit = 1u << (pieces[i][c + 1] - '1');
+					if (memop && lens[i] == 2)
+						mem |= bit;
+					else
+						other |= bit;
+				}
+			}
+		}
+		p = e;
+		while (*p == '\r' || *p == '\n')
+			p++;
+	}
+	return mem & ~other;
 }
 
 /* Whether the macro body in TEXT (up to its endm line) uses \#. */
@@ -3850,6 +3918,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_viaL[st.nmacros] = (char)calls_lmacro(st.rest_of_file);
 			st.macro_chars = xrealloc(st.macro_chars, (st.nmacros + 1) * sizeof *st.macro_chars);
 			st.macro_chars[st.nmacros] = 0;
+			st.macro_mem = xrealloc(st.macro_mem, (st.nmacros + 1) * sizeof *st.macro_mem);
+			st.macro_mem[st.nmacros] = mem_params(st.rest_of_file);
 			st.narg_pending = st.macro_narg[st.nmacros];
 			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
 			st.macro_shapes[st.nmacros] = (struct buf){ 0 };

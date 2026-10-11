@@ -1,0 +1,12 @@
+* An address passed for a parameter the body uses only as an address operand (START 256 with
+* move.l a5,\1): absolute long, as a bare address is in r68; as took the small number for a short
+* one. (A parameter also used otherwise, #\1, is left alone: still short there, where r68 makes
+* it long.)
+* fixed: d40c6f0 2026-10-11 r68togas: addresses passed to address parameters are long
+* expect text: 23cd0000 01004e71
+START macro
+ move.l a5,\1
+ endm
+ psect mem_param,0,0,0,0,0
+ START 256
+ ends
