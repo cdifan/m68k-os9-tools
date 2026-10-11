@@ -3,7 +3,7 @@
 * named as an as directive (ERROR: as's error came first); a global label made by a macro (\1:)
 * no longer makes every name a label of the source (Buf+R$pc became a link-time expression
 * again); move ccr,d2 (the 68010's); movep (a1),d0 (0(a1) to as).
-* fixed: 5db91e4 2026-10-11 r68togas: macro arguments and names; move ccr; movep (An)
+* fixed: ff2b5af 2026-10-11 r68togas: macro arguments and names; move ccr; movep (An)
 * expect text: 2afc4162 63642afc 5778797a 323c4502 3d002d40 000042c2 01090000
 * expect reloc: r68x_
 TL	macro
