@@ -4088,15 +4088,22 @@ done:
 		put_symbol(&nm, l.label, strlen(l.label));
 		out->n = 0;
 		out->s[0] = '\0';
+		/* the statement in <>, its !, < and > escaped
+		 * (Name: dc.b ">>>>") */
+		struct buf ab = { 0 };
+		if (*b) {
+			bputc(&ab, ',');
+			put_angle(&ab, b, strlen(b));
+		}
+		const char *a = ab.s ? ab.s : "";
 		if (wrap_global == 2)
-			bprintf(out, " r68xlab %s%s%s%s%s", nm.s, *b ? ",<" : "", b, *b ? ">" : "", rest);
+			bprintf(out, " r68xlab %s%s%s", nm.s, a, rest);
 		else if (*b && (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0))
 			/* NAME: equ value: NAME equ value on one line */
-			bprintf(out, " r68gdef %s,<%s>%s", nm.s, b, rest);
-		else if (*b)
-			bprintf(out, " r68glab %s,<%s>%s", nm.s, b, rest);
+			bprintf(out, " r68gdef %s%s%s", nm.s, a, rest);
 		else
-			bprintf(out, " r68glab %s%s", nm.s, rest);
+			bprintf(out, " r68glab %s%s%s", nm.s, a, rest);
+		free(ab.s);
 		free(nm.s);
 		free(body);
 	}
