@@ -1,0 +1,17 @@
+* -dialect=c32 leaves out junk after a set's or equ's value, but \@ (Len\@ set *-Beg\@ in a
+* macro) is part of the name: was cut to *-Beg, undefined. The bytes are C 3.2's R68's in vDos
+* (the quotes stripped from an argument: dc.b abc, an external).
+* fixed: 5380cfe 2026-10-12 r68togas: c32's junk after a value not at a \@
+* options: -dialect=c32
+* expect text: 01000100 4e71
+STR macro
+ dc.b Len\@
+Beg\@ equ *
+ dc.b \1
+Len\@ set *-Beg\@
+ endm
+ psect c32_set_macro_at,0,0,0,0,0
+ STR "abc"
+ STR 'cd'
+ nop
+ ends

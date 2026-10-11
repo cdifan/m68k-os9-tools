@@ -4190,9 +4190,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		} else if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0) {
 			bputs(out, l.args);
 		} else if (st.c32 && (strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) &&
-			   (len = expression_length(l.args, alen)) > 0 && len < alen) {
+			   (len = expression_length(l.args, alen)) > 0 && len < alen && l.args[len] != '\\') {
 			/* -d c32: junk after the value, which C 3.2's R68 ignores
-			 * (Ultra C's r68 refuses the line) */
+			 * (Ultra C's r68 refuses the line); not a macro's \@ or
+			 * parameter (Len\@ set *-Beg\@) */
 			expression(out, l.args, len);
 			annotate = 1;
 		} else {
