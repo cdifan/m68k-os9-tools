@@ -1,7 +1,7 @@
 # OS-9's multi-dot path components in use (use .../defs/x.d: the parent's parent; .... one
 # more up), as OS-9's own r68 got them from the OS-9 path syntax (Ultra C's r68.exe refuses
 # them: "can't open file").
-# fixed: 0ef2610 2026-10-11 r68togas: OS-9 multi-dot paths in use
+# fixed: 0f9b58d 2026-10-11 r68togas: OS-9 multi-dot paths in use (.../x, ..../x)
 mkdir -p a/b/c defs
 cat > defs/x.d <<'EOF'
 X equ 7
