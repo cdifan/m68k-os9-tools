@@ -3,6 +3,7 @@
 # is moved before the source; the line marker after a use file that ends in byte data is
 # written later, before the next aligning statement.
 # fixed: da4583a 2026-10-11 r68togas: no alignment at macro definitions and use-file markers after byte data
+# fixed: (not committed) 2026-10-11 r68togas: no alignment at ttl after byte data
 cat > bytes.d <<'X'
 B dc.b 1,2,3
 X
@@ -15,6 +16,7 @@ M macro
  dc.b 8
  use bytes.d
  dc.b 9
+ ttl Title
  M 10
  nop
  ends

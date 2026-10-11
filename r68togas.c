@@ -3543,7 +3543,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "ttl") == 0 || strcmp(base, "spc") == 0 || strcmp(base, "page") == 0) {
-		bprintf(out, "%s %s %s", labs, l.op, l.args);
+		/* after byte data a comment: as aligns at a directive there
+		 * (a ttl after a use file's Name dc.b ...,0) */
+		if (st.maybe_odd)
+			bprintf(out, "*%s", text);
+		else
+			bprintf(out, "%s %s %s", labs, l.op, l.args);
 		goto done;
 	}
 	if (strcmp(base, "use") == 0) {
