@@ -1,0 +1,17 @@
+* Two psect statements, one in ifdef, the other in else: the module header of the one assembled
+* (was of the last one, here no header for its type/language 0).
+* fixed: 220df7a 2026-10-11 r68togas: the header of the psect statement assembled
+* expect sym: A __os9_typelang 00000101
+* expect sym: A __os9_attrev 0000a000
+* expect sym: A __os9_edition 00000007
+* expect sym: A __os9_stack 00000200
+* expect sym: T __os9_entry 00000002
+ASPROG equ 1
+ ifdef ASPROG
+ psect two_cond,$101,$a000,7,512,Start
+ else
+ psect two_cond,0,0,0,0,0
+ endc
+ nop
+Start nop
+ ends

@@ -1098,6 +1098,8 @@ struct state {
 	char *psect_args;
 	char ps_captured[8];	/* the psect's values captured where it is (r68__ps<n>) */
 	int npsects;		/* psect statements (in conditionals: either) */
+	char **ps_all;		/* each psect statement's fields and captured values */
+	char (*ps_all_captured)[8];
 	char **complete;	/* equ and set names whose value is known where they are */
 	int ncomplete;
 	struct buf globals;	/* xdef lines for the epilogue */
@@ -3670,6 +3672,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		st.npsects++;
 		free(st.psect_args);
 		st.psect_args = xstrdup(l.args);
+		/* which psect statement is assembled (one in ifdef
+		 * X / else): r68__psn, the epilogue's header from it */
+		bprintf(&line_before, "r68__psn set %d\n", st.npsects);
 		{
 			/* the header values as they are here, where r68 takes
 			 * them (a descriptor template's Attr_Rev, set again by
@@ -3693,7 +3698,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				expression(&line_before, pieces[i], lens[i]);
 				bputc(&line_before, '\n');
 			}
-			if (k > 1 && !st.in_macro)
+			st.ps_all = xrealloc(st.ps_all, st.npsects * sizeof *st.ps_all);
+			st.ps_all_captured = xrealloc(st.ps_all_captured, st.npsects * sizeof *st.ps_all_captured);
+			st.ps_all[st.npsects - 1] = xstrdup(l.args);
+			memcpy(st.ps_all_captured[st.npsects - 1], st.ps_captured, sizeof st.ps_captured);
+			if (!st.in_macro)
 				put_marker(&line_before);
 		}
 		st.section = ".text";
@@ -4628,6 +4637,7 @@ static const char prelude[] =
 	"r68__vs set 0\n"
 	"* the arguments of a call through r68L, the name too\n"
 	"r68__Ln set 0\n"
+	"r68__psn set 0\n"
 	"r68do macro\n"
 	" ifne \\2-1\n"
 	"r68__ofs set (r68__ofs+1)/2*2\n"
@@ -4969,18 +4979,18 @@ int main(int argc, char **argv)
 			fprintf(out, "%s__final equ %s\n", nm.s, nm.s);
 		free(nm.s);
 	}
-	if (st.psect_args != NULL) {
-		/* psect name,type/lang,attr/rev,edition,stack,entry[,trap entry]:
-		 * the module header symbols, as rof2elf makes them. */
+	/* psect name,type/lang,attr/rev,edition,stack,entry[,trap entry]: the
+	 * module header symbols, as rof2elf makes them; of the psect statement
+	 * assembled (r68__psn) where there are more */
+	for (int j = 0; j < st.npsects; j++) {
 		const char *pieces[8];
 		size_t lens[8];
-		int k = split_commas(st.psect_args, strlen(st.psect_args), pieces, lens, 8);
+		int k = split_commas(st.ps_all[j], strlen(st.ps_all[j]), pieces, lens, 8);
 		static const char *const names[] = { NULL, "__os9_typelang", "__os9_attrev", "__os9_edition",
 			"__os9_stack", "__os9_entry", "__os9_trapent" };
+		memcpy(st.ps_captured, st.ps_all_captured[j], sizeof st.ps_captured);
 		if (st.npsects > 1)
-			/* two psect statements (a source's in ifdef MODULE / else): which
-			 * one is assembled isn't known here, the values at the end */
-			memset(st.ps_captured, 0, sizeof st.ps_captured);
+			fprintf(out, " ifeq r68__psn-%d\n", j + 1);
 		if (k >= 2) {
 			/* r68__ps<n>: the values at the psect statement where
 			 * they were known there (expr_complete), else the
@@ -5007,7 +5017,9 @@ int main(int argc, char **argv)
 			}
 			fprintf(out, " endc\n");
 		}
-		if (k >= 1)
+		if (st.npsects > 1)
+			fprintf(out, " endc\n");
+		if (k >= 1 && j == st.npsects - 1)
 			psect_name = xstrndup(pieces[0], lens[0]);
 	}
 	fprintf(final, "# 1 \"r68.prelude\"\n");
