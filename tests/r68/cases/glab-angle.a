@@ -1,7 +1,7 @@
 * A global label on a statement goes into a macro call with the statement in <> (r68glab): its
 * !, < and > are escaped (Text: dc.b ">>>>...": as took them for the brackets and left the string
 * out).
-* fixed: 027fd0f 2026-10-11 r68togas: global labels on statements with < and >
+* fixed: 9d1843f 2026-10-11 r68togas: global labels on statements with < and >
 * expect text: 12345678 3e3e3e3e 3e3e3e3e 3e3e3e3e 3e3e3e3e 696e746f 3c3c3c3c 3c3c3c3c 3c3c3c3c 3c3c3c3c 4e714e71
 * expect sym: T Text 00000004
  psect glab_angle,0,0,0,0,0
