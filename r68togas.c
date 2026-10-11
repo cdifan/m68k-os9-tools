@@ -3537,6 +3537,22 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 }
 
 /* Translates one statement line into OUT (one line, no newline). */
+static int dc_split;	/* translating the pieces of a dc line split for "\N" */
+
+/* Whether a dc list ARGS has an element that is a parameter alone in
+ * quotes ("\2", '\2'). */
+static int param_string_element(const char *args)
+{
+	const char *pieces[64];
+	size_t lens[64];
+	int k = split_commas(args, strlen(args), pieces, lens, 64);
+	for (int i = 0; i < k; i++)
+		if (lens[i] == 4 && (pieces[i][0] == '"' || pieces[i][0] == '\'') && pieces[i][3] == pieces[i][0] &&
+		    pieces[i][1] == '\\' && isdigit((unsigned char)pieces[i][2]))
+			return 1;
+	return 0;
+}
+
 static void translate_line(const char *text, struct buf *out, const char *path, int lineno, FILE *fp, int depth)
 {
 	struct line l;
@@ -3706,7 +3722,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				put_marker(&line_before);
 		}
 		st.section = ".text";
-		bprintf(out, " section .text%s", rest);
+		bprintf(out, " section .text%s\nr68__sid set 1", rest);
 		goto done;
 	}
 	if (strcmp(base, "vsect") == 0) {
@@ -3727,7 +3743,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			if (same_section(".text"))
 				bprintf(out, "*%s", text);
 			else
-				bprintf(out, " section .text%s", rest);
+				bprintf(out, " r68sect .text%s", rest);
 			st.section = ".text";
 		} else {
 			st.in_psect = 0;
@@ -3922,6 +3938,59 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		expression(out, l.args, strlen(l.args));
 		bputs(out, rest);
 		free(nm.s);
+		goto done;
+	}
+	if (st.in_macro && !st.macro_variant && !dc_split && strcmp(base, "dc") == 0 && size == 'b' &&
+	    param_string_element(l.args)) {
+		/* A string of a parameter alone ("\2"): r68 makes no byte of
+		 * an empty argument, as reads '' as a quote. The line split,
+		 * each such string in ifnc '\N','' (exempt from MRI's
+		 * alignment after an odd dc.b, as conditionals are). */
+		const char *pieces[64];
+		size_t lens[64];
+		int k = split_commas(l.args, strlen(l.args), pieces, lens, 64);
+		struct buf src = { 0 }, part = { 0 };
+		int first = 1;
+		dc_split = 1;
+		for (int i = 0; i <= k; i++) {
+			int ps = i < k && lens[i] == 4 && (pieces[i][0] == '"' || pieces[i][0] == '\'') &&
+				 pieces[i][3] == pieces[i][0] && pieces[i][1] == '\\' && isdigit((unsigned char)pieces[i][2]);
+			if ((ps || i == k) && (part.n > 0 || (first && l.label))) {
+				/* the elements before, the label on the first line */
+				/* a label before a "\N" first: on a dz.b 0, which
+				 * goes where the dc goes (a vsect's or the code) */
+				src.n = 0;
+				bprintf(&src, "%s%s %s %s", first && l.label ? l.label : "", first && l.global ? ":" : "",
+					part.n ? l.op : "dz.b", part.n ? part.s : "0");
+				if (!first)
+					bputc(out, '\n');
+				translate_line(src.s, out, path, lineno, fp, depth);
+				first = 0;
+				part.n = 0;
+			}
+			if (i == k)
+				break;
+			if (ps) {
+				/* the conditional as it is (not a line of the
+				 * source: its quotes aren't character constants) */
+				if (!first)
+					bputc(out, '\n');
+				first = 0;
+				bprintf(out, " ifnc '\\%c',''\n", pieces[i][2]);
+				src.n = 0;
+				bprintf(&src, " %s %.*s", l.op, (int)lens[i], pieces[i]);
+				translate_line(src.s, out, path, lineno, fp, depth);
+				bputs(out, "\n endc");
+			} else {
+				if (part.n)
+					bputc(&part, ',');
+				bput(&part, pieces[i], lens[i]);
+			}
+		}
+		dc_split = 0;
+		bputs(out, rest);
+		free(src.s);
+		free(part.s);
 		goto done;
 	}
 	if (st.in_macro && !st.macro_variant &&
@@ -4603,31 +4672,68 @@ static const char prelude[] =
 	" dc.b $4e,$40+\\1 (trap: an equate's number relocated, as r68 does)\n"
 	" dc.w \\2\n"
 	" endm\n"
+	"* the section as is in (r68__sid: 1 .text, 2 .data, 3 .bss, 4 .remote.data,\n"
+	"* 5 .remote.bss); r68sect switches only to another one: a section\n"
+	"* statement after an odd dc.b aligns in MRI mode, also to the same\n"
+	"* section, a macro call doesn't\n"
+	"r68__sid set 1\n"
+	"r68sect macro\n"
+	" ifc '\\1','.text'\n"
+	" ifne r68__sid-1\n"
+	" section .text\n"
+	"r68__sid set 1\n"
+	" endc\n"
+	" endc\n"
+	" ifc '\\1','.data'\n"
+	" ifne r68__sid-2\n"
+	" section .data\n"
+	"r68__sid set 2\n"
+	" endc\n"
+	" endc\n"
+	" ifc '\\1','.bss'\n"
+	" ifne r68__sid-3\n"
+	" section .bss\n"
+	"r68__sid set 3\n"
+	" endc\n"
+	" endc\n"
+	" ifc '\\1','.remote.data'\n"
+	" ifne r68__sid-4\n"
+	" section .remote.data\n"
+	"r68__sid set 4\n"
+	" endc\n"
+	" endc\n"
+	" ifc '\\1','.remote.bss'\n"
+	" ifne r68__sid-5\n"
+	" section .remote.bss\n"
+	"r68__sid set 5\n"
+	" endc\n"
+	" endc\n"
+	" endm\n"
 	"* vsect contents: uninitialized (ds), initialized (dc, dz), labels\n"
 	"r68ds macro\n"
-	" section \\1\n"
+	" r68sect \\1\n"
 	"\\3 ds.\\2 \\4\n"
 	" endm\n"
 	"r68fill macro\n"
-	" section \\1\n"
+	" r68sect \\1\n"
 	"\\2 fill \\3,1,0\n"
 	" endm\n"
 	"r68dc macro\n"
-	" section \\1\n"
+	" r68sect \\1\n"
 	"\\3 dc.\\2 \\4\n"
 	" endm\n"
 	"r68dz macro\n"
-	" section \\1\n"
+	" r68sect \\1\n"
 	"\\3 dcb.\\2 \\4,0\n"
 	" endm\n"
 	"r68lab macro\n"
-	" section \\1\n"
+	" r68sect \\1\n"
 	"\\2\n"
 	" endm\n"
 	"r68align macro\n"
-	" section \\1\n"
+	" r68sect \\1\n"
 	" align \\3\n"
-	" section \\2\n"
+	" r68sect \\2\n"
 	" align \\3\n"
 	" endm\n"
 	"* the offset counter: org, do, lo, and . in expressions\n"

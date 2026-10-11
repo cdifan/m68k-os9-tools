@@ -1,0 +1,17 @@
+* A macro's odd dc.b lines called in a vsect: no pad byte between them (each went through a
+* section statement, which as's MRI mode aligns at after an odd dc.b, also to the same section);
+* the section statements only where the section changes (r68__sid).
+* fixed: (pending) 2026-10-12 r68togas: a macro's dc.b in a vsect without pad bytes
+* expect data: 01020304 05000000
+Mk macro
+ dc.b 1
+ dc.b 2,3
+ dc.b 4
+ endm
+ psect macro_vsect_odd,0,0,0,0,0
+ vsect
+ Mk
+ dc.b 5
+ ends
+ nop
+ ends

@@ -86,6 +86,8 @@ source back. Annotated, among others:
   elements, written `(*-offset)`;
 - `psect`, whose fields are spread over the output; `fail` and a `use` file not found;
   `label equ *`, written as a label alone; a folded `rept` of one `dc` line;
+- `dc` strings in single quotes or with a backslash, macro arguments whose quoting the `<...>`
+  form loses, `dc` lines in a macro body split around `"\N"` strings, renamed macros' calls.
 
 ## Dialects
 
