@@ -1,7 +1,7 @@
 * A call through r68L (a macro using \Ln) with an empty argument (MSG ,Ok): as's NARG leaves the
 * empty one out, so r68L called the macro with one argument less, \2 lost (Msg for MsgOk); the
 * count is set before the call as r68 counts it (r68__Ln).
-* fixed: 898d118 2026-10-11 r68togas: r68L with empty arguments
+* fixed: bb4d074 2026-10-11 r68togas: calls through r68L with empty arguments
 * expect text: 41fa0002 00014e71
 MSG macro
  ifgt \L1
