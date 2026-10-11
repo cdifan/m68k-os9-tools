@@ -1,5 +1,5 @@
 * A global label made by a macro argument in a vsect: global in r68 (B), local in ours.
-* fixed: cda8de1 2026-10-11 r68togas: a macro's dc and ds where it is called
+* fixed: b7d5887 2026-10-11 r68togas: a macro's dc and ds where it is called; names nested macro calls make; char parameters
 * expect sym: B _Sone 00000000
 * expect sym: B _Stwo 00000004
  psect macro_vsect_label,0,0,0,0,0

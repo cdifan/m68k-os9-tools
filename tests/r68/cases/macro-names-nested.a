@@ -3,7 +3,7 @@
 * a label made global by its argument's colon (ACT AP_X: with W_\1 ds.l 1 in a vsect);
 * arguments passed on through r68L in <> twice (Bad! kept its !) and '\1' as the value of the
 * argument's last four characters (xcode is code), set before each call (.Lr68c<m>_<n>).
-* fixed: cda8de1 2026-10-11 r68togas: names nested macro calls make; char parameters; r68L arguments
+* fixed: b7d5887 2026-10-11 r68togas: a macro's dc and ds where it is called; names nested macro calls make; char parameters
 * expect text: 303c0003 2afc4261 64212afc 636f6465 41ee0000 2c2a0000
 * expect sym: B W_AP_X 00000000
 Flag	macro

@@ -1,5 +1,5 @@
 * A macro defined in a vsect and called in code: r68 puts its dc in the code.
-* fixed: (not committed) 2026-10-11 r68togas: a macro's dc and ds where it is called
+* fixed: b7d5887 2026-10-11 r68togas: a macro's dc and ds where it is called; names nested macro calls make; char parameters
 * expect text: 6f6e6500
 * expect size: .data 0
  psect macro_code_call,0,0,0,0,0
