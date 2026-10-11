@@ -1109,6 +1109,8 @@ struct state {
 	char *macro_narg;	/* per macro: its body uses \# (narg_capture) */
 	int macro_variant;	/* translating one variant of a macro body's dc/ds */
 	char *macro_viaL;	/* per macro: its body calls a macro through r68L */
+	unsigned *macro_twin;	/* per macro: the parameters it uses only as
+				   branch targets and on pc (twin_params) */
 	unsigned *macro_mem;	/* per macro: the parameters (bit n-1 for \n) its body
 				   uses only as a whole address operand (mem_params) */
 	unsigned *macro_chars;	/* per macro: the parameters (bit n-1 for \n) its body
@@ -2821,12 +2823,13 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		args = unesc;
 	}
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
-	unsigned fold = 0, ops = 0, mem = 0;
+	unsigned fold = 0, ops = 0, mem = 0, twin = 0;
 	for (int i = 0; i < st.nmacros; i++)
 		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) {
 			fold = st.macro_fold[i];
 			ops = st.macro_ops[i];
 			mem = st.macro_mem[i];
+			twin = st.macro_twin[i];
 		}
 	int save_ok = r68x_ok;
 	r68x_ok = 0;	/* folded as before: see r68x_ok */
@@ -2915,6 +2918,11 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			 * which the body makes mTC and bTC): as it is, a part
 			 * of the names the body makes (NAME__r68 made bTC__r68) */
 			bput(b, pieces[i], lens[i]);
+		} else if (i < 9 && (twin & (1u << i)) && global_label(pieces[i], lens[i])) {
+			/* a global label for a branch target or a displacement
+			 * on pc (if.set a,ne.s,There: b\2 \3): its
+			 * twin, as outside macros */
+			put_twin(b, pieces[i], lens[i]);
 		} else if (memchr(pieces[i], '\1', lens[i]) != NULL) {
 			char *t = xstrndup(pieces[i], lens[i]);
 			for (char *c = t; *c; c++)
@@ -3078,6 +3086,74 @@ static unsigned mem_params(const char *text)
 			p++;
 	}
 	return mem & ~other;
+}
+
+/* The parameters (bit n-1 for \n) the macro body in TEXT (up to its endm
+ * line) uses only as a branch target (the last operand of a b<cc>, also
+ * one the body makes: b\2 \3) or a displacement on pc (\1(pc)),
+ * nowhere else: an argument naming a global label goes as its twin. */
+static unsigned twin_params(const char *text)
+{
+	unsigned twin = 0, other = 0;
+	if (text == NULL)
+		return 0;
+	for (const char *p = text; *p;) {
+		const char *e = p + strcspn(p, "\r\n");
+		const char *w = p;
+		if (*w != '*' && *w != ';') {
+			/* in the label (\1:): the macro makes the name */
+			if (!isspace((unsigned char)*w))
+				for (; w < e && !isspace((unsigned char)*w); w++)
+					if (w[0] == '\\' && w + 1 < e && w[1] >= '1' && w[1] <= '9')
+						other |= 1u << (w[1] - '1');
+			while (w < e && isspace((unsigned char)*w))
+				w++;
+			const char *op = w;
+			while (w < e && !isspace((unsigned char)*w))
+				w++;
+			size_t on = (size_t)(w - op);
+			if (on == 4 && strncasecmp(op, "endm", 4) == 0)
+				break;
+			while (w < e && isspace((unsigned char)*w))
+				w++;
+			const char *a = w;
+			while (w < e && !isspace((unsigned char)*w))
+				w++;
+			char base[32];
+			size_t bn = strcspn(op, ". \t\r\n");
+			if (bn >= sizeof base)
+				bn = sizeof base - 1;
+			for (size_t i = 0; i < bn; i++)
+				base[i] = (char)tolower((unsigned char)op[i]);
+			base[bn] = '\0';
+			int branch = is_branch(base) || (base[0] == 'b' && base[1] == '\\') ||
+				     (base[0] == 'd' && base[1] == 'b');
+			const char *pieces[16];
+			size_t lens[16];
+			int k = split_commas(a, (size_t)(w - a), pieces, lens, 16);
+			for (int i = 0; i < k; i++) {
+				for (size_t c = 0; c + 1 < lens[i]; c++) {
+					if (pieces[i][c] != '\\' || pieces[i][c + 1] < '1' || pieces[i][c + 1] > '9')
+						continue;
+					unsigned bit = 1u << (pieces[i][c + 1] - '1');
+					if (c == 0 && ((branch && i == k - 1 && lens[i] == 2) ||
+						       (lens[i] >= 6 && strncasecmp(pieces[i] + 2, "(pc", 3) == 0 &&
+							(pieces[i][5] == ')' || pieces[i][5] == ','))))
+						twin |= bit;
+					else
+						other |= bit;
+				}
+			}
+			/* in the operation (b\2): not an argument for a twin */
+			for (const char *c = op; c + 1 < op + on; c++)
+				if (c[0] == '\\' && c[1] >= '1' && c[1] <= '9')
+					other |= 1u << (c[1] - '1');
+		}
+		p = e;
+		while (*p == '\r' || *p == '\n')
+			p++;
+	}
+	return twin & ~other;
 }
 
 /* Whether the macro body in TEXT (up to its endm line) uses \#. */
@@ -4041,6 +4117,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_chars[st.nmacros] = 0;
 			st.macro_mem = xrealloc(st.macro_mem, (st.nmacros + 1) * sizeof *st.macro_mem);
 			st.macro_mem[st.nmacros] = mem_params(st.rest_of_file);
+			st.macro_twin = xrealloc(st.macro_twin, (st.nmacros + 1) * sizeof *st.macro_twin);
+			st.macro_twin[st.nmacros] = twin_params(st.rest_of_file);
 			st.narg_pending = st.macro_narg[st.nmacros];
 			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
 			st.macro_shapes[st.nmacros] = (struct buf){ 0 };
