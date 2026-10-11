@@ -3548,8 +3548,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		}
 		/* set where it is assembled: not in a macro definition, whose
 		 * lines run where it is called */
-		if (st.in_macro && strcmp(base, "set") == 0 && l.args && *l.args &&
-		    name_in(st.finals, st.nfinals, l.label, strlen(l.label))) {
+		if (st.in_macro && strcmp(base, "set") == 0 && l.args && *l.args && strchr(l.label, '\\') == NULL) {
+			/* (any set symbol: one used before its first set may be
+			 * found only after the macro's definition, a descriptor's
+			 * template defined before its dc.b of the symbol) */
 			/* in a macro body (a descriptor template's Heads set 0 for
 			 * an autosize device): the first pass ran it too, where
 			 * the body expands; its value as is */
@@ -4094,7 +4096,12 @@ static void translate_file(const char *path, FILE *out, int depth)
 	struct buf text = { 0 };
 	if (!read_text(path, &text))
 		die("cannot read %s", path);
-	fprintf(out, "# 1 \"%s\"\n", path);
+	/* after byte data (a use file of equates after a descriptor's
+	 * dc.b "Rbf",0) the marker is owed: as aligns at it (maybe_odd) */
+	if (depth > 0 && st.maybe_odd)
+		st.marker_owed = 1;
+	else
+		fprintf(out, "# 1 \"%s\"\n", path);
 	struct buf line = { 0 };
 	int lineno = 0;
 	int hoisting = 0;
