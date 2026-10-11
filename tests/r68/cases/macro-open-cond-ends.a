@@ -1,7 +1,7 @@
 * A macro calling one defined after it that leaves a conditional open, the call ending in the
 * part left out: r68 leaves out the rest of the source, ends too, and pads as without ends
 * (zeros); the open macro known from the pre-scan, the padding chosen by as (r68__ended).
-* fixed: (pending) 2026-10-12 r68togas: open conditionals of a macro defined later; ends left out
+* fixed: ca33983 2026-10-12 r68togas: conditionals a macro body leaves open stay open after the call; padding when ends is left out
 * expect text: 01020304 05000000
 Outer macro
  Inner 4,5
