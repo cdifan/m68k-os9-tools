@@ -1,7 +1,7 @@
 # A set symbol used before its first set and set in a macro defined before that use: the body's
 # set is the first pass's too; and the marker of a use file of equates after byte data is owed
 # (as aligns at it after an odd dc.b).
-# fixed: 54656a5 2026-10-11 r68togas: sets in macros defined before the use; use markers after byte data
+# fixed: d939428 2026-10-11 r68togas: sets in macros defined before the use; use markers after byte data
 cat > eq.d <<'X'
 X equ 1
 X
