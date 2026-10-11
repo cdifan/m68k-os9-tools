@@ -1023,6 +1023,8 @@ struct state {
 	int nequates;
 	int nmacros;
 	char *macro_narg;	/* per macro: its body uses \# (narg_capture) */
+	unsigned *macro_ops;	/* per macro: the parameters (bit n-1 for \n) its body
+				   uses as an operation (b\2, \1.w): mnemonic arguments */
 	/* as's MRI mode aligns at any directive after an odd dc.b, a line
 	 * marker too: after byte data (maybe_odd) the lines put before a
 	 * statement (line_before) get no marker; one is owed, written before
@@ -2496,10 +2498,12 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 		args = unesc;
 	}
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
-	unsigned fold = 0;
+	unsigned fold = 0, ops = 0;
 	for (int i = 0; i < st.nmacros; i++)
-		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name)))
+		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) {
 			fold = st.macro_fold[i];
+			ops = st.macro_ops[i];
+		}
 	int save_ok = r68x_ok;
 	r68x_ok = 0;	/* folded as before: see r68x_ok */
 	for (int i = 0; i < k; i++) {
@@ -2519,9 +2523,11 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 			 * (TrW '@7' with #'\1' in the body: '@7') */
 			put_angle(b, pieces[i] + 1, lens[i] - 2);
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
-			   (lens[i] == 4 || pieces[i][4] == '.')) {
-			/* A mnemonic argument (DTDEST subi.w,#1,V_Counter): as in
-			 * an instruction, add/sub for r68's quick forms. */
+			   (lens[i] == 4 || pieces[i][4] == '.') && i < 9 && (ops & (1u << i))) {
+			/* A mnemonic argument (MAC subi.w,#1,V_Count): as in
+			 * an instruction, add/sub for r68's quick forms; only for
+			 * a parameter the body uses as an operation (not a macro's
+			 * bit names, SUBI). */
 			bput(b, pieces[i], 3);
 			bput(b, pieces[i] + 4, lens[i] - 4);
 			annotate = 1;
@@ -2537,6 +2543,34 @@ static void macro_arguments(struct buf *b, const char *args, const char *name)
 	}
 	r68x_ok = save_ok;
 	free(unesc);
+}
+
+/* The parameters (bit n-1 for \n) the macro body in TEXT (up to its endm
+ * line) uses as an operation: a statement's operation beginning with \n. */
+static unsigned op_params(const char *text)
+{
+	unsigned mask = 0;
+	if (text == NULL)
+		return 0;
+	for (const char *p = text; *p;) {
+		const char *e = p + strcspn(p, "\r\n");
+		const char *w = p;
+		if (*w != '*' && *w != ';') {
+			if (!isspace((unsigned char)*w))
+				while (w < e && !isspace((unsigned char)*w))
+					w++;
+			while (w < e && isspace((unsigned char)*w))
+				w++;
+			if (e - w >= 4 && strncasecmp(w, "endm", 4) == 0 && (e - w == 4 || isspace((unsigned char)w[4])))
+				return mask;
+			if (e - w >= 2 && w[0] == '\\' && w[1] >= '1' && w[1] <= '9')
+				mask |= 1u << (w[1] - '1');
+		}
+		p = e;
+		while (*p == '\r' || *p == '\n')
+			p++;
+	}
+	return mask;
 }
 
 /* Whether the macro body in TEXT (up to its endm line) uses \#. */
@@ -2565,11 +2599,13 @@ static int uses_narg(const char *text)
 	return 0;
 }
 
-/* A call of macro NAME with ARGS whose body uses \#: r68__narg set to the
- * number of arguments as r68 counts them (empty ones too: RegMac
- * CMD_A,DMA,,,,,,, has 9), on a line before (line_before), which the
- * expansion's first line captures (r68__n\@, so that a call in the body
- * doesn't change it). */
+/* A call of macro NAME with ARGS whose body uses \#: where an argument is
+ * empty, which r68's \# counts and as's NARG doesn't (MAC
+ * X,Y,,,,,,, has 9), r68__narg set to r68's count and r68__nset
+ * to 1, on lines before (line_before), which the expansion's first lines
+ * take instead of NARG (r68__n\@, so that a call in the body doesn't
+ * change it). Not in a macro body, where an argument \n may be empty when
+ * the body expands (Flag \9 in a body: none, as NARG says). */
 static void narg_set(const char *name, const char *args)
 {
 	int m = -1;
@@ -2581,9 +2617,13 @@ static void narg_set(const char *name, const char *args)
 	const char *pieces[64];
 	size_t lens[64];
 	int k = *args ? split_commas(args, strlen(args), pieces, lens, 64) : 0;
-	bprintf(&line_before, "r68__narg set %d\n", k);
-	if (!st.in_macro)
-		put_marker(&line_before);
+	int empty = 0;
+	for (int i = 0; i < k; i++)
+		empty |= lens[i] == 0;
+	if (!empty || st.in_macro)
+		return;
+	bprintf(&line_before, "r68__narg set %d\nr68__nset set 1\n", k);
+	put_marker(&line_before);
 }
 
 /* A call of macro NAME with ARGS: for each of the macro's link-time
@@ -2849,13 +2889,31 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	log_line = lineno;
 	string_params = st.in_macro;
 	st.aligning = 0;
+	/* \' in a macro body is a quote when the body expands
+	 * (MAC.w #\'@7\'), which as would read as an escaped quote and run
+	 * the string past endm: a quote here; \\' too (MAC.l #\\'????\\',
+	 * whose escaped backslash came out as \' as well) */
+	char *unesc = NULL;
+	if (st.in_macro && strstr(text, "\\'")) {
+		unesc = xstrdup(text);
+		char *w = unesc;
+		for (const char *r = text; *r; r++) {
+			if (r[0] == '\\' && r[1] == '\\' && r[2] == '\'')
+				r++;
+			else if (!(r[0] == '\\' && r[1] == '\''))
+				*w++ = *r;
+		}
+		*w = '\0';
+		text = unesc;
+	}
 	if (st.narg_pending && st.in_macro) {
 		/* the first line of a body that uses \#: the call's count */
-		bputs(&line_before, "r68__n\\@ set r68__narg\n");
+		bputs(&line_before, "r68__n\\@ set NARG\n ifne r68__nset\nr68__n\\@ set r68__narg\nr68__nset set 0\n endc\n");
 		st.narg_pending = 0;
 	}
 	if (!split_line(text, &l)) {
 		bputs(out, text);
+		free(unesc);
 		return;
 	}
 	char base[32], size;
@@ -3287,6 +3345,17 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (strcmp(base, "equ") != 0 && strcmp(base, "set") != 0 && strcmp(base, "ds") != 0 &&
 		    strcmp(base, "os9") != 0 && strcmp(base, "tcall") != 0 && strcmp(base, "align") != 0)
 			st.section = NULL;
+		if ((strcmp(base, "ifdef") == 0 || strcmp(base, "ifndef") == 0) && is_macro(l.args)) {
+			/* ifndef Flag, a macro's name (a use file's guard): r68 knows
+			 * macros there, as only symbols: the one each macro
+			 * statement sets */
+			struct buf nm = { 0 };
+			put_symbol(&nm, macro_orig(l.args), strlen(macro_orig(l.args)));
+			bprintf(out, "%s %s r68__m_%s%s", labs, l.op, nm.s, rest);
+			free(nm.s);
+			annotate = 1;
+			goto done;
+		}
 		if (strcmp(base, "ifp1") == 0) {
 			/* r68's first pass only (defsfile: ifp1, use
 			 * oskdefs.d, endc): its definitions hold in the
@@ -3302,12 +3371,24 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_fold[st.nmacros] = 0;
 			st.macro_narg = xrealloc(st.macro_narg, (st.nmacros + 1) * sizeof *st.macro_narg);
 			st.macro_narg[st.nmacros] = uses_narg(st.rest_of_file);
+			st.macro_ops = xrealloc(st.macro_ops, (st.nmacros + 1) * sizeof *st.macro_ops);
+			st.macro_ops[st.nmacros] = op_params(st.rest_of_file);
 			st.narg_pending = st.macro_narg[st.nmacros];
 			st.macro_shapes = xrealloc(st.macro_shapes, (st.nmacros + 1) * sizeof *st.macro_shapes);
 			st.macro_shapes[st.nmacros] = (struct buf){ 0 };
 			int renamed = st.nmren > 0 && strcmp(st.mren_from[st.nmren - 1], l.label) == 0 &&
 				lab.s != NULL && strcmp(st.mren_to[st.nmren - 1], lab.s) == 0;
 			st.macros[st.nmacros++] = xstrdup(renamed ? lab.s : l.label);
+			{
+				/* r68__m_NAME: for ifdef NAME (see there), set
+				 * where the macro is defined */
+				struct buf nm = { 0 };
+				put_symbol(&nm, l.label, strlen(l.label));
+				bprintf(&line_before, "r68__m_%s set 1\n", nm.s);
+				free(nm.s);
+				if (!st.in_macro)
+					put_marker(&line_before);
+			}
 			if (l.global && st.in_psect && strchr(l.label, '\\') == NULL) {
 				/* NAME: macro: both r68s export NAME, value 0 (ROF's
 				 * symbol kind 7); its xdef (add_global) needs it
@@ -3534,6 +3615,7 @@ done:
 	}
 	free(lab.s);
 	free_line(&l);
+	free(unesc);
 }
 
 /* Reads PATH and writes its translation, behind a linemarker, to OUT.
@@ -3639,6 +3721,8 @@ static const char prelude[] =
 	" endm\n"
 	"* the offset counter: org, do, lo, and . in expressions\n"
 	"r68__ofs set 0\n"
+	"* \\# where a call has an empty argument (narg_set)\n"
+	"r68__nset set 0\n"
 	"r68do macro\n"
 	" ifne \\2-1\n"
 	"r68__ofs set (r68__ofs+1)/2*2\n"

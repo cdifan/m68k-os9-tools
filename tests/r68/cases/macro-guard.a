@@ -1,0 +1,25 @@
+* ifndef with a macro's name as a guard (ifndef Flag: r68 knows macros there, as only symbols;
+* the second definition redefined the macro); a parameter that is empty when the body expands
+* (Flag \2, called with an empty \2) counts no argument in the inner call; an argument named
+* like subi (SUBI) is a mnemonic only where the body uses it as an operation.
+* fixed: 2fb4b9c 2026-10-11 r68togas: ifdef of a macro; \# in nested calls; mnemonic arguments
+* expect text: 03000001
+Flag MACRO
+ ifne \#
+m\1 equ 1
+ endc
+ ENDM
+ ifndef Flag
+Flag MACRO
+ dc.b 99
+ ENDM
+ endc
+R2 MACRO
+ Flag \2
+ Flag \3
+ dc.b \#
+ ENDM
+ psect macro_guard,0,0,0,0,0
+ R2 x,,SUBI
+ dc.w mSUBI
+ ends
