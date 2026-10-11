@@ -2631,6 +2631,15 @@ static char *use_file(const char *arg, const char *from)
 	}
 	if (name[0] == '/') {
 		found = find_ci(name);
+		/* An OS-9 path of the machine it was written on (use
+		 * /dd/defs/oskdefs.d, /h0/defs/...) that isn't here: its file
+		 * name in the -u directories, as if they were /dd/defs. */
+		const char *base = strrchr(name, '/') + 1;
+		for (int i = 0; found == NULL && *base && i < st.nsearch; i++) {
+			char *f = join(st.search[i], strlen(st.search[i]), base);
+			found = find_ci(f);
+			free(f);
+		}
 		free(name);
 		return found;
 	}
