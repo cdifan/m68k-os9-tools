@@ -3454,6 +3454,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* as has no jblo, jbhs */
 			snprintf(opb, sizeof opb, "j%s", strcmp(base, "blo") == 0 ? "bcs" : strcmp(base, "bhs") == 0 ? "bcc" : base);
 			op = opb;
+		} else if (strcmp(base, "movea") == 0 && size == 0 && !is_macro(l.op)) {
+			/* movea without a size: long in both Microware
+			 * assemblers (as: word); adda, suba, cmpa and move to an
+			 * address register stay word in both (tested) */
+			snprintf(opb, sizeof opb, "movea.l");
+			op = opb;
+			annotate_op = 1;
 		} else if (strcmp(base, "exg") == 0 && size) {
 			/* exg.l: r68 takes the size, as doesn't */
 			snprintf(opb, sizeof opb, "exg");
