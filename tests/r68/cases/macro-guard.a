@@ -2,7 +2,7 @@
 * the second definition redefined the macro); a parameter that is empty when the body expands
 * (Flag \2, called with an empty \2) counts no argument in the inner call; an argument named
 * like subi (SUBI) is a mnemonic only where the body uses it as an operation.
-* fixed: 2fb4b9c 2026-10-11 r68togas: ifdef of a macro; \# in nested calls; mnemonic arguments
+* fixed: 0257e62 2026-10-11 r68togas: ifdef of a macro; \# in nested calls; mnemonic arguments; \'
 * expect text: 03000001
 Flag MACRO
  ifne \#
