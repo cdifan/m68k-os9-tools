@@ -2,7 +2,7 @@
 * (it was made the number of the characters \ and 1); a macro with a dot in its name (if.set) is
 * called as a macro, its arguments as such (b\2 with eq.s: not a name with a dot); a macro named
 * if... isn't a conditional (the epilogue closed one that wasn't open).
-* fixed: 0d9517d 2026-10-11 r68togas: quoted macro parameters; dotted macro calls; if... macros
+* fixed: b516685 2026-10-11 r68togas: quoted macro parameters; dotted macro calls; if... macros
 * expect text: 0c00002d 6700fffa 0c800000 61626700 fff00806 00186be8 08060019 6600ffe2
 sel.b MACRO
  cmpi.b #'\1',d0
