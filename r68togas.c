@@ -718,6 +718,25 @@ static void put_regs(struct buf *b, const char *s, size_t n)
 
 /* Translates one instruction operand. ABSOLUTE: a bare expression operand
  * is an absolute address (r68's jsr/jmp/lea/pea label: absolute long). */
+/* Whether operand S (N chars) is an address in parentheses without a
+ * register ((4): move.l (4),a5), which r68 takes as an absolute
+ * long address as a bare one; as as a short one. */
+static int paren_address(const char *s, size_t n)
+{
+	if (n < 3 || s[0] != '(' || s[n - 1] != ')')
+		return 0;
+	int depth = 0;
+	for (size_t i = 0; i < n; i++) {
+		if (s[i] == '(')
+			depth++;
+		else if (s[i] == ')' && --depth == 0 && i != n - 1)
+			return 0;
+		else if (s[i] == ',')
+			return 0;
+	}
+	return !register_part(s + 1, n - 2);
+}
+
 static void operand(struct buf *b, const char *s, size_t n, int absolute)
 {
 	if (n == 0)
@@ -3989,8 +4008,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				int addr_op = memory_instruction(base);
 				int abs_here = (absolute ? i == 0 : addr_op && memchr(pieces[i], '\\', lens[i]) == NULL) &&
 					pieces[i][0] != '#' &&
-					memchr(pieces[i], '(', lens[i]) == NULL && !register_list(pieces[i], lens[i]) &&
-					!(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
+					(memchr(pieces[i], '(', lens[i]) == NULL || paren_address(pieces[i], lens[i])) &&
+					!register_list(pieces[i], lens[i]) && !(lens[i] > 2 && pieces[i][lens[i] - 2] == '.');
 				if (lens[i] >= 2 && pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') {
 					/* No instruction takes a string: a call of a macro
 					 * defined later (SBFDesc ...,"sbgiga" in a macro body),
