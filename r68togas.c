@@ -2953,14 +2953,17 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		const char *t = arg.s ? arg.s : "";
 		if (lmacro && (angled || strpbrk(t, "!<>") != NULL)) {
 			/* through r68L, which passes it on in <> again: its
-			 * !, < and > escaped twice (Trace Hdr_,Err!) */
-			bputc(b, '<');
+			 * !, < and > escaped twice (Mac Hdr_,Err!) */
+			/* and in <> on the r68L call line too: <!<...!>> (Mac
+			 * >150,=,...: as took a bare = for a keyword argument;
+			 * Mac Abcd,k<>0 lost its <>) */
+			bputs(b, "<!<");
 			for (const char *c = t; *c; c++) {
 				if (*c == '!' || *c == '<' || *c == '>')
 					bputs(b, "!!!");
 				bputc(b, *c);
 			}
-			bputc(b, '>');
+			bputs(b, "!>>");
 		} else if (angled) {
 			put_angle(b, t, arg.n);
 		} else {

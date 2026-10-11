@@ -1,0 +1,26 @@
+* Arguments with !, <, > or = passed on by a macro to one using \Ln: on the r68L call line too in
+* <> (Put >123,= : as took the bare = for a keyword argument; Put x<>1,... and Put C!,C lost
+* characters, so the length chose the wrong size).
+* fixed: 8fb5272 2026-10-11 r68togas: arguments through r68L in <> on its call line
+* expect text: 2afc3e31 32331afc 003d2afc 783c3e31 2afc4162 43643afc 43211afc 00434e71
+PutBWL macro
+ ifgt \L1-1
+ ifgt \L1-2
+ move.l #'\1',(a5)+
+ else
+ move.w #'\1',(a5)+
+ endc
+ else
+ move.b #'\1',(a5)+
+ endc
+ endm
+Put macro
+ PutBWL \1
+ PutBWL \2
+ endm
+ psect lmacro_via_specials,0,0,0,0,0
+ Put >123,=
+ Put x<>1,AbCd
+ Put C!,C
+ nop
+ ends
