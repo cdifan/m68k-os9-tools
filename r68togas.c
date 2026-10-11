@@ -239,6 +239,7 @@ static int twin_mode;	/* in a PC-relative displacement or a branch target: globa
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int p1_name(struct buf *b, const char *s, size_t n);
 static int in_macro_def(void);
+static int shift_masked(void);
 
 static void parse_unary(struct lexer *lx, struct buf *b)
 {
@@ -458,7 +459,16 @@ static void parse_binary(struct lexer *lx, struct buf *b, int prec, int top)
 		struct buf both = { 0 };
 		bputs(&both, left.s ? left.s : "");
 		bputs(&both, as);
-		bputs(&both, right.s ? right.s : "");
+		if (prec == P_SHIFT && shift_masked() && right.s && !(isdigit((unsigned char)right.s[0]) &&
+								  strspn(right.s, "0123456789") == strlen(right.s) &&
+								  atoi(right.s) < 32)) {
+			/* Ultra C's r68 shifts as the x86 does, the count
+			 * modulo 32 (1<<8+199 is 1<<15); C 3.2's
+			 * R68 and as give 0 */
+			bprintf(&both, "((%s)&31)", right.s);
+		} else {
+			bputs(&both, right.s ? right.s : "");
+		}
 		free(left.s);
 		free(right.s);
 		left = both;
@@ -1053,6 +1063,13 @@ static struct state st;
 static int in_macro_def(void)
 {
 	return st.in_macro;
+}
+
+/* Whether shift counts are taken modulo 32 (Ultra C's r68, the default
+ * dialect; see parse_binary). */
+static int shift_masked(void)
+{
+	return !st.c32;
 }
 
 /* sys.l's equates (-e) are left to the linker, as r68 leaves them, where an
