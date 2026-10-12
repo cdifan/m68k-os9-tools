@@ -600,7 +600,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	      /* A link-time expression: its terms as the ROF's references
 		 at this place, as Microware's assemblers write a sum of
 		 external names (Dir_+Write_) or a label plus them
-		 (lab+PCB_Data: the label's section's alias r68l_..., a local
+		 (Block+Field: the label's section's alias r68l_..., a local
 		 reference, the label's offset in the bytes).  PC-relative
 		 only to code of this psect (Table+Off(pc)): the distance in
 		 the bytes, the external names added.  */

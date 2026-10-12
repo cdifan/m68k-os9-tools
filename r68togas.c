@@ -1545,7 +1545,7 @@ static int label_alias(char sec, char *name, size_t size)
 
 /* Expression text S as a link-time expression: null if it isn't one, or
  * one relocation takes it as it is. A label of this source in it (one,
- * added, with external names: pcb+PCB_Data) is its section's alias in the
+ * added, with external names: Block+Field) is its section's alias in the
  * note (label_alias), (label-alias) added to the symbol: the label's
  * offset, which as computes. */
 static char *r68x_expression(const char *s)

@@ -47,7 +47,7 @@
  * this ROF's code at the same place (S - code base + value, as cstart.r
  * uses for 32-bit PC-relative values) becomes a PC-relative relocation.
  * Other combinations of references at one place (external names added or
- * subtracted, Dir_+Write_; a label plus them, lab+PCB_Data) become a
+ * subtracted, Dir_+Write_; a label plus them, Block+Field) become a
  * link-time expression (r68x_note.h), the local term as its section's
  * alias (r68l_<name>_<section>, a hidden global at the section's start);
  * the linkers resolve them, as l68 resolves the ROF's references. No
@@ -910,7 +910,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
       pos = neg = NULL;
 
       /* External terms, and at most one added local one (a label plus
-	 an equate: lab+PCB_Data), none PC-relative: a link-time expression
+	 an equate: Block+Field), none PC-relative: a link-time expression
 	 (r68x_note.h), as l68 would resolve it; the local term as its
 	 section's alias (section_alias), the label's offset staying in the
 	 bytes, the addend.  */
