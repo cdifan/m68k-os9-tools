@@ -1,7 +1,7 @@
 # The symbol module (-g) lists no equates, as both l68s: neither a library's nor the program's own
 # global ones, nor the link-time expressions and section aliases of a label plus an external
 # equate.
-# fixed: 2026-10-12 elf2mod: no equates, r68x_ or r68l_ symbols in the symbol module
+# fixed: 78cdd7d 2026-10-12 elf2mod: no equates, r68x_ or r68l_ symbols in the symbol module
 src stbequs <<'EOF'
  psect stbequs,0,0,0,0,0
 Fieldq: equ 4
