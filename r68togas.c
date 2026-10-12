@@ -239,6 +239,7 @@ static void mri_strings(struct buf *b, const char *text, size_t n);
 static int is_cond(const char *base);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
+static int value_mode;	/* an equ's or set's value: register names are symbols there */
 static int p1_name(struct buf *b, const char *s, size_t n);
 static int in_macro_def(void);
 static int memory_instruction(const char *base);
@@ -420,6 +421,8 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			return;
 		}
 		put_symbol(b, p, q - p);
+		if (value_mode && is_r68_register(p, q - p))
+			bputs(b, "__r68");	/* Reg equ d3: d3 an undefined symbol in r68 */
 		if (forward_set(p, q - p))
 			bputs(b, "__final");
 		lx->p = q;
@@ -4350,10 +4353,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* -d c32: junk after the value, which C 3.2's R68 ignores
 			 * (Ultra C's r68 refuses the line); not a macro's \@ or
 			 * parameter (Len\@ set *-Beg\@) */
+			value_mode = 1;
 			expression(out, l.args, len);
+			value_mode = 0;
 			annotate = 1;
 		} else {
+			value_mode = strcmp(base, "equ") == 0 || strcmp(base, "set") == 0;
 			expression_list(out, l.args, 0);
+			value_mode = 0;
 		}
 		bputs(out, rest);
 		goto done;

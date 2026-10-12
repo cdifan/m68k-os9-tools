@@ -1,0 +1,10 @@
+* A register name in an equ's value is a symbol for r68, here an undefined one: Val's uses are
+* absolute long references to the external d2 (as would make Val an alias of the register).
+* fixed: pending
+* expect text: 4a390000 00004e71
+* expect reloc: R_68K_32          d2
+Val equ d2
+ psect equ_register_name,0,0,0,0,0
+ tst.b Val
+ nop
+ ends
