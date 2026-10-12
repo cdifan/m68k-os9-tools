@@ -1,7 +1,7 @@
 # A library of one ROF (-sysl= of a sys.l made of one psect) is converted into an archive, as one
 # of more: rof2elf wrote an object for it to the front ends' temporary name, which ranlib
 # refused, so the conversion failed.
-# fixed: pending
+# fixed: 52fe63e 2026-10-12 rof2elf: a library of one ROF is an archive unless the output is named .o
 src onesys <<'EOF'
  psect onesys,0,0,0,0,0
 V_Flag: equ $23
