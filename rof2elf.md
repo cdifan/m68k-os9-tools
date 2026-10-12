@@ -62,6 +62,17 @@ resolves them: link with those libraries.
 - **A negated reference to the ROF's code alone,** in the code (a constant less a code address,
   `dc.w K-*`), is a PC-relative value against the absolute zero, the field's offset added to the
   addend, as `gas` writes the same.
+- **References at one place that add and subtract several externals,** none relative
+  (`Dir_+Write_`, `-E$Abort`), refer to a link-time expression's symbol `r68x_<hash>`, defined at
+  link time from the note in the section `.r68x` (see "Link-time expressions" in
+  [m68k-os9-l68.md](m68k-os9-l68.md)). One added local reference may go with them (a label plus an
+  equate, `Block+Field(a6)`): its section is named by an alias, `r68l_<name>_<section>` (the ROF's
+  name with characters other than letters, digits and `_` as `_`; `text`, `data`, `bss`, `rdata`,
+  `rbss`), a hidden global at that section's start, the label's offset staying the addend.
+  `r68togas` writes the same for such a source, and `elf2rof` turns it back into the two
+  references. No equate's value is folded in.
+- **Other combinations** of references at one place are rejected (a PC-relative one with others,
+  for example).
 
 ## The ROF format
 

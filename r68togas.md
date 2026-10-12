@@ -251,6 +251,12 @@ call sets for its arguments on a line before the call (the link-time expression,
 where the arguments make none). A call inside another macro's body with that macro's parameter
 sets the alias to an expression of the outer macro's alias.
 
+No equate's value is put in. Where neither a relocation nor a link-time expression can take an
+external name, it is `gas`'s error, as r68 refuses it too ("illegal external reference"): another
+operator on it (`F$Link&$ff`), a field that isn't a byte or larger (`addq`'s value, a shift
+count), sizes, counts and conditionals. Objects need the libraries whose equates they use when
+linking, as with `l68`.
+
 ### Macros
 
 - `\1` ... `\9` work as they are; `\#` (the argument count) is `NARG`.
