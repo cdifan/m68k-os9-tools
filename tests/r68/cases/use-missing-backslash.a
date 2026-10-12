@@ -1,0 +1,8 @@
+* A use file not found, its DOS path with backslashes: the message names it as written (as's
+* .error took \t in ..\tables.d for a tab).
+* fixed: pending
+* expect error: use '..\tables.d': not found
+ use "..\tables.d"
+ psect use_missing_backslash,0,0,0,0,0
+ nop
+ ends

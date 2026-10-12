@@ -1759,7 +1759,7 @@ static const char *data_section(int initialized)
 }
 
 /* NAME's equ or set value '.-LABEL' (A, N chars), LABEL a vsect label
- * defined before (PermSiz equ .-WritAdr): r68's '.' is the offset counter
+ * defined before (Size equ .-Label): r68's '.' is the offset counter
  * there too (the manuals: "the current value of the offset origin"). r68
  * makes the symbol one of LABEL's section, the counter less LABEL's offset,
  * which the link relocates (the global symbol in the ROF), but a use in the
@@ -2723,8 +2723,13 @@ static int known_value(const char *s, size_t n)
  * angle brackets or double quotes. */
 static void error_text(struct buf *b, const char *s, size_t n)
 {
-	for (size_t i = 0; i < n; i++)
+	for (size_t i = 0; i < n; i++) {
+		/* a backslash doubled: .error's string takes escapes (a DOS
+		 * path's ..\tables.d had a tab) */
+		if (s[i] == '\\')
+			bputc(b, '\\');
 		bputc(b, s[i] == '<' ? '(' : s[i] == '>' ? ')' : s[i] == '"' ? '\'' : s[i]);
+	}
 }
 
 /* PATH if it exists, found with each component's case ignored (a
@@ -4440,7 +4445,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bputs(out, l.args);
 		} else if ((strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) && !st.in_macro &&
 			   dot_less_vsect(out, l.label, l.args, alen)) {
-			/* PermSiz equ .-WritAdr: in the label's section */
+			/* Size equ .-Label: in the label's section */
 		} else if (st.c32 && (strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) &&
 			   (len = expression_length(l.args, alen)) > 0 && len < alen && l.args[len] != '\\') {
 			/* -d c32: junk after the value, which C 3.2's R68 ignores

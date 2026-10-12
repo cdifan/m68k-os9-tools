@@ -463,7 +463,7 @@ static struct args output_lines(struct args *argv)
 	return lines;
 }
 
-/* r68togas's .-LABEL symbols (PermSiz equ .-WritAdr, LABEL a vsect label:
+/* r68togas's .-LABEL symbols (Size equ .-Label, LABEL a vsect label:
  * in LABEL's section, the offset counter less LABEL's offset), which as
  * leaves out of its object, being equated to an expression: each noted as
  * a word in .r68dlv whose relocation is SECTION+VALUE, its name and "g"
@@ -491,7 +491,7 @@ static void dot_less_symbols(const char *object)
 	struct args add = { 0 };
 	int k = 0;
 	for (int i = 0; i < names.n; i++) {
-		/* "  [     0]  PermSiz g" */
+		/* "  [     0]  Size g" */
 		const char *p = strchr(names.v[i], ']');
 		if (strncmp(names.v[i], "  [", 3) != 0 || p == NULL)
 			continue;
