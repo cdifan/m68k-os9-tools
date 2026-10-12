@@ -2,7 +2,7 @@
 * operation at the parenthesis; the translation took the whole for one name, so it didn't count
 * the conditional, dropped its endc as one closing nothing, and as reached the end of the file
 * inside the conditional.
-* fixed: pending
+* fixed: 9bebdc5 2026-10-12 r68togas: a conditional's operand in parentheses right after it (ifeq(...))
 * expect text: 00024e71
 Flag equ 0
  psect cond_paren,0,0,0,0,0
