@@ -1,0 +1,10 @@
+* After a statement translated into several lines (a psect: its section and more), as's line
+* numbers were one too high for the rest of the source; a line marker after it keeps them as
+* the source's: the missing use file is reported at line 8.
+* fixed: pending
+* expect error: line-after-psect.a:8: Error: use 'gone.d': not found
+ psect line_after_psect,0,0,0,0,0
+ nop
+ use "gone.d"
+ nop
+ ends

@@ -4915,6 +4915,18 @@ static void translate_file(const char *path, FILE *out, int depth)
 				hoisting = 0;
 		} else {
 			fputs(whole.s, out);
+			/* A statement translated into several lines (psect: its
+			 * section and r68__sid): the next line's number, else as
+			 * counts each later line too high; after byte data owed
+			 * (as aligns at a marker), not in a macro body (replayed
+			 * by each expansion) */
+			const char *nl = strchr(whole.s, '\n');
+			if (nl != NULL && nl[1] != '\0' && !st.in_macro) {
+				if (st.maybe_odd)
+					st.marker_owed = 1;
+				else
+					fprintf(out, "# %d \"%s\"\n", lineno + 1, path);
+			}
 		}
 		free(whole.s);
 		free(raw);
