@@ -2,6 +2,7 @@
 * distance in the bytes and the equate as an absolute reference; as can't write that, and the
 * linkers make a link-time expression's symbol absolute, which a PC-relative relocation can't
 * take: still as's error (r68 takes it).
+* fixed: 2aefb81 2026-10-12 No folding of a library's equates: a label plus external equates as a link-time expression; -sysl= and rof2elf's -e gone
 * expect error: invalid operands
  psect lab_ext_pcrel,0,0,0,0,0
  lea Table+Off(pc),a1

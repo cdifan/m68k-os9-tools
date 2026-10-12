@@ -2,7 +2,7 @@
 * external reference there, l68 adds both; one ELF relocation can't, so a link-time expression
 * of the label's section's alias (a hidden global at the bss's start) and the equate, the label's
 * offset added (6, 8). Folding sys.l's value did it before, for sys.l's equates only.
-* fixed: pending
+* fixed: 2aefb81 2026-10-12 No folding of a library's equates: a label plus external equates as a link-time expression; -sysl= and rof2elf's -e gone
 * expect text: 2d480000 302e0000
 * expect reloc: R_68K_16          r68x_a4de017a+0x00000006
 * expect reloc: R_68K_16          r68x_a4de017a+0x00000008

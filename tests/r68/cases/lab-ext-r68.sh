@@ -1,7 +1,7 @@
 # r68's ROF of a label plus an external equate (lab-ext-data): rof2elf reads its local and
 # external reference at the field into the link-time expression r68togas writes (the same name:
 # the label's section's alias and the equate).
-# fixed: pending
+# fixed: 2aefb81 2026-10-12 No folding of a library's equates: a label plus external equates as a link-time expression; -sysl= and rof2elf's -e gone
 needs_r68
 src lx <<'EOF'
  psect lx,$101,$8000,1,0,Start

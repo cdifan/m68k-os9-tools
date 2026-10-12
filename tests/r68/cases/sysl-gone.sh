@@ -1,6 +1,6 @@
 # -sysl= (the library whose equates were folded in) is no longer an option: an error naming it,
 # not r68's option letters (it read -s, then -y: "-y ... isn't supported").
-# fixed: pending
+# fixed: 2aefb81 2026-10-12 No folding of a library's equates: a label plus external equates as a link-time expression; -sysl= and rof2elf's -e gone
 src t <<'EOF'
  psect t,0,0,0,0,0
  nop

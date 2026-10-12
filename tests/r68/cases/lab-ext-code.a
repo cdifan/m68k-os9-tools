@@ -1,7 +1,7 @@
 * A code label plus an external equate (dc.w Table+Off, a module offset): a link-time expression
 * of the code's alias and the equate, the label's offset added. Not in a PC-relative field
 * (lab-ext-pcrel).
-* fixed: pending
+* fixed: 2aefb81 2026-10-12 No folding of a library's equates: a label plus external equates as a link-time expression; -sysl= and rof2elf's -e gone
 * expect text: 4e714e71 00000001 00024e71
 * expect reloc: R_68K_16          r68x_bad6645d+0x00000006
 * expect sym: T r68l_lab_ext_code_text 00000000

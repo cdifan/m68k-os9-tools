@@ -2,7 +2,7 @@
 # link-time expression as r68 does, a local and an external reference at the field, rof2elf
 # reads that back into the same expression (r68's ROF too), and a link with the equate from a
 # library gives the module the equate defined in the source gives.
-# fixed: pending
+# fixed: 2aefb81 2026-10-12 No folding of a library's equates: a label plus external equates as a link-time expression; -sysl= and rof2elf's -e gone
 src lx <<'EOF'
  psect lx,$101,$8000,1,0,Start
  vsect
