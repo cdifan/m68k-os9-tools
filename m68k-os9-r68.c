@@ -117,8 +117,6 @@ static void usage(void)
 		free(text);
 	}
 	printf("Options of this program:\n");
-	usage_line("-sysl=<lib>", "the library whose equates are folded in (default CLIB's sys.l;\n"
-		"                      none: none), as rof2elf -e folds them into ROFs");
 	usage_line("-dialect=<d>", "whose encodings and padding where Microware's assemblers\n"
 		"                      differ: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68)");
 	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
@@ -128,10 +126,6 @@ static void usage(void)
 	usage_line("M68K_OS9_ELF", "obj=elf, rof or ucc as -obj= (gas only on the command line)");
 	usage_line("MWOS", "use <file> also looks in $MWOS/OS9/SRC/DEFS");
 }
-
-/* -sysl=: the library whose equates are folded in ("none": none; default
- * the sys.l of CLIB). */
-static const char *sysl;
 
 /* ----- Parsing ----- */
 
@@ -209,10 +203,10 @@ static void option(const char *arg)
 		os9_cleanup();
 		exit(0);
 	}
-	if (ci_prefix(text, "sysl=")) {
-		sysl = text + 5;
-		return;
-	}
+	if (ci_prefix(text, "sysl="))
+		/* gone (2026-10-12): no library's equates are folded in */
+		error("-sysl= is no longer an option: a library's equates stay external, as r68 leaves "
+		      "them, for the link (l68 -l=sys.l)");
 	if (ci_prefix(text, "dialect=")) {
 		if (!ci_eq(text + 8, "c32") && !ci_eq(text + 8, "ucc"))
 			error("-dialect= takes c32 or ucc");
@@ -362,43 +356,6 @@ static void register_names(const char *object)
 		error("renaming symbols in %s failed", object);
 	args_free(&argv);
 	args_free(&renames);
-}
-
-/* The equates of sys.l (or -sysl=) as NAME VALUE lines in a temporary
- * file, for r68togas -e; null if there is no library. r68 leaves them
- * external and l68 takes them from sys.l at link time; as can't add two
- * externals (F_ONE+F_TWO) or test one in a conditional, so they are
- * folded in here, as rof2elf -e folds them into a ROF's code. */
-static char *equates(void)
-{
-	const char *lib = sysl != NULL ? (ci_eq(sysl, "none") ? NULL : sysl) : os9conv_sys_l();
-	if (lib == NULL)
-		return NULL;
-	char *elf = os9conv_as_elf(lib, 1);
-	struct args argv = { 0 };
-	args_add(&argv, NM);
-	args_add(&argv, elf);
-	char *out = os9_temp(".out");
-	int show = os9_show;
-	os9_show = 0;
-	int status = os9_run(&argv, out, NULL);
-	os9_show = show;
-	args_free(&argv);
-	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
-	if (fp == NULL)
-		error("%s %s failed", NM, elf);
-	char *file = os9_temp(".equ");
-	FILE *eq = fopen(file, "w");
-	if (eq == NULL)
-		error("cannot write %s", file);
-	char line[1024], value[64], type[8], name[512];
-	while (fgets(line, sizeof line, fp) != NULL)
-		if (sscanf(line, "%63s %7s %511s", value, type, name) == 3 && strcmp(type, "A") == 0)
-			fprintf(eq, "%s $%s\n", name, value);
-	fclose(fp);
-	fclose(eq);
-	free(elf);
-	return file;
 }
 
 /* Whether the assembler sizes a branch to a global label of the same
@@ -691,11 +648,6 @@ static void assemble(const char *source)
 			args_add(&argv, "-B");
 	}
 	args_append(&argv, &st.dirs);
-	char *eqf = equates();
-	if (eqf != NULL) {
-		args_add(&argv, "-e");
-		args_add(&argv, eqf);
-	}
 	char *translated = NULL;
 	if (!gas || out != NULL) {
 		translated = gas ? (char *)out : os9_temp(".s");

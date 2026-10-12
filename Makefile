@@ -66,8 +66,8 @@ $(EXE): elf2mod.c
 $(EXE_ROF2ELF): rof2elf.c r68x_note.c r68x_note.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c
 
-$(EXE_ELF2ROF): elf2rof.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+$(EXE_ELF2ROF): elf2rof.c r68x_note.c r68x_note.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c
 
 $(TRANSLATORS): %: %.c r68x_note.c r68x_note.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c

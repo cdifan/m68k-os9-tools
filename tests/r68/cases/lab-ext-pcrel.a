@@ -1,0 +1,9 @@
+* A code label plus an external equate in a PC-relative field (Table+Off(pc)): r68 writes the
+* distance in the bytes and the equate as an absolute reference; as can't write that, and the
+* linkers make a link-time expression's symbol absolute, which a PC-relative relocation can't
+* take: still as's error (r68 takes it).
+* expect error: invalid operands
+ psect lab_ext_pcrel,0,0,0,0,0
+ lea Table+Off(pc),a1
+Table dc.w 1,2
+ ends

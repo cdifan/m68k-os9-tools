@@ -62,10 +62,6 @@ void os9conv_environment(unsigned allowed);
  * (ARG with its '-'); returns whether ARG was one of them. */
 int os9conv_option(const char *arg, unsigned allowed);
 
-/* The library directory's sys.l (any case), whose equates rof2elf folds
- * into the code (-e); null if none. */
-const char *os9conv_sys_l(void);
-
 /* INPUT as ELF: itself if it is (an object, or an ar archive), else its
  * conversion (LIBRARY: an ar archive), made or remade when older than INPUT
  * or sys.l (allocated). */

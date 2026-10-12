@@ -1,0 +1,17 @@
+* A vsect label plus an external equate in one field (Block+Field(a6)): r68 writes a local and an
+* external reference there, l68 adds both; one ELF relocation can't, so a link-time expression
+* of the label's section's alias (a hidden global at the bss's start) and the equate, the label's
+* offset added (6, 8). Folding sys.l's value did it before, for sys.l's equates only.
+* fixed: pending
+* expect text: 2d480000 302e0000
+* expect reloc: R_68K_16          r68x_a4de017a+0x00000006
+* expect reloc: R_68K_16          r68x_a4de017a+0x00000008
+* expect sym: B r68l_lab_ext_data_bss 00000000
+ psect lab_ext_data,0,0,0,0,0
+ vsect
+Pad ds.w 3
+Block ds.l 4
+ ends
+ move.l a0,Block+Field(a6)
+ move.w Block+Field+2(a6),d0
+ ends

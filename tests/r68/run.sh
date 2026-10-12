@@ -33,10 +33,8 @@ crlf() { sed 's/\r*$/\r/' "$1" > "$2"; }
 asm_case() {	# SOURCE
 	local src=$1 name=$(basename "$1" .a) why=
 	local opts=$(header options "$src")
-	local sysl=-sysl=none
-	grep -q -i -- '-sysl=' <<< "$opts" && sysl=
 	local o=$t/$name.o
-	(cd "$t" && m68k-os9-r68 "$src" -q $sysl $opts -o="$o") > "$t/$name.log" 2>&1 < /dev/null
+	(cd "$t" && m68k-os9-r68 "$src" -q $opts -o="$o") > "$t/$name.log" 2>&1 < /dev/null
 	local status=$?
 	local err=$(expect error "$src")
 	if ! grep -q '^\* expect [a-z]*:' "$src"; then
@@ -95,7 +93,7 @@ result() {	# NAME WHY (empty: passed) [KNOWN: the case is a known failure, why]
 
 # Helpers for the cases/*.sh (run in a directory of their own; a failed check adds to $why):
 #   src NAME <<'EOF'        a source NAME.a from the here-document
-#   asm NAME [OPTS...]      NAME.a assembled into NAME.o (m68k-os9-r68 -sysl=none unless given)
+#   asm NAME [OPTS...]      NAME.a assembled into NAME.o (m68k-os9-r68)
 #   lib LIB OBJ...          an ar archive LIB of the objects
 #   link OUT ARGS...        m68k-os9-l68 ARGS -o=OUT (its messages in OUT.log)
 #   has_bytes FILE HEX      FILE contains the bytes HEX
@@ -108,9 +106,8 @@ result() {	# NAME WHY (empty: passed) [KNOWN: the case is a known failure, why]
 #   mwasm NAME [OPTS...]    NAME.a assembled by Ultra C's r68 into NAME.r
 src() { cat > "$1.a"; }
 asm() {
-	local n=$1 sysl=-sysl=none; shift
-	case " $* " in *" -sysl="*) sysl= ;; esac
-	m68k-os9-r68 "$n.a" -q $sysl "$@" -o="$n.o" > "$n.log" 2>&1 < /dev/null || why="$why assembling $n failed: $(head -1 "$n.log");"
+	local n=$1; shift
+	m68k-os9-r68 "$n.a" -q "$@" -o="$n.o" > "$n.log" 2>&1 < /dev/null || why="$why assembling $n failed: $(head -1 "$n.log");"
 }
 lib() { local l=$1; shift; rm -f "$l"; ${B}ar rc "$l" "$@"; }
 link() { local o=$1; shift; GRPUSER=0.0 m68k-os9-l68 "$@" -o="$o" > "$o.log" 2>&1 < /dev/null; echo $? > "$o.status"; }

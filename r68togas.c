@@ -1108,6 +1108,11 @@ static void free_line(struct line *l)
 struct state {
 	int in_psect, in_vsect, remote;
 	int used_remote;	/* a vsect remote seen */
+	char **lsnames;		/* the source's labels with their sections (label_section) */
+	char *lssecs;
+	int nls;
+	char *cur_psect;	/* the psect statement's name, for label_alias */
+	struct buf aliases;	/* "<section letter> <alias>" lines, those used (label_alias) */
 	int in_macro, macro_ifs;	/* in a macro definition; its open conditionals */
 	int cond_depth;		/* open conditionals outside macro definitions */
 	int branch_sizing;	/* -b: r68's -b/-bt */
@@ -1132,9 +1137,6 @@ struct state {
 	int nfinals;
 	char **p1s;		/* finals with a NAME__p1 (their value in r68's first pass) */
 	int np1s;
-	char **folded;		/* the names of -e (sys.l's equates) */
-	char **foldval;		/* and their values */
-	int nfolded;
 	const char *section;	/* the current section, null if not known */
 	char *psect;		/* the psect line's fields */
 	char *psect_args;
@@ -1179,8 +1181,6 @@ struct state {
 	 * dc.w ...) */
 	int maybe_odd, marker_owed, aligning;
 	int narg_pending;	/* the macro defined on the line before uses \# */
-	unsigned *macro_fold;	/* per macro: the parameters (bit n-1 for \n) used where
-				   equates are folded in (see fold_equates) */
 	struct buf *macro_shapes;	/* per macro: its link-time expressions of parameters,
 					   lines "K TEXT" (see macro_shape) */
 	int nshapes;
@@ -1271,20 +1271,6 @@ static int shift_masked(void)
 	return !st.c32;
 }
 
-/* sys.l's equates (-e) are left to the linker, as r68 leaves them, where an
- * ELF relocation (symbol + addend) can take them: in a sum whose only
- * symbol is the equate, added. In any other expression (another symbol,
- * the equate subtracted, another operator) and where fold_all is set (a
- * field in the instruction word, a size, a conditional) their values are
- * put in. */
-static int folded_index(const char *s, size_t n)
-{
-	for (int i = 0; i < st.nfolded; i++)
-		if (strlen(st.folded[i]) == n && strncmp(st.folded[i], s, n) == 0)
-			return i;
-	return -1;
-}
-
 /* Whether name N (n chars) matches scanned name PAT, where a macro
  * parameter or \@ in PAT (_C\1) stands for any run of name characters. */
 static int name_match(const char *pat, const char *n, size_t len)
@@ -1334,12 +1320,13 @@ static int defined_name(const char *s, size_t n)
 	return 0;
 }
 
-/* Link-time expressions (r68x_note.h): an expression of sys.l's equates
- * that one relocation can't take but a sum of them can (Dir_+Write_,
- * PD_PAR-PD_OPT, 4*F$Send, with constants) becomes r68x_<hash>+constant,
- * the definition noted in .r68x, where a relocation takes it (r68x_ok: an
- * instruction's or dc's operand; not equ and set, whose names may be used
- * in fields where they are folded). */
+/* Link-time expressions (r68x_note.h): an expression of external names
+ * (a library's equates) that one relocation can't take but a sum of them
+ * can (Dir_+Write_, PD_PAR-PD_OPT, 4*F$Send, with constants; a label of
+ * this source plus them, Lab+Ext, through its section's alias, see
+ * label_alias) becomes r68x_<hash>+constant, the definition noted in
+ * .r68x, where a relocation takes it (r68x_ok: an instruction's or dc's
+ * operand; not equ and set, whose names may be used anywhere). */
 static int r68x_ok;
 static struct buf r68x_notes;	/* the .r68x section's lines */
 static int lin_params;	/* a macro parameter \1..\9 is a term (macro_shape) */
@@ -1349,7 +1336,26 @@ struct lin {
 	long c;
 	int ok;
 	const char *p;
+	const char *lab;	/* a label of this source (labc times), at most one */
+	size_t labn;
+	long labc;
 };
+
+static char label_section(const char *s, size_t n);
+
+/* Adds R's label (negated if NEG) to V's: one label only, added. */
+static void lin_add_label(struct lin *v, const struct lin *r, int neg)
+{
+	if (r->labc == 0)
+		return;
+	if (v->labc != 0) {
+		v->ok = 0;
+		return;
+	}
+	v->lab = r->lab;
+	v->labn = r->labn;
+	v->labc = neg ? -r->labc : r->labc;
+}
 
 static void lin_binary(struct lin *v, int prec);
 
@@ -1367,9 +1373,10 @@ static void lin_unary(struct lin *v)
 			v->c = -v->c;
 			for (int i = 0; i < v->x.n; i++)
 				v->x.t[i].coef = -v->x.t[i].coef;
+			v->labc = -v->labc;
 		} else if (*p != '+') {
 			v->c = ~v->c;
-			v->ok &= v->x.n == 0;
+			v->ok &= v->x.n == 0 && v->labc == 0;
 		}
 		return;
 	}
@@ -1415,13 +1422,13 @@ static void lin_unary(struct lin *v)
 	} else if (symstart((unsigned char)*p)) {
 		while (symchar((unsigned char)*q))
 			q++;
-		/* only sys.l's equates and external names: a label, a set
+		/* only external names (a library's equates): a label, a set
 		 * symbol, the location don't go in a note; an equate of
 		 * external names goes as its expression (PD_Mine
 		 * equ PD_Base+18 in M$DTyp+PD_Mine-PD_OPT) */
-		const char *eq = folded_index(p, q - p) < 0 && !external_name(p, q - p) ? equate_text(p, q - p) : NULL;
+		const char *eq = !external_name(p, q - p) ? equate_text(p, q - p) : NULL;
 		if (eq != NULL && lin_depth < 8) {
-			struct lin sub = { { NULL, 0 }, 0, 1, eq };
+			struct lin sub = { { NULL, 0 }, 0, 1, eq, NULL, 0, 0 };
 			lin_depth++;
 			lin_binary(&sub, P_SHIFT);
 			lin_depth--;
@@ -1434,15 +1441,23 @@ static void lin_unary(struct lin *v)
 				for (int t = 0; t < sub.x.n; t++)
 					r68x_add(&v->x, sub.x.t[t].sym, strlen(sub.x.t[t].sym), sub.x.t[t].coef);
 				v->c = sub.c;
+				lin_add_label(v, &sub, 0);
 			}
 			r68x_free(&sub.x);
 			v->p = q;
 			return;
 		}
-		if (folded_index(p, q - p) < 0 && !external_name(p, q - p))
-			v->ok = 0;
-		else
+		if (external_name(p, q - p)) {
 			r68x_add(&v->x, p, q - p, 1);
+		} else if (!lin_params && v->labc == 0 && label_section(p, q - p)) {
+			/* a label whose section is known: its section's alias in
+			 * the note, the rest of it after (r68x_expression) */
+			v->lab = p;
+			v->labn = q - p;
+			v->labc = 1;
+		} else {
+			v->ok = 0;
+		}
 		v->p = q;
 		return;
 	}
@@ -1462,7 +1477,7 @@ static void lin_binary(struct lin *v, int prec)
 	int len, p;
 	const char *as;
 	while (v->ok && (p = binop(v->p, &len, &as)) == prec) {
-		struct lin r = { { NULL, 0 }, 0, 1, v->p + len };
+		struct lin r = { { NULL, 0 }, 0, 1, v->p + len, NULL, 0, 0 };
 		lin_binary(&r, prec + 1);
 		v->p = r.p;
 		v->ok &= r.ok;
@@ -1471,6 +1486,9 @@ static void lin_binary(struct lin *v, int prec)
 			for (int i = 0; i < r.x.n; i++)
 				r68x_add(&v->x, r.x.t[i].sym, strlen(r.x.t[i].sym), o == '-' ? -r.x.t[i].coef : r.x.t[i].coef);
 			v->c = o == '-' ? v->c - r.c : v->c + r.c;
+			lin_add_label(v, &r, o == '-');
+		} else if (v->labc != 0 || r.labc != 0) {
+			v->ok = 0;	/* a label times something, shifted, ... */
 		} else if (o == '*' && (v->x.n == 0 || r.x.n == 0)) {
 			/* a symbol times a number */
 			struct lin *s = v->x.n ? v : &r;
@@ -1498,12 +1516,54 @@ static void lin_binary(struct lin *v, int prec)
 	}
 }
 
+/* The alias of section SEC (label_section's letter) of the current psect,
+ * r68l_<psect>_<section>, into NAME (SIZE chars): a hidden global at the
+ * section's start, which a link-time expression's note names for a label's
+ * section (Lab+Ext: r68l_x_bss+Ext, the label's offset added outside);
+ * rof2elf names a ROF's local reference so, from the ROF's (the psect's)
+ * name, characters other than letters, digits and _ as _. Noted for the
+ * prelude (st.aliases). 0 if there is no psect. */
+static int label_alias(char sec, char *name, size_t size)
+{
+	static const char secs[] = "tdbDB";
+	static const char *const names[] = { "text", "data", "bss", "rdata", "rbss" };
+	const char *w = sec ? strchr(secs, sec) : NULL;
+	if (w == NULL || st.cur_psect == NULL || *st.cur_psect == '\0')
+		return 0;
+	size_t n = (size_t)snprintf(name, size, "r68l_%s_%s", st.cur_psect, names[w - secs]);
+	if (n >= size)
+		return 0;
+	for (char *c = name + 5; *c && c < name + 5 + strlen(st.cur_psect); c++)
+		if (!isalnum((unsigned char)*c) && *c != '_')
+			*c = '_';
+	char line[128];
+	snprintf(line, sizeof line, "%c %s\n", sec, name);
+	if (st.aliases.s == NULL || strstr(st.aliases.s, line) == NULL)
+		bputs(&st.aliases, line);
+	return 1;
+}
+
 /* Expression text S as a link-time expression: null if it isn't one, or
- * one relocation takes it as it is. */
+ * one relocation takes it as it is. A label of this source in it (one,
+ * added, with external names: pcb+PCB_Data) is its section's alias in the
+ * note (label_alias), (label-alias) added to the symbol: the label's
+ * offset, which as computes. */
 static char *r68x_expression(const char *s)
 {
-	struct lin v = { { NULL, 0 }, 0, 1, s };
+	struct lin v = { { NULL, 0 }, 0, 1, s, NULL, 0, 0 };
 	lin_binary(&v, P_SHIFT);
+	char alias[96] = "";
+	if (v.ok && *v.p == '\0' && v.labc != 0) {
+		/* not PC-relative (Table+Off(pc)): the linkers make the
+		 * expression's symbol absolute, which a PC-relative
+		 * relocation can't take (r68's ROF has the distance in the
+		 * bytes and Off absolute, which as can't write) */
+		if (v.labc != 1 || v.x.n == 0 || twin_mode ||
+		    !label_alias(label_section(v.lab, v.labn), alias, sizeof alias))
+			v.ok = 0;
+		else
+			r68x_add(&v.x, alias, strlen(alias), 1);
+	}
 	if (!v.ok || *v.p != '\0' || (v.x.n > 0 && !r68x_needed(&v.x))) {
 		r68x_free(&v.x);
 		return NULL;
@@ -1521,6 +1581,12 @@ static char *r68x_expression(const char *s)
 		free(note.s);
 		free(text);
 		bputs(&b, name);
+		if (*alias) {
+			struct buf ls = { 0 };
+			put_symbol(&ls, v.lab, v.labn);
+			bprintf(&b, "+(%s-%s)", ls.s, alias);
+			free(ls.s);
+		}
 		if (c != 0)
 			bputc(&b, c < 0 ? '-' : '+');
 	} else if (c < 0) {
@@ -1543,7 +1609,7 @@ static char *r68x_expression(const char *s)
  * term. */
 static char *macro_shape(const char *s)
 {
-	struct lin v = { { NULL, 0 }, 0, 1, s };
+	struct lin v = { { NULL, 0 }, 0, 1, s, NULL, 0, 0 };
 	lin_params = 1;
 	lin_binary(&v, P_SHIFT);
 	lin_params = 0;
@@ -1581,15 +1647,19 @@ static char *macro_shape(const char *s)
 	return b.s;
 }
 
-/* Expression text S with the folded equates that must be folded replaced by
- * their values; null if nothing is replaced. */
+/* Expression text S as a link-time expression where no relocation takes it
+ * (a sum of external names, one subtracted or multiplied, or a label of
+ * this source plus external names): r68x_<hash> plus the rest (see
+ * r68x_expression), or in a macro definition an alias each call sets
+ * (macro_shape); null if it is left as it is. Not where a field must be a
+ * number (fold_all: a quick value, a size, a conditional; r68 refuses an
+ * external there too) nor in equ and set (!r68x_ok). */
 static char *fold_equates(const char *s)
 {
-	if (st.nfolded == 0 && (!r68x_ok || fold_all))
+	if (!r68x_ok || fold_all)
 		return NULL;
 	size_t n = strlen(s);
-	size_t at[64], len[64];
-	int idx[64], nf = 0, nsym = 0, other_op = 0, neg = 0;
+	int nsym = 0, other_op = 0, neg = 0;
 	unsigned params = 0;	/* macro parameters \1..\9 in a macro definition */
 	char prev = 0;		/* the last significant character, 0 at the start */
 	for (size_t i = 0; i < n;) {
@@ -1624,9 +1694,7 @@ static char *fold_equates(const char *s)
 				j++;
 			/* a name this source defined before (equ, set, do, lo) is
 			 * a constant, not a second symbol: V_Name+BASE is one
-			 * external and a number, a relocation takes it (folding
-			 * sys.l's V_Name there was wrong: a source may
-			 * define its own, which C 3.2's R68 leaves to the link) */
+			 * external and a number, a relocation takes it */
 			int known = 0;
 			for (int e = 0; e < st.nequates && !known; e++)
 				known = strlen(st.equates[e]) == j - i && strncmp(st.equates[e], s + i, j - i) == 0;
@@ -1639,14 +1707,6 @@ static char *fold_equates(const char *s)
 				/* subtracted (-E$Abort, -M$Exec(a2,d2.l)) */
 				if (prev == '-')
 					neg = 1;
-			}
-			int k = folded_index(s + i, j - i);
-			if (k >= 0) {
-				if (nf < 64) {
-					at[nf] = i;
-					len[nf] = j - i;
-					idx[nf++] = k;
-				}
 			}
 			i = j;
 			prev = 'x';
@@ -1672,79 +1732,29 @@ static char *fold_equates(const char *s)
 		prev = c;
 		i++;
 	}
-	if (!(fold_all || nsym > 1 || other_op || neg))
+	if (!(nsym > 1 || neg || (nsym == 1 && other_op)))
 		return NULL;
 	/* in a macro definition: a link-time expression of the arguments,
 	 * through an alias each call defines */
-	if (params && st.in_macro && st.nmacros > 0 && r68x_ok && !fold_all) {
+	if (params && st.in_macro && st.nmacros > 0) {
 		char *x = macro_shape(s);
 		if (x != NULL) {
 			if (fold_log != NULL)
 				fprintf(fold_log, "%s:%d\tr68xm\t%s\t%s\n", log_path, log_line, s, x);
 			annotate = 1;
-			return x;
-		}
-	}
-	/* otherwise the arguments for these parameters are folded in where
-	 * the macro is called */
-	if (params && st.in_macro && st.nmacros > 0 && st.nfolded > 0)
-		st.macro_fold[st.nmacros - 1] |= params;
-	if (nf == 0) {
-		/* no equate of sys.l's: a sum of external names (ext_a+EXT_B,
-		 * lab_a-lab_b) or one subtracted (-M$Exec), which no
-		 * relocation takes, as a link-time expression too */
-		char *x = !fold_all && !params && r68x_ok && (nsym > 1 || (nsym == 1 && (neg || other_op))) ?
-			r68x_expression(s) : NULL;
-		if (x != NULL) {
-			if (fold_log != NULL)
-				fprintf(fold_log, "%s:%d\tr68x\t%s\t%s\n", log_path, log_line, s, x);
-			annotate = 1;
 		}
 		return x;
 	}
-	if (!fold_all && !params && r68x_ok) {
-		char *x = r68x_expression(s);
-		if (x != NULL) {
-			if (fold_log != NULL)
-				fprintf(fold_log, "%s:%d\tr68x\t%s\t%s\n", log_path, log_line, s, x);
-			annotate = 1;
-			return x;
-		}
-		if (nsym == 1 && !neg) {
-			/* one equate, added: a relocation takes it
-			 * (T_VctIRQ-(4*4)) */
-			struct lin v = { { NULL, 0 }, 0, 1, s };
-			lin_binary(&v, P_SHIFT);
-			int one = v.ok && *v.p == '\0' && v.x.n == 1 && v.x.t[0].coef == 1;
-			r68x_free(&v.x);
-			if (one)
-				return NULL;
-		}
+	/* a sum of external names (ext_a+EXT_B, lab_a-lab_b), one subtracted
+	 * (-M$Exec), a label of this source plus external names
+	 * (lab+Ext), which no relocation takes: a link-time expression */
+	char *x = r68x_expression(s);
+	if (x != NULL) {
+		if (fold_log != NULL)
+			fprintf(fold_log, "%s:%d\tr68x\t%s\t%s\n", log_path, log_line, s, x);
+		annotate = 1;
 	}
-	if (fold_log != NULL)
-		/* R68TOGAS_FOLDLOG: file, line, why, the expression */
-		fprintf(fold_log, "%s:%d\t%s\t%s\n", log_path, log_line,
-			fold_all ? (fold_imm ? "quick" : "context") : nsym > nf ? "other-symbols" : nf > 1 ? "equates" :
-			neg ? "negated" : "operator", s);
-	struct buf b = { 0 };
-	size_t from = 0;
-	for (int k = 0; k < nf; k++) {
-		bput(&b, s + from, at[k] - from);
-		/* the value as short as it goes: $00000080 as $80 */
-		const char *v = st.foldval[idx[k]];
-		if (v[0] == '$') {
-			const char *d = v + 1;
-			while (d[0] == '0' && d[1] != '\0')
-				d++;
-			bprintf(&b, "$%s", d);
-		} else {
-			bprintf(&b, "(%s)", v);
-		}
-		from = at[k] + len[k];
-	}
-	annotate = 1;
-	bputs(&b, s + from);
-	return b.s;
+	return x;
 }
 
 static void add_global_marked(const char *name)
@@ -2419,10 +2429,54 @@ static void scan_macro_labels(const char *label, int global, const char *op, cha
 /* Collects the labels PATH and the files it uses define without ':' (for
  * -b), conditionals not considered; a name also defined with ':' is left
  * out (global). */
+/* Labels' sections, from the pre-scan (scan_labels): t code, d and b a
+ * vsect's initialized and uninitialized data, D and B a remote vsect's; ?
+ * a name defined in more than one. */
+static void add_label_section(const char *name, char sec)
+{
+	for (int i = 0; i < st.nls; i++)
+		if (strcmp(st.lsnames[i], name) == 0) {
+			if (st.lssecs[i] != sec)
+				st.lssecs[i] = '?';
+			return;
+		}
+	st.lsnames = xrealloc(st.lsnames, (st.nls + 1) * sizeof *st.lsnames);
+	st.lssecs = xrealloc(st.lssecs, st.nls + 1);
+	st.lsnames[st.nls] = xstrdup(name);
+	st.lssecs[st.nls++] = sec;
+}
+
+/* The section of label S (N chars), or 0 if not known (not a label of this
+ * source, in more than one section, or made by a macro). */
+static char label_section(const char *s, size_t n)
+{
+	for (int i = 0; i < st.nls; i++)
+		if (strlen(st.lsnames[i]) == n && strncmp(st.lsnames[i], s, n) == 0)
+			return st.lssecs[i] == '?' ? 0 : st.lssecs[i];
+	return 0;
+}
+
+/* Operations whose label isn't a location (outside a vsect: a code label
+ * otherwise). */
+static int non_location(const char *base)
+{
+	static const char *const ops[] = { "equ", "set", "do", "lo", "org", "macro", "endm", "rept", "endr", "else",
+		"endc", "use", "nam", "ttl", "opt", "psect", "vsect", "ends", "endsect", "xdef", "xref", "spc", "pag",
+		"page", "fail", "end", "align", "com", NULL };
+	for (const char *const *o = ops; *o; o++)
+		if (strcmp(base, *o) == 0)
+			return 1;
+	return is_cond(base);
+}
+
+static int scan_vsect, scan_remote, scan_macro_def;
+
 static void scan_labels(const char *path, int depth, char ***globals, int *nglobals)
 {
 	if (depth > 16)
 		return;
+	if (depth == 0)
+		scan_vsect = scan_remote = scan_macro_def = 0;
 	struct buf text = { 0 };
 	if (!read_text(path, &text))
 		return;
@@ -2470,6 +2524,43 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 		while (*p && (isspace((unsigned char)*p) || *p == ':'))
 			p++;
 		scan_macro_labels(label, label_global, p, globals, nglobals);
+		{
+			/* the label's section (label_section): code, or in a vsect
+			 * its data (ds uninitialized, else initialized; remote) */
+			char ob[16];
+			size_t on = 0;
+			while (p[on] && !isspace((unsigned char)p[on]) && p[on] != '.' && on < sizeof ob - 1) {
+				ob[on] = (char)tolower((unsigned char)p[on]);
+				on++;
+			}
+			ob[on] = '\0';
+			if (scan_macro_def) {
+				if (strcmp(ob, "endm") == 0)
+					scan_macro_def = 0;
+			} else if (strcmp(ob, "macro") == 0) {
+				scan_macro_def = 1;
+			} else if (strcmp(ob, "vsect") == 0) {
+				scan_vsect = 1;
+				scan_remote = 0;
+				for (const char *r = p + on; *r && !scan_remote; r++)
+					scan_remote = strncasecmp(r, "remote", 6) == 0;
+			} else if (strcmp(ob, "ends") == 0 || strcmp(ob, "endsect") == 0) {
+				scan_vsect = 0;
+			} else if (label != NULL && *label && strchr(label, '\\') == NULL) {
+				char sec = 0;
+				if (scan_vsect) {
+					if (strcmp(ob, "ds") == 0)
+						sec = scan_remote ? 'B' : 'b';
+					else if (on == 0 || strcmp(ob, "dc") == 0 || strcmp(ob, "dz") == 0 ||
+						 strcmp(ob, "dcb") == 0)
+						sec = scan_remote ? 'D' : 'd';
+				} else if (on == 0 || !non_location(ob)) {
+					sec = 't';
+				}
+				if (sec)
+					add_label_section(label, sec);
+			}
+		}
 		free(label);
 		if (strncasecmp(p, "use", 3) == 0 && isspace((unsigned char)p[3])) {
 			char *a = p + 3;
@@ -3046,20 +3137,17 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		args = unesc;
 	}
 	int k = split_commas(args, strlen(args), pieces, lens, 64);
-	unsigned fold = 0, ops = 0, mem = 0, twin = 0;
+	unsigned ops = 0, mem = 0, twin = 0;
 	for (int i = 0; i < st.nmacros; i++)
 		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name))) {
-			fold = st.macro_fold[i];
 			ops = st.macro_ops[i];
 			mem = st.macro_mem[i];
 			twin = st.macro_twin[i];
 		}
 	int save_ok = r68x_ok;
-	r68x_ok = 0;	/* folded as before: see r68x_ok */
+	r68x_ok = 0;	/* left as it is: see r68x_ok */
 	for (int i = 0; i < k; i++) {
 		int save = fold_all;
-		if (i < 9 && (fold & (1u << i)))
-			fold_all = 1;
 		if (i)
 			bputc(out_b, ',');
 		/* the argument's text, in <> where angled (put_angle) */
@@ -3575,8 +3663,7 @@ static void macro_aliases(const char *name, const char *args)
 			}
 		}
 		/* as an operand: a link-time expression (in a macro definition,
-		 * of its parameters in turn), the equates folded where none can
-		 * take them */
+		 * of its parameters in turn) */
 		bprintf(&pre, ".Lr68xm%d set ", k);
 		int save_ok = r68x_ok, save_all = fold_all;
 		r68x_ok = 1;
@@ -3874,11 +3961,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			op_parts(l.op, base, sizeof base, &size);
 			break;
 		}
-	/* sys.l's equates folded in whole where no relocation can take them
-	 * (r68 can't either): fields of the instruction word that aren't a
-	 * byte (quick values, shift counts), sizes and counts, conditionals
-	 * (see fold_equates). moveq's and trap's are bytes: relocated, as
-	 * r68 does. */
+	/* No link-time expression where the field must be a number (r68
+	 * refuses an external there too): fields of the instruction word that
+	 * aren't a byte (quick values, shift counts), sizes and counts,
+	 * conditionals (see fold_equates). moveq's and trap's are bytes:
+	 * relocated, as r68 does. */
 	static const char *const fold_ops[] = { "ds", "dz", "do", "lo", "org", "rept", "align", NULL };
 	static const char *const quick_ops[] = { "addq", "subq", "asl", "asr", "lsl", "lsr", "rol", "ror",
 		"roxl", "roxr", NULL };
@@ -3953,6 +4040,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		st.npsects++;
 		free(st.psect_args);
 		st.psect_args = xstrdup(l.args);
+		{
+			/* its name, for label_alias */
+			size_t pn = strcspn(l.args, ",");
+			while (pn > 0 && isspace((unsigned char)l.args[pn - 1]))
+				pn--;
+			free(st.cur_psect);
+			st.cur_psect = xstrndup(l.args, pn);
+		}
 		/* which psect statement is assembled (one in ifdef
 		 * X / else): r68__psn, the epilogue's header from it */
 		bprintf(&line_before, "r68__psn set %d\n", st.npsects);
@@ -4460,19 +4555,6 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			}
 			st.macro_ifs--;
 		}
-		/* An equ of a name set from sys.l (-e): a set, as MRI's equ
-		 * won't define a name again. */
-		if (strcmp(base, "equ") == 0 && l.label != NULL) {
-			int folded = 0;
-			for (int i = 0; i < st.nfolded && !folded; i++)
-				folded = strcmp(st.folded[i], l.label) == 0;
-			if (folded) {
-				bprintf(out, "%s set ", labs);
-				expression_list(out, l.args, 0);
-				bputs(out, rest);
-				goto done;
-			}
-		}
 		/* Where a conditional or macro leaves the section isn't known. */
 		if (strcmp(base, "equ") != 0 && strcmp(base, "set") != 0 && strcmp(base, "ds") != 0 &&
 		    strcmp(base, "os9") != 0 && strcmp(base, "tcall") != 0 && strcmp(base, "align") != 0)
@@ -4499,8 +4581,6 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bprintf(out, "%s %s ", labs, l.op);
 		if (strcmp(base, "macro") == 0 && l.label) {
 			st.macros = xrealloc(st.macros, (st.nmacros + 1) * sizeof *st.macros);
-			st.macro_fold = xrealloc(st.macro_fold, (st.nmacros + 1) * sizeof *st.macro_fold);
-			st.macro_fold[st.nmacros] = 0;
 			st.macro_narg = xrealloc(st.macro_narg, (st.nmacros + 1) * sizeof *st.macro_narg);
 			st.macro_narg[st.nmacros] = uses_narg(st.rest_of_file);
 			st.macro_ops = xrealloc(st.macro_ops, (st.nmacros + 1) * sizeof *st.macro_ops);
@@ -5219,13 +5299,12 @@ static int macro_name_clash(const char *name)
 
 static void usage(void)
 {
-	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-e FILE] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
+	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
 	printf("  Translates a Microware r68 source to a GNU as source for as --mri\n");
 	printf("  (\".mri 1\" inside), keeping its line numbers; see r68togas.md.\n");
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
 	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060); also the\n");
 	printf("             padding of the sections (ucc: 2 with -m0, else 4, nop without -m)\n");
-	printf("  -e FILE    equates (NAME VALUE lines, as sys.l's) set in the prelude\n");
 	printf("  -b         r68's -b/-bt: branches to this source's labels sized by as\n");
 	printf("  -B         with -b: also to its global labels (as relaxes those)\n");
 	printf("  -d D       the dialect: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68:\n");
@@ -5275,21 +5354,6 @@ int main(int argc, char **argv)
 			if (d == NULL || (strcmp(d, "c32") != 0 && strcmp(d, "ucc") != 0))
 				die("-d takes c32 or ucc");
 			st.c32 = strcmp(d, "c32") == 0;
-		} else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
-			/* NAME VALUE lines (sys.l's equates): set lines in the
-			 * prelude, but for the names the source defines itself
-			 * (see after scan_labels). */
-			FILE *ef = fopen(argv[++i], "r");
-			if (ef == NULL)
-				die("cannot read %s", argv[i]);
-			char name[512], value[64];
-			while (fscanf(ef, "%511s %63s", name, value) == 2) {
-				st.folded = xrealloc(st.folded, (st.nfolded + 1) * sizeof *st.folded);
-				st.foldval = xrealloc(st.foldval, (st.nfolded + 1) * sizeof *st.foldval);
-				st.folded[st.nfolded] = xstrdup(name);
-				st.foldval[st.nfolded++] = xstrdup(value);
-			}
-			fclose(ef);
 		} else if (strncmp(argv[i], "-m", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
 			/* With the FPU: r68 takes its instructions for any CPU.
@@ -5394,25 +5458,6 @@ int main(int argc, char **argv)
 				st.locals[st.nlocals++] = globals[j];
 			}
 		}
-		/* sys.l's equates (-e) that may be folded in (fold_equates):
-		 * not the names the source defines (by a label, equ, set, do
-		 * or lo, under any conditional), as the sources of the
-		 * libraries themselves do. */
-		int k2 = 0;
-		for (int i = 0; i < st.nfolded; i++) {
-			int d = 0;
-			for (int j = 0; j < st.nlocals && !d; j++)
-				d = strcmp(st.locals[j], st.folded[i]) == 0;
-			for (int j = 0; j < nglobals && !d; j++)
-				d = strcmp(globals[j], st.folded[i]) == 0;
-			for (int j = 0; j < st.nsets && !d; j++)
-				d = strcmp(st.sets[j], st.folded[i]) == 0;
-			if (d)
-				continue;
-			st.folded[k2] = st.folded[i];
-			st.foldval[k2++] = st.foldval[i];
-		}
-		st.nfolded = k2;
 	}
 	long source_at = ftell(out);
 	translate_file(source, out, 0);
@@ -5578,6 +5623,21 @@ int main(int argc, char **argv)
 		 * has none to give): allocated, writable, .remote.bss without
 		 * contents, as GCC's. */
 		fprintf(final, " .section .remote.data,\"aw\"\n .section .remote.bss,\"aw\",@nobits\n .text\n");
+	if (st.aliases.s != NULL) {
+		/* the sections' aliases the link-time expressions name
+		 * (label_alias): hidden globals at their start (nothing is in
+		 * the sections yet here) */
+		static const char secs[] = "tdbDB";
+		static const char *const sections[] = { ".text", ".data", ".bss", ".remote.data", ".remote.bss" };
+		for (const char *a = st.aliases.s; *a;) {
+			const char *e = strchr(a, '\n');
+			const char *w = strchr(secs, *a);
+			fprintf(final, " .section %s\n%.*s:\n .globl %.*s\n .hidden %.*s\n", sections[w - secs], (int)(e - a - 2),
+				a + 2, (int)(e - a - 2), a + 2, (int)(e - a - 2), a + 2);
+			a = e + 1;
+		}
+		fputs(" .text\n", final);
+	}
 	rewind(out);
 	char chunk[8192];
 	size_t got;

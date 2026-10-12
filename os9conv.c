@@ -305,20 +305,6 @@ static char *converted_path(const char *input, int library)
 	return target;
 }
 
-const char *os9conv_sys_l(void)
-{
-	static int looked;
-	static char *path;
-
-	if (!looked) {
-		looked = 1;
-		const char *dir = os9conv.libdir != NULL ? os9conv.libdir : getenv("CLIB");
-		if (dir != NULL && *dir != '\0')
-			path = host_find_nocase(dir, "sys.l");
-	}
-	return path;
-}
-
 char *os9conv_as_elf(const char *input, int library)
 {
 	if (host_mtime(input) == (time_t)-1)
@@ -328,8 +314,7 @@ char *os9conv_as_elf(const char *input, int library)
 
 	char *target = converted_path(input, library);
 	time_t made = host_mtime(target);
-	if (made != (time_t)-1 && made >= host_mtime(input) &&
-		(os9conv_sys_l() == NULL || made >= host_mtime(os9conv_sys_l())))
+	if (made != (time_t)-1 && made >= host_mtime(input))
 		return target;
 
 	/* Convert into a temporary file beside the target, then rename it, so
@@ -338,10 +323,6 @@ char *os9conv_as_elf(const char *input, int library)
 	sprintf(temp, "%s.%ld.tmp", target, host_pid());
 	struct args argv = { 0 };
 	args_add(&argv, ROF2ELF);
-	if (os9conv_sys_l() != NULL) {
-		args_add(&argv, "-e");
-		args_add(&argv, os9conv_sys_l());
-	}
 	args_add(&argv, "-o");
 	args_add(&argv, temp);
 	args_add(&argv, input);

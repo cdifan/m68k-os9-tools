@@ -46,6 +46,12 @@
  * A reference to an external symbol paired with a negated reference to
  * this ROF's code at the same place (S - code base + value, as cstart.r
  * uses for 32-bit PC-relative values) becomes a PC-relative relocation.
+ * Other combinations of references at one place (external names added or
+ * subtracted, Dir_+Write_; a label plus them, lab+PCB_Data) become a
+ * link-time expression (r68x_note.h), the local term as its section's
+ * alias (r68l_<name>_<section>, a hidden global at the section's start);
+ * the linkers resolve them, as l68 resolves the ROF's references. No
+ * equate's value is folded in.
  *
  * Mainline ROFs (with a module type) also get absolute symbols carrying
  * the module header values: __os9_typelang, __os9_attrev, __os9_edition,
@@ -645,6 +651,8 @@ typedef struct
   Buf notes;			/* .r68x: link-time expressions */
   char **xnames;		/* their symbols' names */
   int *xsyms, nx;		/* and ELF symbols */
+  int alias[S_NUM];		/* the sections' aliases (section_alias), or 0 */
+  char aliasname[S_NUM][96];
 } Elf;
 
 static int
@@ -703,6 +711,30 @@ r68x_symbol (Elf *e, const struct r68x *x)
   return e->xsyms[e->nx++];
 }
 
+/* The alias of this ROF's section SEC: r68l_<name>_<section>, a hidden
+   global at the section's start, which a link-time expression with a local
+   term names (r68togas names a label's section so, from the psect's name:
+   characters other than letters, digits and _ as _); defined once.  */
+static int
+section_alias (Elf *e, const char *rofname, int sec)
+{
+  static const char *const names[S_NUM] = { "", "text", "data", "bss",
+					    "rdata", "rbss" };
+  char *c;
+  if (e->alias[sec])
+    return e->alias[sec];
+  snprintf (e->aliasname[sec], sizeof e->aliasname[sec], "r68l_%s_%s",
+	    rofname, names[sec]);
+  for (c = e->aliasname[sec] + 5;
+       c < e->aliasname[sec] + 5 + strlen (rofname) && *c; c++)
+    if (!isalnum ((unsigned char) *c) && *c != '_')
+      *c = '_';
+  e->alias[sec] = add_sym (e, e->aliasname[sec], 0, 0,
+			   INFO (STB_GLOBAL, STT_NOTYPE), sec);
+  e->syms.buf[e->alias[sec] * 16 + 13] = 2;	/* STV_HIDDEN */
+  return e->alias[sec];
+}
+
 /* Section symbol index for a reference target kind.  */
 static int
 target_section (unsigned kind)
@@ -747,78 +779,6 @@ add_rela (Elf *e, int sec, uint32_t offset, int sym, int type, int32_t addend)
   add32 (b, offset);
   add32 (b, ((uint32_t) sym << 8) | type);
   add32 (b, (uint32_t) addend);
-}
-
-/* Known equates (equ definitions), from the input and from -e files.
-   References to them are folded into the object bytes, since ELF can't
-   add several symbols in one relocation (e.g. Dir_+Write_ in a mode
-   byte).  */
-typedef struct
-{
-  char *name;
-  uint32_t value;
-  int order;			/* the first definition wins */
-} Equ;
-
-static Equ *equs;
-static int nequs, equs_sorted;
-
-static int
-cmp_equ (const void *a, const void *b)
-{
-  const Equ *x = a, *y = b;
-  int c = strcmp (x->name, y->name);
-  return c ? c : x->order - y->order;
-}
-
-static void
-add_equates (Rof *r)
-{
-  int i;
-  for (i = 0; i < r->ndefs; i++)
-    if ((r->defs[i].type & (T_KIND | T_COMMON)) == T_EQU
-	|| (r->defs[i].type & (T_KIND | T_COMMON)) == T_SET)
-      {
-	equs = realloc (equs, (nequs + 1) * sizeof (Equ));
-	equs[nequs].name = r->defs[i].name;
-	equs[nequs].value = r->defs[i].value;
-	equs[nequs].order = nequs;
-	nequs++;
-      }
-  equs_sorted = 0;
-}
-
-/* For lookups, once the equates are sorted and unique.  */
-static int
-cmp_equ_name (const void *a, const void *b)
-{
-  return strcmp (((const Equ *) a)->name, ((const Equ *) b)->name);
-}
-
-static Equ *
-find_equate (const char *name)
-{
-  Equ key;
-  if (!equs_sorted)
-    {
-      int i, n = 0;
-      qsort (equs, nequs, sizeof (Equ), cmp_equ);
-      for (i = 0; i < nequs; i++)
-	if (n > 0 && !strcmp (equs[n - 1].name, equs[i].name))
-	  {
-	    if (equs[n - 1].value != equs[i].value)
-	      fprintf (stderr, "%s: warning: equate %s defined as 0x%x and 0x%x; "
-		       "using 0x%x\n", progname, equs[i].name,
-		       (unsigned) equs[n - 1].value, (unsigned) equs[i].value,
-		       (unsigned) equs[n - 1].value);
-	  }
-	else
-	  equs[n++] = equs[i];
-      nequs = n;
-      equs_sorted = 1;
-    }
-  key.name = (char *) name;
-  return nequs ? bsearch (&key, equs, nequs, sizeof (Equ), cmp_equ_name) : NULL;
 }
 
 /* Convert one ROF to an ELF relocatable in OUT.  */
@@ -949,19 +909,34 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	goto unfolded;
       pos = neg = NULL;
 
-      /* Only external terms, none PC-relative: a link-time expression
-	 (r68x_note.h), as l68 would resolve it.  */
+      /* External terms, and at most one added local one (a label plus
+	 an equate: lab+PCB_Data), none PC-relative: a link-time expression
+	 (r68x_note.h), as l68 would resolve it; the local term as its
+	 section's alias (section_alias), the label's offset staying in the
+	 bytes, the addend.  */
       {
 	struct r68x x = { NULL, 0 };
+	int lsec = -1;
 	for (n = i; n < k; n++)
 	  {
 	    Ref *y = &r->refs[n];
-	    if (y->ext < 0 || (y->type & R_REL))
+	    if (y->type & R_REL)
 	      break;
-	    r68x_add (&x, r->exts[y->ext], strlen (r->exts[y->ext]),
-		      (y->type & R_NEG) ? -1 : 1);
+	    if (y->ext >= 0)
+	      r68x_add (&x, r->exts[y->ext], strlen (r->exts[y->ext]),
+			(y->type & R_NEG) ? -1 : 1);
+	    else if (lsec < 0 && !(y->type & R_NEG)
+		     && target_section (y->type & T_KIND) >= 0)
+	      lsec = target_section (y->type & T_KIND);
+	    else
+	      break;
 	  }
-	if (n == k && r68x_needed (&x))
+	if (n == k && x.n > 0 && lsec >= 0)
+	  {
+	    section_alias (&e, r->name, lsec);
+	    r68x_add (&x, e.aliasname[lsec], strlen (e.aliasname[lsec]), 1);
+	  }
+	if (n == k && (lsec < 0 || x.n > 1) && r68x_needed (&x))
 	  {
 	    sym = r68x_symbol (&e, &x);
 	    r68x_free (&x);
@@ -973,17 +948,11 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	r68x_free (&x);
       }
 
-      /* Otherwise known equates are folded into the value; at most one
-	 other term and one negated code term can remain.  */
+      /* Otherwise at most one term and one negated code term.  */
       for (n = i; n < k; n++)
 	{
 	  Ref *x = &r->refs[n];
-	  Equ *q;
-	  if (x->ext >= 0 && !(x->type & R_REL)
-	      && (q = find_equate (r->exts[x->ext])) != NULL)
-	    addend += (x->type & R_NEG) ? -(int32_t) q->value
-					: (int32_t) q->value;
-	  else if (x->type & R_NEG)
+	  if (x->type & R_NEG)
 	    {
 	      if (neg)
 		goto unsupported;
@@ -997,22 +966,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	    }
 	}
       if (!pos && !neg)
-	{
-	  /* Only equates: the value is final, and must fit.  */
-	  if ((size == 1 && (addend < -0x80 || addend > 0xFF))
-	      || (size == 2 && (addend < -0x8000 || addend > 0xFFFF)))
-	    {
-	      fprintf (stderr, "%s: %s: equates at %s+0x%x add up to 0x%x, which "
-		       "doesn't fit in %d byte%s\n", progname, file,
-		       sec >= 0 ? secnames[sec] : ".debug", (unsigned) off,
-		       (unsigned) addend, size,
-		       size > 1 ? "s" : "");
-	      exit (1);
-	    }
-	  for (n = size - 1; n >= 0; n--, addend >>= 8)
-	    p[n] = addend;
-	  continue;
-	}
+	goto unsupported;
       if (!pos && neg->ext < 0 && (neg->type & T_KIND) == T_CODE
 	  && !(neg->type & R_REL) && sec == S_TEXT)
 	{
@@ -1061,8 +1015,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
       fprintf (stderr, "%s: %s: unsupported reference combination at "
 	       "%s+0x%x (type 0x%04x)%s\n", progname, file,
 	       sec >= 0 ? secnames[sec] : ".debug", (unsigned) off,
-	       r->refs[i].type,
-	       nequs ? "" : "; equates from sys.l (-e) may resolve it");
+	       r->refs[i].type, "");
       exit (1);
     }
 
@@ -1215,28 +1168,15 @@ read_rofs (const char *name, Rof **rofs, int *nrofs)
     }
 }
 
-/* Load the equates defined in the ROF or library NAME.  */
-static void
-load_equates (const char *name)
-{
-  Rof *rofs;
-  int nrofs, i;
-  read_rofs (name, &rofs, &nrofs);
-  for (i = 0; i < nrofs; i++)
-    add_equates (&rofs[i]);
-}
-
 static void
 usage (void)
 {
   fprintf (stderr,
-	   "usage: %s [-o OUTPUT] [-e EQUFILE]... INPUT\n"
+	   "usage: %s [-o OUTPUT] [-l] INPUT\n"
 	   "  Converts a ROF object (.r) to an ELF relocatable, or a ROF\n"
 	   "  library (.l: concatenated ROFs, or Ultra C's libgen format) to\n"
 	   "  an ar archive (run ranlib on it), also with one ROF in it unless\n"
 	   "  OUTPUT is named .o.  OUTPUT defaults to INPUT with .o or .a.\n"
-	   "  -e  also take equ definitions from EQUFILE (a ROF or library,\n"
-	   "      e.g. sys.l), to fold references to them into the code\n"
 	   "  -l  list the ROFs in INPUT and exit\n", progname);
   exit (2);
 }
@@ -1254,8 +1194,6 @@ main (int argc, char **argv)
     {
       if (!strcmp (argv[i], "-o") && i + 1 < argc)
 	output = argv[++i];
-      else if (!strcmp (argv[i], "-e") && i + 1 < argc)
-	load_equates (argv[++i]);
       else if (!strcmp (argv[i], "-l"))
 	list = 1;
       else if (argv[i][0] == '-' || input)
@@ -1269,8 +1207,6 @@ main (int argc, char **argv)
   read_rofs (input, &rofs, &nrofs);
   if (nrofs == 0)
     die ("%s: empty", input);
-  for (i = 0; i < nrofs; i++)
-    add_equates (&rofs[i]);
 
   if (list)
     {

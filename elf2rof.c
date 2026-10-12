@@ -57,6 +57,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "r68x_note.h"
+
 /* ROF reference and definition type bits.  */
 #define T_BSS		0x0000
 #define T_DATA		0x0001
@@ -346,6 +348,52 @@ store (Obj *o, unsigned char *p, int size, int32_t v, int signed_only,
   *p = v;
 }
 
+/* The definition (canonical text, allocated) of link-time expression NAME
+   in NOTES (N bytes: the .r68x section, NAME=TEXT lines), or null.  */
+static char *
+find_note (const char *notes, size_t n, const char *name)
+{
+  size_t nl = strlen (name), i = 0;
+  while (i < n)
+    {
+      size_t j = i;
+      while (j < n && notes[j] != '\n')
+	j++;
+      if (j - i > nl && !memcmp (notes + i, name, nl) && notes[i + nl] == '=')
+	{
+	  char *t = xmalloc (j - i - nl);
+	  memcpy (t, notes + i + nl + 1, j - i - nl - 1);
+	  return t;
+	}
+      i = j + 1;
+    }
+  return NULL;
+}
+
+/* Adds reference R to external NAME in *EXTS (*N of them).  */
+static void
+add_ext_ref (Ext **exts, int *n, const char *name, Ref r)
+{
+  int k;
+  for (k = 0; k < *n && strcmp ((*exts)[k].name, name); k++)
+    ;
+  if (k == *n)
+    {
+      *exts = realloc (*exts, (*n + 1) * sizeof (Ext));
+      if (!*exts)
+	die ("out of memory");
+      (*exts)[k].name = name;
+      (*exts)[k].nrefs = 0;
+      (*exts)[k].refs = NULL;
+      (*n)++;
+    }
+  (*exts)[k].refs = realloc ((*exts)[k].refs,
+			     ((*exts)[k].nrefs + 1) * sizeof (Ref));
+  if (!(*exts)[k].refs)
+    die ("out of memory");
+  (*exts)[k].refs[(*exts)[k].nrefs++] = r;
+}
+
 /* Convert the ELF object O to a ROF psect named NAME, appended to OUT.  */
 static void
 elf_to_rof (Obj *o, const char *name, Buf *out)
@@ -479,6 +527,17 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	  buf_space (&area[i], asize[i] - area[i].len);
     }
 
+  /* The link-time expressions' definitions (r68x_note.h).  */
+  {
+    const char *notes = NULL;
+    size_t nnotes = 0;
+    for (i = 1; i < nsecs; i++)
+      if (!strcmp (secs[i].name, R68X_SECTION))
+	{
+	  notes = (const char *) at (o, secs[i].offset, secs[i].size);
+	  nnotes = secs[i].size;
+	}
+
   /* Relocations.  */
   for (i = 1; i < nsecs; i++)
     {
@@ -534,6 +593,77 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	  p = area[la].buf + lo;
 	  y = symi ? &syms[symi] : NULL;
 	  r.offset = lo;
+
+	  if (y && y->shndx == SHN_UNDEF
+	      && !strncmp (y->name, R68X_PREFIX, strlen (R68X_PREFIX)))
+	    {
+	      /* A link-time expression: its terms as the ROF's references
+		 at this place, as Microware's assemblers write a sum of
+		 external names (Dir_+Write_) or a label plus them
+		 (lab+PCB_Data: the label's section's alias r68l_..., a local
+		 reference, the label's offset in the bytes).  PC-relative
+		 only to code of this psect (Table+Off(pc)): the distance in
+		 the bytes, the external names added.  */
+	      char *text = find_note (notes, nnotes, y->name);
+	      struct r68x x;
+	      Sym *alias = NULL;
+	      int32_t v = addend;
+	      int t;
+	      unsigned bits = size == 1 ? R_BYTE : size == 2 ? R_WORD : R_LONG;
+	      if (!text)
+		die ("%s: %s+0x%x: %s has no definition in %s", o->file, s->name,
+		     (unsigned) roff, y->name, R68X_SECTION);
+	      if (!r68x_parse (text, &x))
+		die ("%s: bad link-time expression %s=%s", o->file, y->name, text);
+	      for (t = 0; t < x.n; t++)
+		{
+		  uint32_t m;
+		  if (strncmp (x.t[t].sym, "r68l_", 5))
+		    continue;
+		  for (m = 1; m < nsyms && strcmp (syms[m].name, x.t[t].sym); m++)
+		    ;
+		  if (m == nsyms || syms[m].area == A_NONE || alias
+		      || x.t[t].coef != 1)
+		    die ("%s: %s+0x%x: %s=%s: a term %s that a ROF can't take",
+			 o->file, s->name, (unsigned) roff, y->name, text,
+			 x.t[t].sym);
+		  alias = &syms[m];
+		}
+	      if (alias)
+		v += (int32_t) alias->offset;
+	      if (rel)
+		{
+		  if (!alias || alias->area != A_CODE || la != A_CODE)
+		    die ("%s: %s+0x%x: PC-relative link-time expression %s=%s",
+			 o->file, s->name, (unsigned) roff, y->name, text);
+		  v -= (int32_t) lo;
+		}
+	      store (o, p, size, v, rel, y->name, lo);
+	      if (alias && !rel)
+		{
+		  r.type = areakind[alias->area] | loc | bits;
+		  locs = realloc (locs, (nlocs + 1) * sizeof (Ref));
+		  locs[nlocs++] = r;
+		}
+	      for (t = 0; t < x.n; t++)
+		{
+		  if (!strncmp (x.t[t].sym, "r68l_", 5))
+		    continue;
+		  if (x.t[t].coef != 1 && x.t[t].coef != -1)
+		    die ("%s: %s+0x%x: %s=%s: a multiplied external name, which "
+			 "a ROF can't take", o->file, s->name, (unsigned) roff,
+			 y->name, text);
+		  r.type = loc | bits | (x.t[t].coef < 0 ? R_NEG : 0);
+		  add_ext_ref (&exts, &nexts, x.t[t].sym, r);
+		}
+	      /* the term names outlive x: they're kept in the Ext list */
+	      for (t = 0; t < x.n; t++)
+		if (!strncmp (x.t[t].sym, "r68l_", 5))
+		  free (x.t[t].sym);
+	      free (x.t);
+	      free (text);
+	      continue;
+	    }
 
 	  if (y && (y->shndx == SHN_UNDEF || y->shndx == SHN_COMMON))
 	    {
@@ -613,6 +743,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	    }
 	}
     }
+  }
 
   /* Definitions: the global symbols; __os9_* give the header.  */
   for (j = 1; j < nsyms; j++)
@@ -622,6 +753,10 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
       unsigned kind;
       if (y->bind == STB_LOCAL || y->shndx == SHN_UNDEF
 	  || y->type == STT_SECTION || y->type == STT_FILE)
+	continue;
+      /* the sections' aliases of link-time expressions (r68l_<psect>_
+	 <section>): references to them became local ones */
+      if (!strncmp (y->name, "r68l_", 5))
 	continue;
       if (!strncmp (y->name, "__os9_", 6))
 	{

@@ -103,6 +103,7 @@ and each far reference is redirected through it, keeping its size:
 | `bsr.w f` | `jsr _jmptbl+x(a6)` |
 | `bra.w f` | `jmp _jmptbl+x(a6)` |
 | `lea f(pc),An` | `movea.l _jmptbl+x+2(a6),An` (the real address of `f`) |
+| `pea f(pc)` | `move.l _jmptbl+x+2(a6),-(sp)` |
 
 - Link with `--noinhibit-exec` as well as `-q`: `ld` then reports "relocation truncated to fit" for
   the far references but still writes the output, which `elf2mod` completes.
