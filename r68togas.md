@@ -172,6 +172,8 @@ Most instruction lines need no change. Where the same text means something else 
   as the entry is an offset into the code. Where conditionals choose between psect statements,
   the header symbols and the name are those of the psect assembled. `ds` is illegal in a psect,
   as in r68.
+- **Two psects in one source:** both Microware assemblers write a broken ROF; the translation
+  makes one object.
 - **`vsect` / `vsect remote` ... `ends`:** `ds` into `.bss` / `.remote.bss`, `dc` and `dz` into
   `.data` / `.remote.data`, addressed a6-relative. A label alone on a line in a vsect takes the
   initialized data's counter, not that of a following `ds`, as in r68; `align` in a vsect aligns
@@ -186,6 +188,10 @@ Most instruction lines need no change. Where the same text means something else 
 - **`label equ *`** is a plain label.
 - **A macro defined with a colon** (`Mac: macro`): both Microware assemblers export the name as a
   global symbol of value 0; written as `NAME equ 0`.
+- **A global equate of a label** (`Name: equ Label`) gets the label's type and value. Both
+  Microware assemblers get the symbol wrong in their objects (C 3.2's types it as uninitialized
+  data, and both may give one of a label defined later the value 0); uses of the equate are
+  relocated right in all three. Microware's bug, ours correct.
 - **`set` symbols used before their first `set`** take the value they had at the end of r68's
   first pass (where symbols not set yet are 0): `NAME__final` in the epilogue, from a
   `NAME__p1` set before each `set`.
@@ -289,12 +295,18 @@ C 3.2's two assemblers give identical objects for the sources both take (`r68020
 `r68`, and `-m2` too); between Ultra C's `r68 -m2` and C 3.2's `r68020 -m2`, every difference
 found is one the dialects cover.
 
+- **A global equate of a label** gets a wrong type or value in Microware's objects (see "Labels
+  and symbols"); uses are relocated right.
+
 The reference manuals are the *OS-9 Assembler/Linker User Manual* (Microware 77165106) for
 C 3.2's assembler and *Using Ultra C/C++* for Ultra C's `r68`. Where they and the assemblers
 differ, the assemblers are followed.
 
 ## Differences and limitations
 
+- **`\@`:** r68 counts each expansion of a source macro from 1, in five digits (`Name00003`);
+  `gas` counts every macro it runs from 0, the translation's helper macros too. Only the names of
+  global labels made with `\@` show it.
 - **`@` and `_at_` in one source:** where a source has names with `@`, a global name with `_at_`
   of its own comes out with `@` too.
 - **Unreferenced externals:** an external named only by an `equ` (`A equ Ext`), or by the twin of
