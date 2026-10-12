@@ -168,8 +168,11 @@ static int is_r68_register(const char *s, size_t n)
 	return in_list(r68_registers, s, n, 1);
 }
 
+static int defined_name(const char *s, size_t n);
+
 /* A symbol's name as GNU as gets it: '@' (legal in r68) as "_at_", a name
- * GNU as takes for a register with "__r68" after it. */
+ * GNU as takes for a register with "__r68" after it (one r68 knows as a
+ * register too where the source defines it: a1 dc.b 1, CCR equ 0). */
 static void put_symbol(struct buf *b, const char *s, size_t n)
 {
 	/* A dot inside the name (labels lab.a ... lab.s):
@@ -189,7 +192,7 @@ static void put_symbol(struct buf *b, const char *s, size_t n)
 		} else
 			bputc(b, s[i]);
 	}
-	if (dots || clashes(s, n))
+	if (dots || clashes(s, n) || (is_r68_register(s, n) && defined_name(s, n)))
 		bputs(b, "__r68");
 }
 
@@ -237,7 +240,6 @@ static int global_label(const char *s, size_t n);
 static void put_twin(struct buf *b, const char *s, size_t n);
 static void mri_strings(struct buf *b, const char *text, size_t n);
 static int is_cond(const char *base);
-static int defined_name(const char *s, size_t n);
 static void dot_less_use(const char *s, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */

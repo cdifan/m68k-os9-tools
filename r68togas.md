@@ -191,6 +191,9 @@ Most instruction lines need no change. Where the same text means something else 
   get an `xdef` in the epilogue. Outside a psect (in definition files used before it) no label is
   exported. References to undefined names are external, as in r68.
 - **`label equ *`** is a plain label.
+- **A label or equate named like a register** (`a1 dc.b 1`, `CCR equ 0`), which both Microware
+  assemblers take as a symbol: `__r68` after the name. A register name in an `equ` or `set` value
+  (`Val equ d2`) is an external symbol for r68, written the same way.
 - **A macro defined with a colon** (`Mac: macro`): both Microware assemblers export the name as a
   global symbol of value 0; written as `NAME equ 0`.
 - **A global equate of a label** (`Name: equ Label`) gets the label's type and value. Both
