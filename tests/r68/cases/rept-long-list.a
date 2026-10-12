@@ -1,7 +1,7 @@
 * rept around one dc line becomes that line's list repeated, here over 4 KB of text (800
 * elements of $0200): the translation's formatted output stopped at 4096 characters, so the
 * list was cut (682 elements) and the data came out short.
-* fixed: pending
+* fixed: 3893b86 2026-10-12 r68togas: formatted output of any length (a rept's dc list over 4 KB was cut)
 * expect size: .data 00000640
 Count equ 800
  psect rept_long_list,0,0,0,0,0
