@@ -1,0 +1,15 @@
+* A macro whose body is a whole psect, ends included, called twice: the translation's marker
+* for the ends (whether one was assembled, for the padding) is defined once, not per expansion.
+* fixed: pending
+* not r68: two psects in one source, which both r68s write as a broken ROF (the second's header
+* with the first's code, which rof2elf refuses)
+* expect text: 70014e75 01007002 4e750200
+Block macro
+ psect blk\1,0,0,0,0,0
+Ent\1: moveq #\1,d0
+ rts
+ dc.b \1
+ ends
+ endm
+ Block 1
+ Block 2

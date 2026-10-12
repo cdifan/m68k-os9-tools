@@ -3817,8 +3817,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.in_psect = 0;
 			/* a label alone, which as's MRI mode doesn't align at
 			 * (a set would be): whether this ends is assembled, for
-			 * the padding (r68__ended) */
-			bprintf(&line_before, ".Lr68ends%d\n", ++st.nends);
+			 * the padding (r68__ended); in a macro body once, for
+			 * the first expansion that gets there */
+			++st.nends;
+			if (st.in_macro)
+				bprintf(&line_before, " ifndef .Lr68ends%d\n.Lr68ends%d\n endc\n", st.nends, st.nends);
+			else
+				bprintf(&line_before, ".Lr68ends%d\n", st.nends);
 			if (st.cond_depth > 0 || st.in_macro)
 				st.ends_cond = 1;
 			bprintf(out, "*%s", text);

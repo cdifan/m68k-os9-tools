@@ -36,6 +36,7 @@ when no case failed.
 | `* expect nosym: NAME` | no symbol of that name |
 | `* expect reloc: TEXT` | a relocation, a line of `objdump -r` containing TEXT |
 | `* expect error: TEXT` | assembling fails, with TEXT among the messages |
+| `* not r68: WHY` | not compared with `r68.exe`'s output (one `r68` doesn't make properly) |
 
 A case without an `expect` line fails, since nothing would be checked. `cases/*.sh` are shell
 scripts run in a directory of their own with the helpers that `run.sh` describes (`src`, `asm`,

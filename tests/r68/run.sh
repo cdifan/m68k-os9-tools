@@ -70,7 +70,7 @@ asm_case() {	# SOURCE
 		while read -r e; do [ -z "$e" ] && continue
 			${B}objdump -r "$o" | grep -q -F -- "$e" || why="$why no relocation \"$e\";"
 		done <<< "$(expect reloc "$src")"
-		if [ -n "${R68:-}" ] && ! grep -q -i 'dialect=c32' <<< "$opts"; then
+		if [ -n "${R68:-}" ] && ! grep -q -i 'dialect=c32' <<< "$opts" && [ -z "$(header 'not r68' "$src")" ]; then
 			crlf "$src" "$mw/$name.a"
 			r68exe "$name" $opts
 			if [ -s "$mw/$name.r" ] && rof2elf -o "$t/$name.mw.o" "$mw/$name.r" > /dev/null 2>&1; then
