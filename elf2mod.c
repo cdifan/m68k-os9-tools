@@ -1054,6 +1054,8 @@ int main(int argc, char *argv[]) {
 			asection *sec = s->section;
 			uint16_t type;
 			if(!(s->flags & BSF_GLOBAL) || !strncmp(bfd_asymbol_name(s), "__os9_", 6)) continue;
+			// the link-time expressions and section aliases r68togas and rof2elf make
+			if(!strncmp(bfd_asymbol_name(s), "r68x_", 5) || !strncmp(bfd_asymbol_name(s), "r68l_", 5)) continue;
 			size_t k, nres = sizeof(reserved) / sizeof(reserved[0]);
 			for(k = 0; k < nres && strcmp(bfd_asymbol_name(s), reserved[k]); k++);
 			if(k < nres) continue; // the linker's: as above, or not listed
@@ -1062,8 +1064,7 @@ int main(int argc, char *argv[]) {
 			else if(sec == bss) type = 0;
 			else if(sec && sec == rdata) type = 3; // initialized remote, as l68
 			else if(sec && sec == rbss) type = 2;
-			else if(bfd_is_abs_section(sec)) type = 6;
-			else continue;
+			else continue; // equates: both l68s list none (checked 2026-10-12 with -g)
 			ss[nss].value = type == 4 ? (int32_t)(itext + bfd_asymbol_value(s) - tvma) : (int32_t)bfd_asymbol_value(s);
 			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0);
 			ss[nss].name = bfd_asymbol_name(s);
