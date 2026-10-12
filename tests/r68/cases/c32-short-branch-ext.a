@@ -1,7 +1,7 @@
 * -dialect=c32: a short branch to an external (bcs.s Ext): C 3.2's R68 writes an 8-bit
 * PC-relative reference that its l68 resolves; as computed the byte in place and refused the
 * line ("too large for field of 1 byte"). The opcode, then a PC-relative byte (R_68K_PC8).
-* fixed: pending
+* fixed: 5297e13 2026-10-12 r68togas: -dialect=c32's short branch to an external, as C 3.2 writes it (R_68K_PC8)
 * options: -dialect=c32
 * expect text: 4e716500 6100
 * expect reloc: R_68K_PC8         Ext-0x00000001

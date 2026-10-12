@@ -1,7 +1,7 @@
 * -dialect=c32: a short branch to an external further than 128 bytes into the section: as
 * checked even the relocated byte for its range with its position subtracted (".byte Ext-*-1"
 * refused there), so the relocation is written with .reloc.
-* fixed: pending
+* fixed: 5297e13 2026-10-12 r68togas: -dialect=c32's short branch to an external, as C 3.2 writes it (R_68K_PC8)
 * options: -dialect=c32
 * expect size: .text 00000090
 * expect reloc: 0000008d R_68K_PC8         Ext-0x00000001
