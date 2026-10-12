@@ -1,0 +1,10 @@
+* A name r68 knows as a register, defined by the source itself (CCR equ $12), in another equ's
+* value: that symbol, not an external of the name.
+* fixed: pending
+* expect text: 203c0000 12004e71
+CCR equ $12
+Both equ (CCR<<8)
+ psect equ_register_defined,0,0,0,0,0
+ move.l #Both,d0
+ nop
+ ends

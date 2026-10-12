@@ -237,6 +237,7 @@ static int global_label(const char *s, size_t n);
 static void put_twin(struct buf *b, const char *s, size_t n);
 static void mri_strings(struct buf *b, const char *text, size_t n);
 static int is_cond(const char *base);
+static int defined_name(const char *s, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int value_mode;	/* an equ's or set's value: register names are symbols there */
@@ -421,7 +422,7 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			return;
 		}
 		put_symbol(b, p, q - p);
-		if (value_mode && is_r68_register(p, q - p))
+		if (value_mode && is_r68_register(p, q - p) && !defined_name(p, q - p))
 			bputs(b, "__r68");	/* Reg equ d3: d3 an undefined symbol in r68 */
 		if (forward_set(p, q - p))
 			bputs(b, "__final");
@@ -1280,13 +1281,19 @@ static int external_name(const char *s, size_t n)
 	for (const char *const *r = regs; *r; r++)
 		if (strlen(*r) == n && strncasecmp(*r, s, n) == 0)
 			return 0;
+	return !defined_name(s, n);
+}
+
+/* Whether the source defines S (N chars): a label, equ or set. */
+static int defined_name(const char *s, size_t n)
+{
 	char **lists[] = { st.locals, st.gl, st.sets, st.equates };
 	int counts[] = { st.nlocals, st.ngl, st.nsets, st.nequates };
 	for (int l = 0; l < 4; l++)
 		for (int i = 0; i < counts[l]; i++)
 			if (strchr(lists[l][i], '\\') == NULL && name_match(lists[l][i], s, n))
-				return 0;
-	return 1;
+				return 1;
+	return 0;
 }
 
 /* Link-time expressions (r68x_note.h): an expression of sys.l's equates
