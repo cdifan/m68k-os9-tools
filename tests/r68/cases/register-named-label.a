@@ -1,7 +1,7 @@
 * Labels named like registers (a1, D0:): both r68s take them, and they are symbols in expressions
 * (#a1, dc.l D0); as refused them ("already defined"). Renamed with __r68 where the source
 * defines such a name, given back in the object's global symbols.
-* fixed: pending
+* fixed: e0b4e33 2026-10-12 r68togas: labels and equates named like r68's registers
 * expect sym: D D0 00000003
 * expect text: 223c0000 0000227c 00000000 00000000
 * expect data: 01020304
