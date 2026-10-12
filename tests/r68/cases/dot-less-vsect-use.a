@@ -1,6 +1,6 @@
 * A .-label symbol (dot-less-vsect) used in its own source: r68 relocates that use negated (the
 * counter less the label's address), which ELF can't express: an error naming it.
-* fixed: pending
+* fixed: 0c24e8b 2026-10-12 r68togas, m68k-os9-r68: .-LABEL with LABEL a vsect label, as r68 makes it
 * expect error: Size (.-a vsect label) used in its own source
  org 0
 Rec_A do.l 1
