@@ -1,0 +1,17 @@
+* A macro whose branch target is a parameter, called with an equate and with a label: with the
+* equate both r68s take its value for the displacement (bhi.w $000E, bra.s $0E), with the label
+* a branch to it; each call sets a flag for the form its argument needs.
+* fixed: pending
+* expect text: 4e714e71 6200000e 600e6200 fff660f2 4e714e71
+Width equ 14
+Go macro
+ bhi \1
+ bra.s \1
+ endm
+ psect branch_const_macro,0,0,0,0,0
+ nop
+Here nop
+ Go Width
+ Go Here
+ nop
+ ends

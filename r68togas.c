@@ -1168,6 +1168,8 @@ struct state {
 				   uses only as a whole address operand (mem_params) */
 	unsigned *macro_chars;	/* per macro: the parameters (bit n-1 for \n) its body
 				   uses as '\n' (char_param) */
+	unsigned *macro_bconst;	/* per macro: the parameters its body takes as a branch's
+				   target (branch_const_flags) */
 	unsigned *macro_ops;	/* per macro: the parameters (bit n-1 for \n) its body
 				   uses as an operation (b\2, \1.w): mnemonic arguments */
 	/* as's MRI mode aligns at any directive after an odd dc.b, a line
@@ -2509,6 +2511,40 @@ static int is_branch(const char *base)
 	return 0;
 }
 
+/* The opcode word of branch or db<cc> BASE (bra $6000, bhi $6200, dbra
+ * $51C8), *DB set for a db<cc>; -1 if BASE is neither. */
+static int branch_code(const char *base, int *db)
+{
+	static const char *const cc[] = { "t", "f", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge",
+		"lt", "gt", "le", NULL };
+	*db = 0;
+	const char *c;
+	if (strcmp(base, "bra") == 0)
+		return 0x6000;
+	if (strcmp(base, "bsr") == 0)
+		return 0x6100;
+	if (strcmp(base, "dbra") == 0) {
+		*db = 1;
+		return 0x51c8;
+	}
+	if (base[0] == 'd' && base[1] == 'b') {
+		*db = 1;
+		c = base + 2;
+	} else if (is_branch(base)) {
+		c = base + 1;
+	} else {
+		return -1;
+	}
+	if (strcmp(c, "hs") == 0)
+		c = "cc";
+	else if (strcmp(c, "lo") == 0)
+		c = "cs";
+	for (int k = *db ? 0 : 2; cc[k]; k++)
+		if (strcmp(cc[k], c) == 0)
+			return *db ? 0x50c8 | k << 8 : 0x6000 | k << 8;
+	return -1;
+}
+
 /* Whether ARGS is just a symbol this source doesn't define (no label,
  * equ or set of that name, not a register or macro parameter): an external
  * as the target of a short branch. */
@@ -3422,12 +3458,40 @@ static void narg_set(const char *name, const char *args)
  * value of argument N's characters as r68 takes them (its quotes stripped,
  * the last four characters: 'ecode' is 'code'); an argument \K in a macro
  * body is that macro's alias for K in turn. */
+static int constant_value(const char *s, long *v);
+
+/* Before a call of macro M: .Lr68k<m>_<n> for each parameter its body takes
+ * as a branch target (branch_const), 1 where the argument is a constant
+ * (the branch is written with it as the displacement), else 0. */
+static void branch_const_flags(int m, const char *args)
+{
+	if (st.macro_bconst[m] == 0)
+		return;
+	const char *pieces[64];
+	size_t lens[64];
+	int k = *args ? split_commas(args, strlen(args), pieces, lens, 64) : 0;
+	for (int n = 1; n <= 9; n++) {
+		if (!(st.macro_bconst[m] & (1u << (n - 1))))
+			continue;
+		long v;
+		int c = 0;
+		if (n <= k && lens[n - 1] > 0 && !(lens[n - 1] >= 2 && pieces[n - 1][0] == '\\')) {
+			char *a = xstrndup(pieces[n - 1], lens[n - 1]);
+			c = constant_value(a, &v);
+			free(a);
+		}
+		bprintf(&line_before, ".Lr68k%d_%d set %d\n", m, n, c);
+	}
+}
+
 static void char_aliases(const char *name, const char *args)
 {
 	int m = -1;
 	for (int i = 0; i < st.nmacros; i++)
 		if (ci_eq(st.macros[i], name) || ci_eq(st.macros[i], macro_orig(name)))
 			m = i;
+	if (m >= 0)
+		branch_const_flags(m, args);
 	if (m < 0 || st.macro_chars[m] == 0)
 		return;
 	const char *pieces[64];
@@ -4445,6 +4509,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_viaL[st.nmacros] = (char)calls_lmacro(st.rest_of_file);
 			st.macro_chars = xrealloc(st.macro_chars, (st.nmacros + 1) * sizeof *st.macro_chars);
 			st.macro_chars[st.nmacros] = 0;
+			st.macro_bconst = xrealloc(st.macro_bconst, (st.nmacros + 1) * sizeof *st.macro_bconst);
+			st.macro_bconst[st.nmacros] = 0;
 			st.macro_mem = xrealloc(st.macro_mem, (st.nmacros + 1) * sizeof *st.macro_mem);
 			st.macro_mem[st.nmacros] = mem_params(st.rest_of_file);
 			st.macro_twin = xrealloc(st.macro_twin, (st.nmacros + 1) * sizeof *st.macro_twin);
@@ -4519,6 +4585,44 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			else
 				bprintf(out, "%s %s %s%s", labs, l.op, l.args, rest);
 			goto done;
+		}
+		int bdb, bop = size != 'l' ? branch_code(base, &bdb) : -1;
+		if (bop >= 0) {
+			/* A branch to a constant (an equate, a number): both r68s
+			 * take it for the displacement itself (bhi.w with $000E
+			 * for an equate of 14), as a branch to an address; written
+			 * as data words, without a relocation. In a macro body a
+			 * parameter as the target: both forms, chosen by a flag
+			 * each call sets (branch_const_flags). */
+			const char *tgt = l.args, *comma = NULL;
+			if (bdb) {
+				comma = strchr(l.args, ',');
+				tgt = comma ? comma + 1 : "";
+			}
+			int dreg = bdb && comma && comma - l.args == 2 && (l.args[0] == 'd' || l.args[0] == 'D') &&
+				l.args[1] >= '0' && l.args[1] <= '7' ? l.args[1] - '0' : -1;
+			long v;
+			int sh = !bdb && (size == 's' || size == 'b');
+			int param = st.in_macro && tgt[0] == '\\' && tgt[1] >= '1' && tgt[1] <= '9' && tgt[2] == '\0';
+			if ((!bdb || dreg >= 0) && !st.in_macro && *tgt && constant_value(tgt, &v)) {
+				if (sh)
+					bprintf(out, "%s dc.w $%04X%s", labs, bop | ((unsigned long)v & 0xff), rest);
+				else
+					bprintf(out, "%s dc.w $%04X,$%04lX%s", labs, bop | (dreg > 0 ? dreg : 0),
+						(unsigned long)v & 0xffff, rest);
+				annotate = 1;
+				goto done;
+			}
+			if ((!bdb || dreg >= 0) && param && st.nmacros > 0) {
+				int m = st.nmacros - 1, n = tgt[1] - '0';
+				st.macro_bconst[m] |= 1u << (n - 1);
+				bprintf(&line_before, " ifne .Lr68k%d_%d\n", m, n);
+				if (sh)
+					bprintf(&line_before, "%s dc.w $%04X+((\\%d)&$FF)\n else\n", labs, bop, n);
+				else
+					bprintf(&line_before, "%s dc.w $%04X,\\%d\n else\n", labs, bop | (dreg > 0 ? dreg : 0), n);
+				bputs(&line_after, " endc\n");
+			}
 		}
 		if (st.c32 && !st.in_macro && is_branch(base) && (size == 's' || size == 'b') && short_external(l.args)) {
 			/* -d c32: a short branch to an external (bcs.s ext): C 3.2's

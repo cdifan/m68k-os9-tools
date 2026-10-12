@@ -161,6 +161,10 @@ Most instruction lines need no change. Where the same text means something else 
   field can't take; r68 resolves it. PC-relative references and branches to a global label of
   the source refer to a local twin `NAME__r68pc` instead, which the epilogue defines as `NAME`.
   The same for global labels made by macro arguments.
+- **A branch to a constant** (`bhi Disp`, `Disp` an equate, also one further on): both Microware
+  assemblers take the constant as the displacement itself, without a relocation; written as data
+  words. In a macro body with a parameter as the target, both forms, chosen by a flag each call
+  sets.
 - **A short branch to an external** (`bcs.s Ext`): C 3.2's `r68` writes an 8-bit PC-relative
   reference, which its linker resolves; with `-d c32` the translation writes the same. Ultra C's
   `r68` refuses it, and so does the default dialect.
