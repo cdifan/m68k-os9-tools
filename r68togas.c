@@ -2480,6 +2480,20 @@ static int is_branch(const char *base)
 	return 0;
 }
 
+/* Whether ARGS is just a symbol this source doesn't define (no label,
+ * equ or set of that name, not a register or macro parameter): an external
+ * as the target of a short branch. */
+static int short_external(const char *args)
+{
+	size_t n = strlen(args);
+	if (n == 0 || !symstart((unsigned char)args[0]))
+		return 0;
+	for (size_t i = 0; i < n; i++)
+		if (!symchar((unsigned char)args[i]))
+			return 0;
+	return !defined_name(args, n) && !is_r68_register(args, n) && !global_label(args, n);
+}
+
 static void add_equate(const char *name)
 {
 	st.equates = xrealloc(st.equates, (st.nequates + 1) * sizeof *st.equates);
@@ -4475,6 +4489,32 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				bprintf(out, "%s r68chip %s,<%s %s>%s", labs, chip_name(need), l.op, l.args, rest);
 			else
 				bprintf(out, "%s %s %s%s", labs, l.op, l.args, rest);
+			goto done;
+		}
+		if (st.c32 && !st.in_macro && is_branch(base) && (size == 's' || size == 'b') && short_external(l.args)) {
+			/* -d c32: a short branch to an external (bcs.s ext): C 3.2's
+			 * R68 writes an 8-bit PC-relative reference that l68
+			 * resolves (Ultra C's refuses it); as computes the byte in
+			 * place and refuses. The opcode and a 0, the relocation
+			 * by .reloc: as checks even a PC-relative byte against an
+			 * undefined symbol for its range, its position subtracted
+			 * (a branch beyond the section's first 128 bytes refused) */
+			static const char *const cc[] = { "ra", "sr", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl",
+				"mi", "ge", "lt", "gt", "le", NULL };
+			const char *c = strcmp(base + 1, "hs") == 0 ? "cc" : strcmp(base + 1, "lo") == 0 ? "cs" : base + 1;
+			int k = 0;
+			while (cc[k] && strcmp(cc[k], c) != 0)
+				k++;
+			static int nsb;
+			struct buf t = { 0 };
+			put_symbol(&t, l.args, strlen(l.args));
+			if (*labs)
+				bprintf(out, "%s\n", labs);
+			nsb++;
+			bprintf(out, "r68__sb%d dc.b $%02X,0%s\n .mri 0\n .reloc r68__sb%d+1,R_68K_PC8,%s-1\n .mri 1", nsb,
+				0x60 + k, rest, nsb, t.s);
+			free(t.s);
+			annotate = 1;
 			goto done;
 		}
 		int absolute = strcmp(base, "jsr") == 0 || strcmp(base, "jmp") == 0 || strcmp(base, "lea") == 0 ||
