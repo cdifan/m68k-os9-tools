@@ -1,6 +1,6 @@
 * A macro whose body is a whole psect, ends included, called twice: the translation's marker
 * for the ends (whether one was assembled, for the padding) is defined once, not per expansion.
-* fixed: pending
+* fixed: b394efe 2026-10-12 r68togas: the ends marker once in a macro body; tests/r68: not r68 cases
 * not r68: two psects in one source, which both r68s write as a broken ROF (the second's header
 * with the first's code, which rof2elf refuses)
 * expect text: 70014e75 01007002 4e750200
