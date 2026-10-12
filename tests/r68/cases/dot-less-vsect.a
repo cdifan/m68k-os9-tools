@@ -4,7 +4,7 @@
 * fixed: 0c24e8b 2026-10-12 r68togas, m68k-os9-r68: .-LABEL with LABEL a vsect label, as r68 makes it
 * expect sym: B Size 00000008
 * expect text: 47ea0000
-* expect reloc: R_68K_16          First
+* expect reloc: R_68K_16          .bss+0x00000002
  org 0
 Rec_A do.l 1
 Rec_B do.w 3
