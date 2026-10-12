@@ -1,6 +1,6 @@
 * A name r68 knows as a register, defined by the source itself (CCR equ $12), in another equ's
 * value: that symbol, not an external of the name.
-* fixed: pending
+* fixed: 7fd7779 2026-10-12 r68togas: a register name in an equ value the source defines stays that symbol
 * expect text: 203c0000 12004e71
 CCR equ $12
 Both equ (CCR<<8)
