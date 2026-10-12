@@ -1,0 +1,14 @@
+* rept around one dc line becomes that line's list repeated, here over 4 KB of text (800
+* elements of $0200): the translation's formatted output stopped at 4096 characters, so the
+* list was cut (682 elements) and the data came out short.
+* fixed: pending
+* expect size: .data 00000640
+Count equ 800
+ psect rept_long_list,0,0,0,0,0
+ vsect
+Table: rept Count
+ dc.w $0200
+ endr
+ ends
+ nop
+ ends

@@ -101,12 +101,24 @@ static void bputc(struct buf *b, char c)
 
 static void bprintf(struct buf *b, const char *format, ...)
 {
+	/* any length: a rept's dc list can be several kilobytes */
 	char tmp[4096];
 	va_list ap;
 	va_start(ap, format);
-	vsnprintf(tmp, sizeof tmp, format, ap);
+	int n = vsnprintf(tmp, sizeof tmp, format, ap);
 	va_end(ap);
-	bputs(b, tmp);
+	if (n < 0)
+		return;
+	if ((size_t)n < sizeof tmp) {
+		bput(b, tmp, n);
+		return;
+	}
+	char *big = xmalloc((size_t)n + 1);
+	va_start(ap, format);
+	vsnprintf(big, (size_t)n + 1, format, ap);
+	va_end(ap);
+	bput(b, big, n);
+	free(big);
 }
 
 /* ----- Names ----- */
