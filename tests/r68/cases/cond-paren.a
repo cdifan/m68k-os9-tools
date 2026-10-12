@@ -1,0 +1,13 @@
+* A conditional with its operand right after it in parentheses (ifeq(Flag-1)): r68 ends the
+* operation at the parenthesis; the translation took the whole for one name, so it didn't count
+* the conditional, dropped its endc as one closing nothing, and as reached the end of the file
+* inside the conditional.
+* fixed: pending
+* expect text: 00024e71
+Flag equ 0
+ psect cond_paren,0,0,0,0,0
+ ifeq(Flag-1)
+ dc.w 1
+ endc
+ dc.w 2
+ ends

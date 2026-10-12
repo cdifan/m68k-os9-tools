@@ -1035,6 +1035,20 @@ static int split_line(const char *text, struct line *l)
 	const char *q = p;
 	while (*q && !isspace((unsigned char)*q))
 		q++;
+	{
+		/* a conditional's operand right after it, in parentheses
+		 * (ifeq(Type-Board)): r68 ends the operation there */
+		const char *par = memchr(p, '(', q - p);
+		if (par != NULL && par > p && par - p < 16) {
+			char c[16];
+			size_t k;
+			for (k = 0; p + k < par; k++)
+				c[k] = (char)tolower((unsigned char)p[k]);
+			c[k] = '\0';
+			if (is_cond(c))
+				q = par;
+		}
+	}
 	l->op = xstrndup(p, q - p);
 	p = q;
 	if (no_operands(l->op)) {
