@@ -1,0 +1,19 @@
+* '.' in a vsect is the offset counter (the org of the structure above), not the data location
+* (both r68 manuals): Size equ .-First is that counter (10) less First's offset (2) in First's
+* section, a global symbol B Size 8, as r68 writes it (the link adds the data's base).
+* fixed: pending
+* expect sym: B Size 00000008
+* expect text: 47ea0000
+* expect reloc: R_68K_16          First
+ org 0
+Rec_A do.l 1
+Rec_B do.w 3
+ psect dot_less_vsect,0,0,0,0,0
+ vsect
+Pad ds.w 1
+First: ds.l 1
+Second ds.w 1
+Size: equ .-First
+ ends
+ lea First(a2),a3
+ ends

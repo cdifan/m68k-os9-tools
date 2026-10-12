@@ -1,0 +1,16 @@
+* A .-label symbol (dot-less-vsect) used in its own source: r68 relocates that use negated (the
+* counter less the label's address), which ELF can't express: an error naming it.
+* fixed: pending
+* expect error: Size (.-a vsect label) used in its own source
+ org 0
+Rec_A do.l 1
+Rec_B do.w 3
+ psect dot_less_vsect_use,0,0,0,0,0
+ vsect
+Pad ds.w 1
+First: ds.l 1
+Second ds.w 1
+Size: equ .-First
+ ends
+ move.w #Size-1,d1
+ ends

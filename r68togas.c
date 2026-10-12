@@ -238,6 +238,7 @@ static void put_twin(struct buf *b, const char *s, size_t n);
 static void mri_strings(struct buf *b, const char *text, size_t n);
 static int is_cond(const char *base);
 static int defined_name(const char *s, size_t n);
+static void dot_less_use(const char *s, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int value_mode;	/* an equ's or set's value: register names are symbols there */
@@ -422,6 +423,7 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			return;
 		}
 		put_symbol(b, p, q - p);
+		dot_less_use(p, q - p);
 		if (value_mode && is_r68_register(p, q - p) && !defined_name(p, q - p))
 			bputs(b, "__r68");	/* Reg equ d3: d3 an undefined symbol in r68 */
 		if (forward_set(p, q - p))
@@ -1088,6 +1090,12 @@ struct state {
 	char **lmacros;		/* macros whose body uses \Ln: called through r68L */
 	int nlmacros;
 	const char *rest_of_file;	/* the text after the current line */
+	char **vlabs;		/* the vsect labels so far, each in the section of vsecs[i] */
+	const char **vsecs;
+	int nvlabs;
+	char **dlvs;		/* the names defined as .-LABEL (dot_less_vsect) */
+	int ndlvs;
+	int dlv_line;		/* the line whose use of one has its error */
 	char **sets;		/* the names defined by set (scan_labels) */
 	int nsets;
 	char **set_done;	/* names set so far outside macro definitions */
@@ -1746,6 +1754,74 @@ static const char *data_section(int initialized)
 	if (st.remote)
 		return initialized ? ".remote.data" : ".remote.bss";
 	return initialized ? ".data" : ".bss";
+}
+
+/* NAME's equ or set value '.-LABEL' (A, N chars), LABEL a vsect label
+ * defined before (PermSiz equ .-WritAdr): r68's '.' is the offset counter
+ * there too (the manuals: "the current value of the offset origin"). r68
+ * makes the symbol one of LABEL's section, the counter less LABEL's offset,
+ * which the link relocates (the global symbol in the ROF), but a use in the
+ * same source the counter less LABEL's address (a negated reference, which
+ * ELF can't express: an error, see parse_unary). Written into B as the
+ * former, from the section's start (r68__bdata, r68__bbss in the prelude);
+ * as leaves such a symbol out of its object, so it is also noted for
+ * m68k-os9-r68, which adds it (.r68dlv, in translate's prelude). 0 if A is
+ * not of that form (or the label is in a remote section). */
+static int dot_less_vsect(struct buf *b, const char *name, const char *a, size_t n)
+{
+	size_t i = 0;
+	while (i < n && isspace((unsigned char)a[i]))
+		i++;
+	if (i >= n || a[i] != '.' || (i + 1 < n && symchar((unsigned char)a[i + 1])))
+		return 0;
+	for (i++; i < n && isspace((unsigned char)a[i]); i++)
+		;
+	if (i >= n || a[i] != '-')
+		return 0;
+	for (i++; i < n && isspace((unsigned char)a[i]); i++)
+		;
+	size_t s = i;
+	if (s >= n || !symstart((unsigned char)a[s]))
+		return 0;
+	while (i < n && symchar((unsigned char)a[i]))
+		i++;
+	size_t e = i;
+	while (i < n && isspace((unsigned char)a[i]))
+		i++;
+	if (i != n)
+		return 0;
+	const char *base = NULL;
+	for (int k = st.nvlabs - 1; k >= 0 && base == NULL; k--)
+		if (strlen(st.vlabs[k]) == e - s && strncmp(st.vlabs[k], a + s, e - s) == 0)
+			base = strcmp(st.vsecs[k], ".bss") == 0 ? "r68__bbss" :
+			       strcmp(st.vsecs[k], ".data") == 0 ? "r68__bdata" : "";
+	if (base == NULL || *base == '\0')
+		return 0;
+	struct buf nm = { 0 };
+	put_symbol(&nm, a + s, e - s);
+	bprintf(b, "%s+(r68__ofs-(%s-%s))", base, nm.s, base);
+	free(nm.s);
+	if (name != NULL && !name_in(st.dlvs, st.ndlvs, name, strlen(name))) {
+		st.dlvs = xrealloc(st.dlvs, (st.ndlvs + 1) * sizeof *st.dlvs);
+		st.dlvs[st.ndlvs++] = xstrdup(name);
+	}
+	return 1;
+}
+
+static void error_text(struct buf *b, const char *s, size_t n);
+
+/* A use of S (N chars), if one of the .-LABEL symbols (dot_less_vsect):
+ * an error, once a line; r68 makes it the counter less LABEL's address,
+ * a negated relocation. */
+static void dot_less_use(const char *s, size_t n)
+{
+	if (st.ndlvs == 0 || !name_in(st.dlvs, st.ndlvs, s, n) || st.dlv_line == log_line)
+		return;
+	st.dlv_line = log_line;
+	bputs(&line_before, " r68error <");
+	error_text(&line_before, s, n);
+	bputs(&line_before, " (.-a vsect label) used in its own source: r68 relocates that negated, "
+		"which ELF cannot express>\n");
 }
 
 /* The operator's base name (lower case) and size letter (0 if none). */
@@ -4360,6 +4436,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				bprintf(out, ";%s", l.args);
 		} else if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0) {
 			bputs(out, l.args);
+		} else if ((strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) && !st.in_macro &&
+			   dot_less_vsect(out, l.label, l.args, alen)) {
+			/* PermSiz equ .-WritAdr: in the label's section */
 		} else if (st.c32 && (strcmp(base, "set") == 0 || strcmp(base, "equ") == 0) &&
 			   (len = expression_length(l.args, alen)) > 0 && len < alen && l.args[len] != '\\') {
 			/* -d c32: junk after the value, which C 3.2's R68 ignores
@@ -4671,6 +4750,15 @@ done:
 			st.maybe_odd = 0;
 		}
 	}
+	if (st.in_vsect && l.label && !st.in_macro && st.section != NULL &&
+	    (!l.op || strcmp(base, "ds") == 0 || strcmp(base, "dc") == 0 || strcmp(base, "dz") == 0 ||
+	     strcmp(base, "dcb") == 0)) {
+		/* for dot_less_vsect */
+		st.vlabs = xrealloc(st.vlabs, (st.nvlabs + 1) * sizeof *st.vlabs);
+		st.vsecs = xrealloc(st.vsecs, (st.nvlabs + 1) * sizeof *st.vsecs);
+		st.vlabs[st.nvlabs] = xstrdup(l.label);
+		st.vsecs[st.nvlabs++] = st.section;
+	}
 	free(lab.s);
 	free_line(&l);
 	free(unesc);
@@ -4882,6 +4970,10 @@ static const char prelude[] =
 	"r68__ofs set r68__ofs&~1\n"
 	" endc\n"
 	" endm\n"
+	" section .data\n"
+	"r68__bdata\n"
+	" section .bss\n"
+	"r68__bbss\n"
 	" section .text\n"
 	"r68__btext\n";
 
@@ -5265,6 +5357,30 @@ int main(int argc, char **argv)
 	if (r68x_notes.s != NULL)
 		/* the link-time expressions' definitions (r68x_note.h), not loaded */
 		fprintf(final, " .section " R68X_SECTION ",\"\"\n .ascii \"%s\"\n .text\n", r68x_notes.s);
+	if (st.ndlvs > 0) {
+		/* the .-LABEL symbols (dot_less_vsect), which as leaves out: each
+		 * one's value as a relocation in .r68dlv, its name and whether
+		 * global in .r68dlvn, for m68k-os9-r68 to add it */
+		fputs(" .section .r68dlv,\"\"\n", final);
+		for (int i = 0; i < st.ndlvs; i++) {
+			struct buf nm = { 0 };
+			put_symbol(&nm, st.dlvs[i], strlen(st.dlvs[i]));
+			fprintf(final, " .long %s\n", nm.s);
+			free(nm.s);
+		}
+		fputs(" .section .r68dlvn,\"\"\n", final);
+		for (int i = 0; i < st.ndlvs; i++) {
+			struct buf nm = { 0 };
+			put_symbol(&nm, st.dlvs[i], strlen(st.dlvs[i]));
+			char *needle = xmalloc(nm.n + 16);
+			sprintf(needle, " xdef %s\n", nm.s);
+			int global = st.globals.s != NULL && strstr(st.globals.s, needle) != NULL;
+			fprintf(final, " .asciz \"%s %c\"\n", st.dlvs[i], global ? 'g' : 'l');
+			free(needle);
+			free(nm.s);
+		}
+		fputs(" .text\n", final);
+	}
 	if (st.used_remote)
 		/* The remote data's sections with their ELF flags (MRI's section
 		 * has none to give): allocated, writable, .remote.bss without

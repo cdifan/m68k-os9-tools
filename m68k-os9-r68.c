@@ -463,6 +463,81 @@ static struct args output_lines(struct args *argv)
 	return lines;
 }
 
+/* r68togas's .-LABEL symbols (PermSiz equ .-WritAdr, LABEL a vsect label:
+ * in LABEL's section, the offset counter less LABEL's offset), which as
+ * leaves out of its object, being equated to an expression: each noted as
+ * a word in .r68dlv whose relocation is SECTION+VALUE, its name and "g"
+ * (global) or "l" in .r68dlvn; added as such, both sections removed. A
+ * relocation to anything else (the definition left out by a conditional)
+ * adds none. */
+static void dot_less_symbols(const char *object)
+{
+	struct args argv = { 0 };
+	args_add(&argv, READELF);
+	args_add(&argv, "-p");
+	args_add(&argv, ".r68dlvn");
+	args_add(&argv, object);
+	struct args names = output_lines(&argv);
+	args_free(&argv);
+	if (names.n == 0)
+		return;
+	args_add(&argv, OBJDUMP);
+	args_add(&argv, "-r");
+	args_add(&argv, "-j");
+	args_add(&argv, ".r68dlv");
+	args_add(&argv, object);
+	struct args relocs = output_lines(&argv);
+	args_free(&argv);
+	struct args add = { 0 };
+	int k = 0;
+	for (int i = 0; i < names.n; i++) {
+		/* "  [     0]  PermSiz g" */
+		const char *p = strchr(names.v[i], ']');
+		if (strncmp(names.v[i], "  [", 3) != 0 || p == NULL)
+			continue;
+		for (p++; *p == ' '; p++)
+			;
+		char name[512], scope[8];
+		if (sscanf(p, "%511s %7s", name, scope) != 2)
+			continue;
+		/* "OFFSET   TYPE              VALUE": the one at offset 4*k */
+		for (int j = 0; j < relocs.n; j++) {
+			unsigned long off;
+			char type[32], value[512];
+			if (sscanf(relocs.v[j], "%lx %31s %511s", &off, type, value) != 3 || off != 4ul * k)
+				continue;
+			char *plus = strpbrk(value + 1, "+-");
+			unsigned long v = 0;
+			if (plus != NULL) {
+				v = strtoul(plus + 1, NULL, 16);
+				if (*plus == '-')
+					v = -v;
+				*plus = '\0';
+			}
+			if (value[0] == '.') {
+				args_add(&add, "--add-symbol");
+				args_addf(&add, "%s=%s:0x%lx,%s", name, value, v & 0xfffffffful,
+					  strcmp(scope, "g") == 0 ? "global" : "local");
+			}
+		}
+		k++;
+	}
+	args_free(&names);
+	args_free(&relocs);
+	if (k == 0)
+		return;
+	args_add(&argv, OBJCOPY);
+	args_append(&argv, &add);
+	args_add(&argv, "--remove-section=.r68dlv");
+	args_add(&argv, "--remove-section=.rela.r68dlv");
+	args_add(&argv, "--remove-section=.r68dlvn");
+	args_add(&argv, object);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("adding the .-label symbols to %s failed", object);
+	args_free(&argv);
+	args_free(&add);
+}
+
 /* Undefined symbols that no relocation uses are removed: the Microware
  * assemblers write an external reference only where one is used, and a
  * link takes in a library member for any undefined symbol (an equate of an
@@ -650,6 +725,7 @@ static void assemble(const char *source)
 		error("assembling %s failed", source);
 	args_free(&argv);
 
+	dot_less_symbols(object);
 	register_names(object);
 	unreferenced_externals(object);
 	section_alignment(object);
