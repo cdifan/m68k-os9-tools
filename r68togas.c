@@ -1411,7 +1411,10 @@ static void lin_unary(struct lin *v)
 			lin_depth++;
 			lin_binary(&sub, P_SHIFT);
 			lin_depth--;
-			if (!sub.ok || *sub.p != '\0') {
+			if (!sub.ok || *sub.p != '\0' || (lin_params && sub.x.n == 0)) {
+				/* in a macro definition (macro_shape) an equate of
+				 * constants is another symbol of the source, as before
+				 * equates went in: an argument there may be a label */
 				v->ok = 0;
 			} else {
 				for (int t = 0; t < sub.x.n; t++)

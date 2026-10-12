@@ -1,0 +1,16 @@
+* A macro whose operand subtracts a parameter, with an equate of constants beside it
+* (#Base+2*Width-(\2)), called with a label: the equate kept the expression out of the
+* link-time aliases (another symbol of the source) until equates of external names went in,
+* after which the call set the alias to the negated label, which as refused.
+* fixed: pending
+* not r68: r68 makes the operand a negated reference to the label, which rof2elf can't take
+* expect size: .text 00000008
+Width equ 20
+Check macro
+ cmpi.w #384+2*Width-(\2),d3
+ endm
+ psect macro_shape_equ_label,0,0,0,0,0
+Here nop
+ Check 1,Here
+ nop
+ ends
