@@ -179,6 +179,11 @@ Most instruction lines need no change. Where the same text means something else 
   initialized data's counter, not that of a following `ds`, as in r68; `align` in a vsect aligns
   both counters. `ds.b` is written as `fill`, and a section switch only where the section
   changes, since a section statement after byte data of odd length aligns in MRI mode.
+- **`.` in a vsect** is the offset counter (below), as in both r68 manuals. `Size equ .-Label`,
+  `Label` a vsect label defined before, is a symbol of `Label`'s section, as r68 makes it; `gas`
+  leaves such an equate out of its object, so it is noted and `m68k-os9-r68` adds it. A use of it
+  in the same source is an error (it would need a negated relocation). Not for a remote vsect's
+  label.
 
 ### Labels and symbols
 
