@@ -1233,8 +1233,8 @@ usage (void)
 	   "usage: %s [-o OUTPUT] [-e EQUFILE]... INPUT\n"
 	   "  Converts a ROF object (.r) to an ELF relocatable, or a ROF\n"
 	   "  library (.l: concatenated ROFs, or Ultra C's libgen format) to\n"
-	   "  an ar archive (run ranlib on it).  OUTPUT defaults to INPUT\n"
-	   "  with .o or .a.\n"
+	   "  an ar archive (run ranlib on it), also with one ROF in it unless\n"
+	   "  OUTPUT is named .o.  OUTPUT defaults to INPUT with .o or .a.\n"
 	   "  -e  also take equ definitions from EQUFILE (a ROF or library,\n"
 	   "      e.g. sys.l), to fold references to them into the code\n"
 	   "  -l  list the ROFs in INPUT and exit\n", progname);
@@ -1305,8 +1305,13 @@ main (int argc, char **argv)
   f = fopen (output, "wb");
   if (!f)
     die ("can't write %s", output);
-  if (nrofs == 1 && !(strlen (output) > 2
-		      && !strcmp (output + strlen (output) - 2, ".a")))
+  /* One ROF gives an object, unless the output is named .a or the input
+     is a library and the output not named .o (a front end's temporary
+     name for the archive).  */
+  size_t on = strlen (output);
+  int named_a = on > 2 && !strcmp (output + on - 2, ".a");
+  int named_o = on > 2 && !strcmp (output + on - 2, ".o");
+  if (nrofs == 1 && !named_a && !(is_library && !named_o))
     {
       Buf out = { 0 };
       rof_to_elf (input, &rofs[0], &out);
