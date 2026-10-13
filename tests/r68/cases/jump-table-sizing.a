@@ -1,0 +1,12 @@
+* -j (Ultra C's r68: long branches through a jump table) "implies -b" (r68 -?): branches to
+* this source's labels sized, bra.s here; the jump table is elf2mod's, so -j was only noted and
+* the branch stayed bra.w.
+* fixed: a59c5e9 2026-10-13 m68k-os9-r68: -j sizes branches, as -b ("implies -b" in r68)
+* options: -j
+* expect text: 4e71 6002 4e71 4e71
+ psect jump_table_sizing,0,0,0,0,0
+ nop
+ bra next
+ nop
+next nop
+ ends
