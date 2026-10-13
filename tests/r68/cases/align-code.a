@@ -1,0 +1,23 @@
+* align in the code (Ultra C's r68, without -m): a zero byte where the location is odd, then
+* nop words; the translation filled zeros (gas MRI's align). The data's align fills zeros, as
+* before.
+* fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
+* expect text: 4e71 0100 0203 4e71 0400 4e714e714e71 4e71 4e714e714e714e714e714e714e71 0500 4e71
+* expect data: 0100000000000002
+ psect align_code,0,0,0,0,0
+ nop
+ dc.b 1
+ align 4
+ dc.b 2,3
+ align 4
+ dc.b 4
+ align 8
+ nop
+ align 16
+ dc.b 5
+ vsect
+v1 dc.b 1
+ align 4
+v2 dc.l 2
+ ends
+ ends

@@ -1,0 +1,13 @@
+* -m1: Ultra C's r68 pads each section to 2, as with -m0 (to 4 from -m2 on); the translation
+* padded to 4 with trapf, taken from cases whose sizes come out the same either way.
+* fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
+* options: -m1
+* expect text: 4e71
+* expect data: 0001
+* expect size: .text 2
+ psect pad_m1,0,0,0,0,0
+ nop
+ vsect
+v1 dc.w 1
+ ends
+ ends

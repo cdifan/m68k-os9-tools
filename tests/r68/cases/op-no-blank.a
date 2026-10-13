@@ -1,0 +1,13 @@
+* An operand right after the operation, without a blank (andi.l#Mask,d7, moveq#1,d0,
+* tst.l(a0), move.l-(a0),d0): r68 ends the operation at #, (, - or *; the translation had read
+* the whole field as the operation (only a conditional's ifeq( was split).
+* fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
+* expect text: 0287000000ff 7001 4a90 2020 4e71 4e71
+Mask equ $ff
+ psect op_no_blank,0,0,0,0,0
+ andi.l#Mask,d7
+ moveq#1,d0
+ tst.l(a0)
+ move.l-(a0),d0
+ nop
+ ends

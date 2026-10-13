@@ -1,0 +1,20 @@
+* (d,An,Xn), (d,An), (d,PC) and (d,PC,Xn) written with the displacement inside, on a 68020:
+* Ultra C's r68 always writes the full extension word with a 32-bit displacement (the index
+* suppressed where there is none, $0170), a constant before PC less 2 from the extension word
+* ((6,pc): 8); a number with .w stays 16 bits. The translation let as pick the brief or the
+* 16-bit form. (Ultra C's r68 refuses the form on a 68000.)
+* fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
+* options: -m2
+* expect text: 20351d30fffffef4 2035193000000004 20351d20fef4 223b013000000026 2630017000000008 203b017000000008 243b01700000000e 2a3601700000000 0 4e71
+* expect reloc: R_68K_32          Ext
+ psect index_full_format,0,0,0,0,0
+ move.l (-268,a5,d1.l*4),d0
+ move.l (4,a5,d1.l),d0
+ move.l (-268.w,a5,d1.l*4),d0
+ move.l (lab,pc,d0.w),d1
+ move.l (8,a0),d3
+ move.l (6,pc),d0
+ move.l (lab,pc),d2
+ move.l (Ext,a6),d5
+lab nop
+ ends

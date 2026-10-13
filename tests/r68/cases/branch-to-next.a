@@ -1,0 +1,25 @@
+* -b: a branch to the next statement's label (blank and comment lines between, a label equ *
+* too) is left out by r68 (Ultra C's r68), whatever its size and bsr too; the translation wrote a
+* word branch with displacement 2. A branch further on stays (a short one here).
+* fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
+* options: -b
+* expect text: 4e71 4e71 4e71 4e71 4e71 4e71 6002 4e71 4e71 4e71
+ psect branch_to_next,0,0,0,0,0
+ nop
+x1 bra nx ;to the next statement
+* a comment between
+
+nx nop
+ beq.s nx2
+nx2: nop
+ bra.w nx3
+nx3 nop
+ bsr nx4
+nx4 nop
+ bra nx5
+nx5 equ *
+ nop
+ bra far
+ nop
+far nop
+ ends
