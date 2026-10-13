@@ -245,6 +245,15 @@ values from `sys.l` when linking. The translation does the same wherever one ELF
 `tcall` (`trap #0` and `trap #n` with the call's number) keep the call numbers external the same
 way.
 
+**A label plus externals** (`Block+Field(a6)`, a vsect label and a library's equate; `dc.w
+Table+Off`): r68 writes a local and an external reference, which `l68` adds; one ELF relocation
+can't. The label's section gets an alias, `r68l_<psect>_<section>` (`text`, `data`, `bss`,
+`rdata`, `rbss`), a hidden global at the section's start, and the field adds the label's offset:
+`r68x_<hash>+(Block-r68l_x_bss)`. `rof2elf` and `elf2rof` use the same names, so links of either
+kind of object agree. Not in a PC-relative field (`Table+Off(pc)`) and not a label plus an external
+before `(pc)` (`lea lab+Ext(pc),a0`): `gas` refuses both, and both Microware linkers refuse a
+PC-relative reference to an equate anyway.
+
 **Macro arguments:** a macro body's expression whose parameters need a link-time expression
 whatever the arguments are (`4*\1`, `\1+\2`, `-\1`) refers to an alias, `.Lr68xm<k>`, which each
 call sets for its arguments on a line before the call (the link-time expression, or the value

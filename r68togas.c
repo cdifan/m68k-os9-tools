@@ -780,6 +780,8 @@ static int paren_address(const char *s, size_t n)
 	return !register_part(s + 1, n - 2);
 }
 
+static int source_constant(const char *s, size_t n);
+
 static void operand(struct buf *b, const char *s, size_t n, int absolute)
 {
 	if (n == 0)
@@ -839,10 +841,11 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 			/* d(An): r68 keeps a 16-bit displacement, also of 0, which
 			 * as would drop; (d).w(An) keeps it, on any CPU. */
 			int an = regs == 1 && k == (open > 0 ? 1 : 2) && address_register(inner, ilen);
-			/* A number before (pc): r68's raw displacement, which as
-			 * (MRI) takes as an absolute address: the address it
-			 * means, from the extension word's. */
-			int pc = open > 0 && pc_register(inner, ilen) && is_number(s, open);
+			/* A number before (pc), or a constant (equates): both
+			 * r68s' raw displacement, which as (MRI) takes as an
+			 * absolute address: the address it means, from the
+			 * extension word's. */
+			int pc = open > 0 && pc_register(inner, ilen) && (is_number(s, open) || source_constant(s, open));
 			if (an) {
 				const char *d = s, *r = NULL;
 				size_t dn = open, rn = 0;
@@ -1131,6 +1134,9 @@ struct state {
 	int dlv_line;		/* the line whose use of one has its error */
 	char **sets;		/* the names defined by set (scan_labels) */
 	int nsets;
+	char **equ_names;	/* the names defined by equ outside macro bodies and */
+	char **equ_texts;	/* their expressions, NULL for a name defined twice */
+	int nequs;		/* (scan_labels; prescan_equate) */
 	char **set_done;	/* names set so far outside macro definitions */
 	int nset_done;
 	char **finals;		/* those referred to before their first set */
@@ -2471,6 +2477,39 @@ static int non_location(const char *base)
 
 static int scan_vsect, scan_remote, scan_macro_def;
 
+/* Records NAME (N chars) equ ARGS (its operand field) for prescan_equate;
+ * a name defined twice (in conditionals) gets no expression. */
+static void note_prescan_equate(const char *name, size_t n, const char *args)
+{
+	while (*args == ' ' || *args == '\t')
+		args++;
+	size_t an = 0;
+	while (args[an] && !isspace((unsigned char)args[an]))
+		an++;
+	for (int i = 0; i < st.nequs; i++)
+		if (strlen(st.equ_names[i]) == n && strncmp(st.equ_names[i], name, n) == 0) {
+			free(st.equ_texts[i]);
+			st.equ_texts[i] = NULL;
+			return;
+		}
+	st.equ_names = xrealloc(st.equ_names, (st.nequs + 1) * sizeof *st.equ_names);
+	st.equ_texts = xrealloc(st.equ_texts, (st.nequs + 1) * sizeof *st.equ_texts);
+	st.equ_names[st.nequs] = xstrndup(name, n);
+	st.equ_texts[st.nequs++] = xstrndup(args, an);
+}
+
+/* The expression of equate S (N chars) from the pre-scan, NULL if there is
+ * none or more than one, or S is also a label (in a section). */
+static const char *prescan_equate(const char *s, size_t n)
+{
+	if (label_section(s, n))
+		return NULL;
+	for (int i = 0; i < st.nequs; i++)
+		if (strlen(st.equ_names[i]) == n && strncmp(st.equ_names[i], s, n) == 0)
+			return st.equ_texts[i];
+	return NULL;
+}
+
 static void scan_labels(const char *path, int depth, char ***globals, int *nglobals)
 {
 	if (depth > 16)
@@ -2508,6 +2547,8 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 					st.sets = xrealloc(st.sets, (st.nsets + 1) * sizeof *st.sets);
 					st.sets[st.nsets++] = xstrndup(p, n);
 				}
+				if (!scan_macro_def && strncasecmp(o, "equ", 3) == 0 && isspace((unsigned char)o[3]))
+					note_prescan_equate(p, n, o + 3);
 			}
 			label = xstrndup(p, n);
 			label_global = p[n] == ':';
@@ -2663,6 +2704,9 @@ static long *cv_values;
 static int ncv;
 
 static int cv_expr(const char **p, long *v);
+/* cv_prescan: names not equated yet are looked up in the pre-scan's equates
+ * (prescan_equate), cv_depth deep */
+static int cv_prescan, cv_depth;
 
 static int cv_unary(const char **p, long *v)
 {
@@ -2705,6 +2749,16 @@ static int cv_unary(const char **p, long *v)
 				*p = q;
 				return 1;
 			}
+		/* with cv_prescan: an equate further on, by its expression */
+		const char *t = cv_prescan && cv_depth < 16 ? prescan_equate(*p, q - *p) : NULL;
+		if (t) {
+			cv_depth++;
+			int ok = cv_expr(&t, v) && *t == '\0';
+			cv_depth--;
+			if (ok)
+				*p = q;
+			return ok;
+		}
 	}
 	return 0;
 }
@@ -2784,6 +2838,26 @@ static int constant_value(const char *s, long *v)
 	while (*p == ' ' || *p == '\t')
 		p++;
 	return *p == '\0';
+}
+
+/* constant_value, with the equates of the whole source (those further on
+ * too). */
+static int source_value(const char *s, long *v)
+{
+	cv_prescan = 1;
+	int c = constant_value(s, v);
+	cv_prescan = 0;
+	return c;
+}
+
+/* Whether expression S (N chars) is a constant (source_value). */
+static int source_constant(const char *s, size_t n)
+{
+	char *t = xstrndup(s, n);
+	long v;
+	int c = source_value(t, &v);
+	free(t);
+	return c;
 }
 
 /* Whether expression S (N chars) has only numbers and names equated so
@@ -3565,7 +3639,7 @@ static void branch_const_flags(int m, const char *args)
 		int c = 0;
 		if (n <= k && lens[n - 1] > 0 && !(lens[n - 1] >= 2 && pieces[n - 1][0] == '\\')) {
 			char *a = xstrndup(pieces[n - 1], lens[n - 1]);
-			c = constant_value(a, &v);
+			c = source_value(a, &v);
 			free(a);
 		}
 		bprintf(&line_before, ".Lr68k%d_%d set %d\n", m, n, c);
@@ -4684,7 +4758,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			long v;
 			int sh = !bdb && (size == 's' || size == 'b');
 			int param = st.in_macro && tgt[0] == '\\' && tgt[1] >= '1' && tgt[1] <= '9' && tgt[2] == '\0';
-			if ((!bdb || dreg >= 0) && !st.in_macro && *tgt && constant_value(tgt, &v)) {
+			if ((!bdb || dreg >= 0) && !st.in_macro && *tgt && source_value(tgt, &v)) {
 				if (sh)
 					bprintf(out, "%s dc.w $%04X%s", labs, bop | ((unsigned long)v & 0xff), rest);
 				else
