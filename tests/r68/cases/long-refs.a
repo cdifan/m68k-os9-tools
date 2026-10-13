@@ -1,0 +1,21 @@
+* -y with -b on a 68020 (Ultra C's r68): every branch to a label 32-bit, an explicit .s too, and
+* every PC-relative reference to a label the 32-bit (bd,PC) form, indexed too; a branch or a
+* reference to a constant and dbcc as without. Without the option -y was refused.
+* fixed: a9ea4bb 2026-10-13 r68togas: %-registers, -r, -y, the separate-files mode (-s, -x); docs brought up to date
+* options: -y -b -m2
+* expect text: 4e714e71 60fffffffffc 61ff00000000 6200000e 51c8ffec 41fb0170ffffffe8 43fb017000000000 323b0130ffffffd8 45fa0006
+* expect reloc: R_68K_PC32        Ext
+* expect reloc: R_68K_PC32        Ext+0x00000002
+Disp equ 14
+ psect long_refs,0,0,0,0,0
+ nop
+lab nop
+ bra.s lab
+ bsr Ext
+ bhi Disp
+ dbra d0,lab
+ lea lab(pc),a0
+ lea Ext(pc),a1
+ move.w lab(pc,d0.w),d1
+ lea 6(pc),a2
+ ends

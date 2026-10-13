@@ -1,0 +1,19 @@
+* Registers written with % (%d0, %PC, %pcr, %vbr, %fp0): Ultra C's r68 takes them always, as
+* the plain names (C 3.2's refuses them); the translation had taken them for binary numbers
+* ((%d1).l). A binary number after # stays one; move.l #n,%d4 stays move.l (r68 makes no
+* moveq).
+* fixed: a9ea4bb 2026-10-13 r68togas: %-registers, -r, -y, the separate-files mode (-s, -x); docs brought up to date
+* options: -m2
+* expect text: 2001 48e7e080 24301400 361f 43fafff2 45fb00ee 4e7ab801 023c0005 283c0000000c f227e007 51fc
+ psect reg_percent,0,0,0,0,0
+lab move.l %d1,%d0
+ movem.l %d0-%d2/%a0,-(%sp)
+ move.l (%a0,%d1.w*4),%d2
+ move.w (%sp)+,%D3
+ lea lab(%PC),%a1
+ lea lab(%pcr,%d0.w),%a2
+ movec %vbr,%a3
+ andi.b #%0101,%ccr
+ move.l #%1100,%d4
+ fmovem.x %fp0-%fp2,-(%sp)
+ ends

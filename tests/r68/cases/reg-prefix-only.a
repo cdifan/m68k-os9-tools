@@ -1,0 +1,18 @@
+* -r (Ultra C's r68): registers only with %; a plain register name is a symbol, this source's
+* (a label d0) or an external (d1, a0, usp: absolute long addresses), as in r68. Without the
+* option -r was refused.
+* fixed: a9ea4bb 2026-10-13 r68togas: %-registers, -r, -y, the separate-files mode (-s, -x); docs brought up to date
+* options: -r
+* expect text: 0001 22390000000023f9 00000000 00000000 2079 00000000 4e69 45faffe6 263c00000002
+* expect reloc: R_68K_32          d1
+* expect reloc: R_68K_32          a0
+* expect reloc: R_68K_32          usp
+ psect reg_prefix_only,0,0,0,0,0
+d0 dc.w 1
+lab move.l d0,%d1
+ move.l d1,a0
+ move.l usp,%a0
+ move.l %usp,%a1
+ lea lab(%pc),%a2
+ move.l #2,%d3
+ ends
