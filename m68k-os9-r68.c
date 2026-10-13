@@ -576,12 +576,12 @@ static void unreferenced_externals(const char *object)
 
 /* The sections' alignment as the Microware assemblers pad a psect's
  * (r68togas pads them, see its pad_alignment): 2 for C 3.2's R68
- * (-dialect=c32) and Ultra C's r68 -m0, so that the linker places the next
+ * (-dialect=c32) and Ultra C's r68 -m0 and -m1, so that the linker places the next
  * psect's after it, as l68 does; as gives them 4, the other dialect's. */
 static void section_alignment(const char *object)
 {
 	int c32 = st.dialect != NULL && strcmp(st.dialect, "c32") == 0;
-	if (!c32 && !(st.cpu_given && st.cpu == 0))
+	if (!c32 && !(st.cpu_given && st.cpu <= 1))
 		return;
 	static const char *const sections[] = { ".text", ".data", ".bss", ".remote.data", ".remote.bss", NULL };
 	struct args argv = { 0 };

@@ -748,6 +748,10 @@ static int pc_ext_offset = 2;
  * references to labels 32-bit (bra.l, (bd.l,PC)); to constants as without */
 static int long_refs;
 
+/* -m2 and later: (d,An,Xn), (d,An) and (d,PC...) in the full format (see
+ * operand) */
+static int full_format;
+
 /* Whether S (N chars) is a register or register list (d0-d3/a0). */
 static int register_list(const char *s, size_t n)
 {
@@ -915,6 +919,53 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 		int regs = 0;
 		for (int i = 0; i < k; i++)
 			regs += register_part(pieces[i], lens[i]);
+		if (regs > 0 && full_format && open == 0 && k >= 2 && !register_part(pieces[0], lens[0]) &&
+		    register_part(pieces[1], lens[1]) &&
+		    memchr(s, '[', n) == NULL &&
+		    !(lens[0] > 2 && pieces[0][lens[0] - 2] == '.' && strchr("wlWL", pieces[0][lens[0] - 1]) &&
+		      is_number(pieces[0], lens[0] - 2))) {
+			/* (d,An,Xn), (d,An), (d,PC), (d,PC,Xn) on a 68020 and
+			 * later (Ultra C's r68 refuses the form on a 68000):
+			 * r68 always writes the full extension word with a
+			 * 32-bit displacement, the index suppressed where there
+			 * is none (as: zd0), also for (0,a0); a constant before
+			 * PC less 2 from the extension word ((6,pc): 8). A
+			 * number with .w stays 16 bits; a symbol's .w is part of
+			 * its name in r68 (tested 2026-10-13). */
+			const char *d = pieces[0], *base = pieces[1];
+			size_t dn = lens[0], bn = lens[1];
+			skip_percent(&base, &bn);
+			int pcb = (bn == 2 || bn == 3) && strncasecmp(base, "pcr", bn) == 0;
+			bputc(b, '(');
+			if (pcb && (is_number(d, dn) || source_constant(d, dn))) {
+				bprintf(b, "(*+%d+2+", pc_ext_offset);
+				expression(b, d, dn);
+				bputc(b, ')');
+				annotate = 1;
+			} else {
+				bputc(b, '(');
+				twin_mode = pcb;
+				expression(b, d, dn);
+				twin_mode = 0;
+				bputc(b, ')');
+			}
+			bputs(b, ".l");
+			for (int i = 1; i < k; i++) {
+				bputc(b, ',');
+				const char *r = pieces[i];
+				size_t rl = lens[i];
+				skip_percent(&r, &rl);
+				if (rl == 3 && strncasecmp(r, "pcr", 3) == 0)
+					bputs(b, "pc");
+				else
+					put_regs(b, pieces[i], lens[i]);
+			}
+			if (k == 2)
+				bputs(b, ",zd0.w");
+			bputc(b, ')');
+			bput(b, s + end + 1, n - end - 1);
+			return;
+		}
 		if (regs > 0) {
 			/* d(An): r68 keeps a 16-bit displacement, also of 0, which
 			 * as would drop; (d).w(An) keeps it, on any CPU. */
@@ -1133,20 +1184,15 @@ static int split_line(const char *text, struct line *l)
 	const char *q = p;
 	while (*q && !isspace((unsigned char)*q))
 		q++;
-	{
-		/* a conditional's operand right after it, in parentheses
-		 * (ifeq(Type-Board)): r68 ends the operation there */
-		const char *par = memchr(p, '(', q - p);
-		if (par != NULL && par > p && par - p < 16) {
-			char c[16];
-			size_t k;
-			for (k = 0; p + k < par; k++)
-				c[k] = (char)tolower((unsigned char)p[k]);
-			c[k] = '\0';
-			if (is_cond(c))
-				q = par;
+	/* the operand right after the operation, without a blank
+	 * (ifeq(Type-Board), andi.l#Mask,d7, tst.l(a0), move.l-(a0),d0):
+	 * r68 ends the operation at #, (, - or * (Ultra C's r68, tested
+	 * 2026-10-13; a $ belongs to it: clr.l$10(a0) is "illegal suffix") */
+	for (const char *c = p + 1; c < q; c++)
+		if (strchr("#(-*", *c) != NULL) {
+			q = c;
+			break;
 		}
-	}
 	l->op = xstrndup(p, q - p);
 	p = q;
 	if (no_operands(l->op)) {
@@ -1278,7 +1324,7 @@ struct state {
 	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
 	int nmren;
 	int c32;		/* -d c32: C 3.2's R68's encodings */
-	int cpu_given;		/* -m given (r68 without -m pads as with -m1..6, with nop) */
+	int cpu_given;		/* -m given (r68 without -m pads as with -m2..6, with nop) */
 	int rept_fold, rept_state;	/* a rept of one dc line folded: its count; 1: the dc
 					   next, 2: the endr */
 	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
@@ -4154,6 +4200,107 @@ static int param_string_element(const char *args)
 	return 0;
 }
 
+/* Whether the source's next statement after this line (st.rest_of_file),
+ * past blank and comment lines, has the label NAME (an equ or set of it
+ * only as *). */
+static int next_is_label(const char *name)
+{
+	size_t n = strlen(name);
+	if (n == 0 || !symstart((unsigned char)name[0]))
+		return 0;
+	for (size_t i = 0; i < n; i++)
+		if (!symchar((unsigned char)name[i]))
+			return 0;
+	const char *p = st.rest_of_file;
+	for (;;) {
+		while (*p == '\r' || *p == '\n')
+			p++;
+		if (*p == '\0')
+			return 0;
+		const char *e = p;
+		while (*e && *e != '\r' && *e != '\n')
+			e++;
+		const char *t = p;
+		while (t < e && (*t == ' ' || *t == '\t'))
+			t++;
+		if (t == e || *p == '*' || *p == ';' || (t > p && (*t == '*' || *t == ';'))) {
+			p = e;
+			continue;
+		}
+		if (t > p || (size_t)(e - p) < n || strncmp(p, name, n) != 0)
+			return 0;
+		const char *a = p + n;
+		if (a < e && *a == ':')
+			a++;
+		if (a < e && *a != ' ' && *a != '\t')
+			return 0;
+		while (a < e && (*a == ' ' || *a == '\t'))
+			a++;
+		if (!((e - a >= 3 && (strncasecmp(a, "equ", 3) == 0 || strncasecmp(a, "set", 3) == 0)) &&
+		      (e - a == 3 || a[3] == ' ' || a[3] == '\t')))
+			return 1;
+		/* NAME equ *: the next location too */
+		a += 3;
+		while (a < e && (*a == ' ' || *a == '\t'))
+			a++;
+		return a < e && *a == '*' && (a + 1 == e || a[1] == ' ' || a[1] == '\t');
+	}
+}
+
+/* An immediate PC-relative to an external, the instruction's first
+ * operand (movea.l #Ext-*-(End-Here+2),a2: a linker symbol's distance
+ * from the instruction), in instruction OP with operands ARGS, labels LABS
+ * and comment REST, size SIZE (l or w): both r68s write a PC-relative
+ * reference (R_68K_PC32, PC16) on the immediate; as can't take an
+ * external less *. Written into OUT as the instruction with 0 there and
+ * the relocation by .reloc, the addend (2, the field's offset from *, and
+ * the rest of the expression) an equate, which may name later labels.
+ * Not after byte data with labels (as would align between the labels and
+ * the instruction's own); 0 if ARGS isn't of that form. */
+static int pc_immediate(const char *op, const char *args, const char *labs, const char *rest, char size,
+			struct buf *out)
+{
+	const char *pieces[8];
+	size_t lens[8];
+	int k = split_commas(args, strlen(args), pieces, lens, 8);
+	if (k < 2 || lens[0] < 4 || pieces[0][0] != '#' || !symstart((unsigned char)pieces[0][1]))
+		return 0;
+	const char *s = pieces[0] + 1, *e = pieces[0] + lens[0];
+	const char *q = s;
+	while (q < e && symchar((unsigned char)*q))
+		q++;
+	if (e - q < 2 || q[0] != '-' || q[1] != '*' || (q + 2 < e && q[2] != '+' && q[2] != '-'))
+		return 0;
+	char *name = xstrndup(s, (size_t)(q - s));
+	int ext = short_external(name);
+	if (!ext || (*labs && st.maybe_odd)) {
+		free(name);
+		return 0;
+	}
+	static int npi;
+	npi++;
+	if (*labs)
+		bprintf(out, "%s\n", labs);
+	bprintf(out, ".Lr68pi%d %s #0+r68__0", npi, op);
+	for (int i = 1; i < k; i++) {
+		bputc(out, ',');
+		operand(out, pieces[i], lens[i], 0);
+	}
+	bprintf(out, "%s\n.Lr68pa%d equ 2+(", rest, npi);
+	struct buf r = { 0 };
+	bprintf(&r, "0%.*s", (int)(e - q - 2), q + 2);
+	expression(out, r.s, r.n);
+	free(r.s);
+	bputc(out, ')');
+	struct buf t = { 0 };
+	put_symbol(&t, name, strlen(name));
+	bprintf(out, "\n .mri 0\n .reloc .Lr68pi%d+2,R_68K_PC%d,%s+.Lr68pa%d\n .mri 1", npi, size == 'l' ? 32 : 16,
+		t.s, npi);
+	free(t.s);
+	free(name);
+	return 1;
+}
+
 static void translate_line(const char *text, struct buf *out, const char *path, int lineno, FILE *fp, int depth)
 {
 	struct line l;
@@ -4730,6 +4877,19 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		st.section = data_section(1);
 		goto done;
 	}
+	if (!st.in_vsect && !st.in_macro && strcmp(base, "align") == 0) {
+		/* align in the code: Ultra C's r68 fills a zero byte where
+		 * the location is odd (as MRI's pending alignment does at
+		 * balignw), then nop, with -m2 and later trapf ($51FC), a
+		 * 4-byte rest trapf.w ($51FA $0000), 6 bytes each trapf.l
+		 * ($51FB and a long 0; tested 2026-10-13): balignw with nop
+		 * or trapf, the same up to align 4 */
+		bprintf(out, "%s balignw ", labs);
+		expression(out, *l.args ? l.args : "2", strlen(*l.args ? l.args : "2"));
+		bprintf(out, ",$%04X%s", st.cpu_given && st.cpu_level >= 20 ? 0x51FC : 0x4E71, rest);
+		annotate = 1;
+		goto done;
+	}
 	if (strcmp(base, "dz") == 0) {
 		bprintf(out, "%s dcb.%c ", labs, size ? size : 'w');
 		expression(out, l.args, strlen(l.args));
@@ -5008,6 +5168,20 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bprintf(out, "r68__sb%d dc.b $%02X,0%s\n .mri 0\n .reloc r68__sb%d+1,R_68K_PC8,%s-1\n .mri 1", nsb,
 				0x60 + k, rest, nsb, t.s);
 			free(t.s);
+			annotate = 1;
+			goto done;
+		}
+		if (st.branch_sizing && !st.in_macro && size != 'l' && is_branch(base) && next_is_label(l.args)) {
+			/* -b: a branch to the next statement's label, nothing
+			 * but blank and comment lines between (bra.s Done, then
+			 * Done): r68 leaves it out, bsr too (Ultra C's r68,
+			 * tested 2026-10-13); as would write a word branch */
+			bprintf(out, "%s%s", *labs ? labs : "*", rest);
+			annotate = 1;
+			goto done;
+		}
+		if (!st.in_macro && (size == 'l' || size == 'w') && !is_branch(base) &&
+		    pc_immediate(l.op, l.args, labs, rest, size, out)) {
 			annotate = 1;
 			goto done;
 		}
@@ -5609,11 +5783,12 @@ static void usage(void)
 }
 
 /* What the Microware assemblers pad each section of a psect to: 2 for C
- * 3.2's R68 (-d c32) and Ultra C's r68 -m0, 4 for Ultra C's r68 otherwise
- * (m68k-os9-r68's section_alignment follows the same rule). */
+ * 3.2's R68 (-d c32) and Ultra C's r68 -m0 and -m1 (-m1 measured
+ * 2026-10-13), 4 for Ultra C's r68 otherwise (m68k-os9-r68's
+ * section_alignment follows the same rule). */
 static int pad_alignment(void)
 {
-	return st.c32 || (st.cpu_given && st.cpu_level == 0) ? 2 : 4;
+	return st.c32 || (st.cpu_given && st.cpu_level <= 10) ? 2 : 4;
 }
 
 int main(int argc, char **argv)
@@ -5673,6 +5848,7 @@ int main(int argc, char **argv)
 			arch = archs[d[0] - '0'];
 			st.cpu_level = (d[0] - '0') * 10;
 			st.cpu_given = 1;
+			full_format = d[0] >= '2';
 		}
 		else if (strncmp(argv[i], "-u", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
@@ -5814,15 +5990,15 @@ int main(int argc, char **argv)
 	}
 	(void)open_conds;
 	/* Each section padded as the Microware assemblers pad a psect's
-	 * (measured 2026-10-09): C 3.2's R68 and Ultra C's r68 -m0 to 2; Ultra
-	 * C's r68 otherwise to 4, the code with nop (without -m) or trapf
-	 * (-m1..6), after a zero byte where the size is odd. m68k-os9-r68
-	 * gives the sections that alignment too. */
+	 * (measured 2026-10-09, -m1 2026-10-13): C 3.2's R68 and Ultra C's
+	 * r68 -m0 and -m1 to 2; Ultra C's r68 otherwise to 4, the code with
+	 * nop (without -m) or trapf (-m2..6), after a zero byte where the size
+	 * is odd. m68k-os9-r68 gives the sections that alignment too. */
 	{
 		int to = pad_alignment();
 		unsigned fill = st.cpu_given ? 0x51FC : 0x4E71;
 		fprintf(out, "* padding: each section to %d, as %s\n", to,
-			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0" : st.cpu_given ? "Ultra C's r68 -m1..6" : "Ultra C's r68");
+			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0/-m1" : st.cpu_given ? "Ultra C's r68 -m2..6" : "Ultra C's r68");
 		if (to == 2) {
 			fprintf(out, " section .text\n balign 2,0\n");
 		} else if (dyn_ends) {

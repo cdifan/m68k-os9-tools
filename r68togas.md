@@ -152,6 +152,8 @@ Most instruction lines need no change. Where the same text means something else 
   reverses it for `-(An)` (`#$113` gives `$C880`; `gas` stores `$0113`). With `-(An)` the operand
   becomes a generated symbol (`<symbol>__rev`, or `r68__mask<n>` for an expression), which the
   epilogue defines as the bit reversal of the original expression.
+- **An operand right after the operation without a blank** (`andi.l#^$ff,d7`, `moveq#1,d0`,
+  `tst.l(a0)`): r68 ends the operation at `#`, `(`, `-` or `*`.
 - **Registers written with `%`** (`%d0`, `%PC`, `%fp0`), which Ultra C's `r68` takes: written
   without the `%`. With `-r`, registers are only those with `%`; a plain register name is a
   symbol, written with `__r68` after it.
@@ -161,6 +163,9 @@ Most instruction lines need no change. Where the same text means something else 
 
 - **`move.b` with a negative immediate:** r68 writes `$00nn` (`andi.b` and the others `$FFnn`, as
   `gas`); the value is masked.
+- **An immediate PC-relative to an external** (`movea.l #edata-*-(End-Here+2),a2`): both
+  Microware assemblers write a PC-relative reference on the immediate; written with 0, a label on
+  the instruction and a `.reloc`. Not in macro bodies.
 - **`-d c32`:** C 3.2's `r68` writes `add`, `sub`, `and`, `or` and `cmp` with an immediate and a
   data register destination as the `<ea>,Dn` form (`and.l #2,d0` is `$C0BC 00000002`), and `add`
   and `sub` with an immediate to an address register as `ADDA`/`SUBA` also for #1 to #8, where
@@ -172,6 +177,8 @@ Most instruction lines need no change. Where the same text means something else 
 
 ### Branches
 
+- **`-b`: a branch to the next statement** (`bra.s Done` with only blank or comment lines before
+  `Done`) is left out, as r68 does, whatever its size. Not in macro bodies.
 - **Global labels:** `gas` keeps a relocation for a reference to a global symbol, which an 8-bit
   field can't take; r68 resolves it. PC-relative references and branches to a global label of
   the source refer to a local twin `NAME__r68pc` instead, which the epilogue defines as `NAME`.
@@ -187,6 +194,10 @@ Most instruction lines need no change. Where the same text means something else 
 - **A short branch to an external** (`bcs.s Ext`): C 3.2's `r68` writes an 8-bit PC-relative
   reference, which its linker resolves; with `-d c32` the translation writes the same. Ultra C's
   `r68` refuses it, and so does the default dialect.
+- **`align` in the code:** Ultra C's `r68` fills a zero byte where the location is odd, then `nop`
+  words, from `-m2` on `trapf` words (and `trapf.w`/`trapf.l` for larger gaps); written
+  `balignw <n>,$4E71` (or `$51FC`). From `align 8` on a 68020, `gas` writes `trapf` words where
+  r68 writes the longer forms, which execute the same. The data's `align` fills zeros.
 
 ### The psect and vsects
 
