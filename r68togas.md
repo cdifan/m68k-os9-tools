@@ -374,6 +374,11 @@ differ, the assemblers are followed.
 
 ## Differences and limitations
 
+- **Our `gas` is required:** two fixes in binutils' branch `m68k-gas-fixes` are needed for sources
+  that use them: a PC-indexed byte displacement of 0 or -1 (`move.b tab-32(pc,d0.w),d0`), which
+  stock `gas` refuses ("invalid byte branch offset"), and a conditional on a distance across an
+  alignment (`ifne (*-lab)&15`), which stock `gas` can't evaluate in MRI mode. With a stock `gas`
+  such sources fail.
 - **`\@`:** r68 counts each expansion of a source macro from 1, in five digits (`Name00003`);
   `gas` counts every macro it runs from 0, the translation's helper macros too. Only the names of
   global labels made with `\@` show it.
