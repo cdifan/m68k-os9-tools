@@ -64,6 +64,11 @@ Each prints its options with `-?`. Under the short names `xcc`, `cc`, `ucc`, `l6
 - Windows: the same Makefile builds them with MinGW-w64 (`EXEEXT=.exe`, `LN=cp`), natively or as a
   cross build.
 
+## Tests
+
+`tests/r68` (see its [README](tests/r68/README.md)) and `tests/gastor68`, run by their `run.sh`;
+the toolchain's own tests in [toolchaincdi](https://github.com/cdifan/toolchaincdi)'s `test/`.
+
 ## License
 
 MIT; see the source files.

@@ -119,6 +119,8 @@ Microware's assemblers do where GCC's syntax would mean something else to them:
 - r68 sizes an unsized branch as a word (with a warning) unless `-b`; hence `.w` in C 3.2's style.
 - r68 reads a numeric `movem` mask in register order and reverses it for `-(An)`; hence register
   lists.
+- r68 takes an index register without a size as `.l`; hence the size kept.
+- r68 makes `(d,An,Xn)` 32 bits without `.w`; hence `(d.w,An,Xn)` where 16 bits fit.
 - A lone label in a vsect takes the initialized data's counter; hence the label on the data line.
 - r68 has no C escapes in strings; hence numeric bytes.
 
@@ -135,6 +137,15 @@ been checked for either.
   `gas` assembles GCC's output, `ld` can keep one copy of a string that several files share.
   gastor68's output has them as `dc.b` lines in the code, like any other read-only data, so each
   file keeps its own copy: the code is a few bytes longer where strings repeat across files.
+- **r68 fills unused register fields** where `gas` writes zeros: `ftst`'s destination field and
+  the unused Dh field of 32-bit `muls.l`, `mulu.l` and `divs.l`. The instructions are the same.
+- **A 16-bit relocation's addend** beyond 16 bits (a6-relative data beyond 32 KB): the ROF holds
+  the offset in the instruction's 16 bits, so it is the same modulo 65536. In OS-9's a6-relative
+  data, biased by 32 KB, it fits when the vsect does.
+- **A symbol's displacement plus more than 16 bits on the 68020** (`filler+39999(%a6)`): `gas`
+  makes it 32 bits, r68 16 bits, the offset modulo 65536 (as above).
+- **Undefined symbols nothing refers to** (GCC's `.globl __udivsi3`): `gas` keeps them in the
+  object, r68 doesn't.
 
 ## Tests
 
