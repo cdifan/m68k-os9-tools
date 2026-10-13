@@ -19,11 +19,19 @@ stops after the translation. The reverse, for GCC's output, is [gastor68](gastor
 | `-m <n>` | the CPU, as r68's `-m` (0 the 68000 ... 6 the 68060); written as an `.arch` directive; it also chooses the padding (see "Dialects") |
 | `-b` | r68's `-b`: branches to the source's own labels sized by `gas`; `-B` also those to its global labels |
 | `-r` | r68's `-r`: registers only with `%` (`%d0`); a plain `d0` is a symbol |
+| `-y` | r68's `-y`, with `-b`, on a 68020 or later: branches and PC-relative references to labels 32-bit |
+| `-x <ext>` | the extension of outputs named after their sources (default `s`) |
 | `-u <dir>` | a directory to search for `use` files, as r68's `-u` |
+| `-o <output>` | the output; a directory: the output there, named after the source. Without `-o`, standard output (with `-s`, the working directory) |
 
 `-b`, `-bt`, `-r` and `-y` are options of Ultra C's `r68` only; C 3.2's `r68` has none of them.
 With `-a` and `-m` in the output, it needs no options: `m68k-os9-as <output>` assembles it, and
 so does the GCC driver (`m68k-elfos9-gcc -c x.s`).
+
+**Output names:** r68 sources are `.a` or `.s`. A final `.a` becomes `.s`; a `.s` source gets
+`.gas.s` (`foo.s` gives `foo.gas.s`); any other name gets `.s` appended (`defsfile` gives
+`defsfile.s`). With `-x <ext>` a final `.a` or `.s` becomes `.<ext>`, any other name gets it
+appended.
 
 **No overwriting:** writing over an input file is an error, and so is writing over any other
 existing file that `-o` doesn't name, `-s`'s outputs included. So the round trip `gastor68
@@ -73,6 +81,10 @@ looking at a translation file by file; `m68k-os9-r68` uses the inline output.
   the prelude and the one epilogue, with the `xdef`s of all files.
 - A `use` stays inline after byte data of odd length (an `include` there would align in MRI
   mode) and in a macro body (`gas` would include the file at each expansion).
+- A file used more than once gets one output where its translation comes out the same, else one
+  each (`vals.d.2.s`); so does a file of the same name in another directory.
+- `gas` looks for an included file in the working directory and the `-I` directories only:
+  assemble in the outputs' directory, or with `-I <it>`.
 
 ### Annotations
 
@@ -140,6 +152,9 @@ Most instruction lines need no change. Where the same text means something else 
   reverses it for `-(An)` (`#$113` gives `$C880`; `gas` stores `$0113`). With `-(An)` the operand
   becomes a generated symbol (`<symbol>__rev`, or `r68__mask<n>` for an expression), which the
   epilogue defines as the bit reversal of the original expression.
+- **Registers written with `%`** (`%d0`, `%PC`, `%fp0`), which Ultra C's `r68` takes: written
+  without the `%`. With `-r`, registers are only those with `%`; a plain register name is a
+  symbol, written with `__r68` after it.
 - **`cinv` and `cpush`:** the cache operands (`bc`, `dc`, `ic`, `nc`) are kept as they are.
 
 ### Immediates
@@ -165,6 +180,10 @@ Most instruction lines need no change. Where the same text means something else 
   assemblers take the constant as the displacement itself, without a relocation; written as data
   words. In a macro body with a parameter as the target, both forms, chosen by a flag each call
   sets.
+- **`-y`** (with `-b`, on a 68020 or later): every branch to a label 32-bit, also an explicit `.s`
+  or `.w`, and every PC-relative reference to a label the 32-bit `(bd,PC)` form; a branch to a
+  constant and `db<cc>` stay as without. Without `-b`, `-y` changes nothing; on a 68000 or 68010
+  it is an error, as in Ultra C's `r68` ("Spanreg must be specified for branch sizing").
 - **A short branch to an external** (`bcs.s Ext`): C 3.2's `r68` writes an 8-bit PC-relative
   reference, which its linker resolves; with `-d c32` the translation writes the same. Ultra C's
   `r68` refuses it, and so does the default dialect.
@@ -244,6 +263,16 @@ values from `sys.l` when linking. The translation does the same wherever one ELF
 (`F$Link`, `E$Abort+1`, `T_VctIRQ-(4*4)`), in any field r68 relocates, bytes included. `os9` and
 `tcall` (`trap #0` and `trap #n` with the call's number) keep the call numbers external the same
 way.
+
+**Link-time expressions:** a sum or difference of several external names, or one subtracted
+(`Dir_+Write_`, `F$Fork-F$Link`, `-E$Abort`, with numbers too), stays for the linker: the field
+refers to a symbol named after the expression, `r68x_<hash>` plus the numbers, and the object
+notes its definition in a section `.r68x`; the link front ends define the symbol from the notes
+(see [m68k-os9-l68.md](m68k-os9-l68.md)). `rof2elf` names a ROF's references the same way. The
+notes cover every such expression translated, also on lines a conditional leaves out. External
+names are those the source defines nowhere (no label, `equ` or `set`, also counting the names
+macros make), equates of libraries and other files' labels alike; names with a dot too.
+Expressions with `*` or `/` (`dc.w Ext*2`), which Ultra C's `r68` refuses, are taken.
 
 **A label plus externals** (`Block+Field(a6)`, a vsect label and a library's equate; `dc.w
 Table+Off`): r68 writes a local and an external reference, which `l68` adds; one ELF relocation

@@ -16,10 +16,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "r68x_note.h"
 
 static const char *progname = "r68togas";
+
+/* The files this run has written, removed if it fails (die): the output's
+ * temporary file, -s's use files' outputs */
+static char *made[256];
+static int nmade;
 
 static void die(const char *format, ...)
 {
@@ -29,7 +35,15 @@ static void die(const char *format, ...)
 	vfprintf(stderr, format, ap);
 	va_end(ap);
 	fputc('\n', stderr);
+	for (int i = 0; i < nmade; i++)
+		remove(made[i]);
 	exit(1);
+}
+
+static void note_made(char *path)
+{
+	if (nmade < (int)(sizeof made / sizeof made[0]))
+		made[nmade++] = path;
 }
 
 static void *xmalloc(size_t n)
@@ -180,11 +194,53 @@ static int is_r68_register(const char *s, size_t n)
 	return in_list(r68_registers, s, n, 1);
 }
 
+/* -r (r68's): registers only written with % */
+static int reg_prefix_only;
+
+/* Whether S (N chars) is a register as written in an operand: r68 takes
+ * %d0 always, d0 unless -r (then a symbol). */
+static int is_reg(const char *s, size_t n)
+{
+	if (n > 1 && s[0] == '%')
+		return is_r68_register(s + 1, n - 1);
+	return !reg_prefix_only && is_r68_register(s, n);
+}
+
+/* The number of data or address register S (N chars), 0-7 for d0-d7, 8-15
+ * for a0-a7 and sp; -1 for anything else (is_reg: %d0, d0 unless -r). */
+static int reg_number(const char *s, size_t n)
+{
+	if (!is_reg(s, n))
+		return -1;
+	if (s[0] == '%') {
+		s++;
+		n--;
+	}
+	if (n == 2 && strncasecmp(s, "sp", 2) == 0)
+		return 15;
+	if (n == 2 && (s[0] == 'd' || s[0] == 'D') && s[1] >= '0' && s[1] <= '7')
+		return s[1] - '0';
+	if (n == 2 && (s[0] == 'a' || s[0] == 'A') && s[1] >= '0' && s[1] <= '7')
+		return 8 + s[1] - '0';
+	return -1;
+}
+
+/* S (N chars) without the % of a register written with one (%d0.w*4; a
+ * binary number has a digit after the %). */
+static void skip_percent(const char **s, size_t *n)
+{
+	if (*n > 1 && (*s)[0] == '%' && isalpha((unsigned char)(*s)[1])) {
+		(*s)++;
+		(*n)--;
+	}
+}
+
 static int defined_name(const char *s, size_t n);
 
 /* A symbol's name as GNU as gets it: '@' (legal in r68) as "_at_", a name
  * GNU as takes for a register with "__r68" after it (one r68 knows as a
- * register too where the source defines it: a1 dc.b 1, CCR equ 0). */
+ * register too where the source defines it: a1 dc.b 1, CCR equ 0; with -r
+ * any). */
 static void put_symbol(struct buf *b, const char *s, size_t n)
 {
 	/* A dot inside the name (labels lab.a ... lab.s):
@@ -204,7 +260,7 @@ static void put_symbol(struct buf *b, const char *s, size_t n)
 		} else
 			bputc(b, s[i]);
 	}
-	if (dots || clashes(s, n) || (is_r68_register(s, n) && defined_name(s, n)))
+	if (dots || clashes(s, n) || (is_r68_register(s, n) && (defined_name(s, n) || reg_prefix_only)))
 		bputs(b, "__r68");
 }
 
@@ -602,9 +658,11 @@ static int register_part(const char *s, size_t n)
 	/* a macro parameter in a register's place (\1(\2) in a macro body) */
 	if (n >= 2 && s[0] == '\\' && isdigit((unsigned char)s[1]))
 		return n == 2;
+	if (n > 0 && s[0] == '%')
+		k++;
 	while (k < n && isalnum((unsigned char)s[k]))
 		k++;
-	if (k == 0 || !is_r68_register(s, k))
+	if (!is_reg(s, k))
 		return 0;
 	if (k + 1 < n && s[k] == '.' && strchr("wlWL", s[k + 1]))
 		k += 2;
@@ -625,14 +683,16 @@ static int address_register(const char *s, size_t n)
 	for (int i = 0; i < k; i++) {
 		if (!register_part(pieces[i], lens[i]))
 			continue;
-		if (lens[i] == 2 && strncasecmp(pieces[i], "sp", 2) == 0)
+		const char *p = pieces[i];
+		size_t l = lens[i];
+		skip_percent(&p, &l);
+		if (l == 2 && strncasecmp(p, "sp", 2) == 0)
 			return 1;
 		/* a parameter: taken as an address register (d(\2) keeps its
 		 * 16-bit displacement, which r68 keeps for any register) */
-		if (lens[i] == 2 && pieces[i][0] == '\\')
+		if (l == 2 && p[0] == '\\')
 			return 1;
-		return lens[i] == 2 && tolower((unsigned char)pieces[i][0]) == 'a' && pieces[i][1] >= '0' &&
-			pieces[i][1] <= '7';
+		return l == 2 && tolower((unsigned char)p[0]) == 'a' && p[1] >= '0' && p[1] <= '7';
 	}
 	return 0;
 }
@@ -644,7 +704,12 @@ static int pc_register(const char *s, size_t n)
 	const char *pieces[8];
 	size_t lens[8];
 	int k = split_commas(s, n, pieces, lens, 8);
-	return k >= 1 && (lens[0] == 2 || lens[0] == 3) && strncasecmp(pieces[0], "pcr", lens[0]) == 0;
+	if (k < 1 || !is_reg(pieces[0], lens[0]))
+		return 0;
+	const char *p = pieces[0];
+	size_t l = lens[0];
+	skip_percent(&p, &l);
+	return (l == 2 || l == 3) && strncasecmp(p, "pcr", l) == 0;
 }
 
 /* Whether S (N chars) is numbers only: [-]number, joined by + and -. */
@@ -679,15 +744,19 @@ static int is_number(const char *s, size_t n)
  * (2; 4 after a movem mask or a bit number). */
 static int pc_ext_offset = 2;
 
+/* -y (r68's -y with -b, for a 68020 or later): branches and PC-relative
+ * references to labels 32-bit (bra.l, (bd.l,PC)); to constants as without */
+static int long_refs;
+
 /* Whether S (N chars) is a register or register list (d0-d3/a0). */
 static int register_list(const char *s, size_t n)
 {
 	size_t i = 0;
 	while (i < n) {
-		size_t j = i;
+		size_t j = i + (s[i] == '%');
 		while (j < n && isalnum((unsigned char)s[j]))
 			j++;
-		if (j == i || !is_r68_register(s + i, j - i))
+		if (!is_reg(s + i, j - i))
 			return 0;
 		if (j < n && (s[j] == '-' || s[j] == '/'))
 			j++;
@@ -741,6 +810,15 @@ static void put_twin(struct buf *b, const char *s, size_t n);
 static void put_regs(struct buf *b, const char *s, size_t n)
 {
 	for (size_t i = 0; i < n;) {
+		/* %d0: r68's register prefix, which as (MRI) needn't */
+		if (s[i] == '%' && i + 1 < n && isalpha((unsigned char)s[i + 1]) &&
+		    (i == 0 || !symchar((unsigned char)s[i - 1]))) {
+			size_t j = i + 1;
+			while (j < n && isalnum((unsigned char)s[j]))
+				j++;
+			if (is_r68_register(s + i + 1, j - i - 1))
+				i++;
+		}
 		size_t j = i;
 		while (j < n && isalnum((unsigned char)s[j]))
 			j++;
@@ -870,22 +948,24 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				/* label(pc): 16 bits, as r68 keeps it: for a 68020 as
 				 * would make a symbol whose distance it doesn't know
 				 * (a global's, an external's) the 32-bit (bd,PC) form;
-				 * (label).w(pc) is the same on a 68000. */
+				 * (label).w(pc) is the same on a 68000. With -y 32 bits,
+				 * as r68's -y. */
 				bputc(b, '(');
 				twin_mode = 1;
 				expression(b, s, open);
 				twin_mode = 0;
-				bputs(b, ").w");
+				bputs(b, long_refs ? ").l" : ").w");
 			} else if (open > 0 && pc_register(inner, ilen)) {
 				/* d(pc,Xn): 8 bits, the brief form, as r68 keeps it:
 				 * for a 68020 as would make a value it doesn't know in
 				 * its first pass (L12.-LI12., a label further on) the
-				 * full form with a 16-bit displacement. */
+				 * full form with a 16-bit displacement. With -y the
+				 * full form with 32 bits, as r68's -y. */
 				bputc(b, '(');
 				twin_mode = 1;
 				expression(b, s, open);
 				twin_mode = 0;
-				bputs(b, ").b");
+				bputs(b, long_refs ? ").l" : ").b");
 			} else if (open > 0) {
 				expression(b, s, open);
 			}
@@ -894,7 +974,10 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				if (i)
 					bputc(b, ',');
 				if (register_part(pieces[i], lens[i])) {
-					if (lens[i] == 3 && strncasecmp(pieces[i], "pcr", 3) == 0)
+					const char *r = pieces[i];
+					size_t rl = lens[i];
+					skip_percent(&r, &rl);
+					if (rl == 3 && strncasecmp(r, "pcr", 3) == 0)
 						bputs(b, "pc");
 					else
 						put_regs(b, pieces[i], lens[i]);
@@ -2688,7 +2771,7 @@ static int short_external(const char *args)
 	for (size_t i = 0; i < n; i++)
 		if (!symchar((unsigned char)args[i]))
 			return 0;
-	return !defined_name(args, n) && !is_r68_register(args, n) && !global_label(args, n);
+	return !defined_name(args, n) && !is_reg(args, n) && !global_label(args, n);
 }
 
 static void add_equate(const char *name)
@@ -3056,6 +3139,106 @@ static char *os9_dots(char *name)
 	}
 	free(name);
 	return b.s ? b.s : xstrdup("");
+}
+
+/* ----- Separate files (-s) ----- */
+
+/* -s: each use file translated into a file of its own, included; -x: the
+ * outputs' extension; out_dir: where the use files' outputs go (the
+ * top-level output's directory) */
+static int separate;
+static const char *out_ext;
+static char *out_dir;
+
+/* The use files' outputs written so far: the use file, the output's name
+ * (in out_dir) and its text, to reuse it where a use file's translation
+ * comes out the same again */
+static char **sep_sources, **sep_names, **sep_texts;
+static int nsep;
+
+/* The output name of source PATH (its last component): a final .a becomes
+ * .s, a .s source gets .gas.s, any other name .s appended; with -x a final
+ * .a or .s becomes .<ext>, another name gets .<ext> appended. */
+static char *output_name(const char *path)
+{
+	const char *base = strrchr(path, '/');
+	base = base ? base + 1 : path;
+	size_t n = strlen(base);
+	int a = n > 2 && base[n - 2] == '.' && (base[n - 1] == 'a' || base[n - 1] == 'A');
+	int s = n > 2 && base[n - 2] == '.' && (base[n - 1] == 's' || base[n - 1] == 'S');
+	struct buf b = { 0 };
+	if (out_ext != NULL)
+		bprintf(&b, "%.*s.%s", (int)(a || s ? n - 2 : n), base, out_ext);
+	else if (a)
+		bprintf(&b, "%.*s.s", (int)(n - 2), base);
+	else if (s)
+		bprintf(&b, "%.*s.gas.s", (int)(n - 2), base);
+	else
+		bprintf(&b, "%s.s", base);
+	return b.s;
+}
+
+static int file_exists(const char *path)
+{
+	struct stat sb;
+	return stat(path, &sb) == 0;
+}
+
+static int is_directory(const char *path)
+{
+	struct stat sb;
+	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
+}
+
+/* Whether paths A and B are the same file (both existing). */
+static int same_file(const char *a, const char *b)
+{
+	struct stat sa, sb;
+	return stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+/* The output of use file PATH for TEXT (its translation): the name of one
+ * written before with the same text, else a new file in out_dir named by
+ * output_name, with .2, .3 ... before the extension where that name is
+ * taken (another file of that name, or the same one translated
+ * differently: in another state of the conditionals' symbols, say). */
+static const char *separate_output(const char *path, const char *text)
+{
+	for (int i = 0; i < nsep; i++)
+		if (strcmp(sep_sources[i], path) == 0 && strcmp(sep_texts[i], text) == 0)
+			return sep_names[i];
+	char *name = output_name(path);
+	for (int k = 2;; k++) {
+		int taken = 0;
+		for (int i = 0; i < nsep && !taken; i++)
+			taken = strcmp(sep_names[i], name) == 0;
+		if (!taken)
+			break;
+		char *base = output_name(path);
+		char *dot = strrchr(base, '.');
+		struct buf b = { 0 };
+		bprintf(&b, "%.*s.%d%s", (int)(dot - base), base, k, dot);
+		free(base);
+		free(name);
+		name = b.s;
+	}
+	char *file = join(out_dir, strlen(out_dir), name);
+	/* never over an existing file (an input, an earlier run's output) */
+	if (file_exists(file))
+		die("%s: exists; -s writes no file over another", file);
+	FILE *f = fopen(file, "w");
+	if (f == NULL)
+		die("cannot write %s", file);
+	note_made(file);
+	if (fputs(text, f) == EOF || fclose(f) != 0)
+		die("cannot write %s", file);
+	sep_sources = xrealloc(sep_sources, (nsep + 1) * sizeof *sep_sources);
+	sep_names = xrealloc(sep_names, (nsep + 1) * sizeof *sep_names);
+	sep_texts = xrealloc(sep_texts, (nsep + 1) * sizeof *sep_texts);
+	sep_sources[nsep] = xstrdup(path);
+	sep_names[nsep] = name;
+	sep_texts[nsep++] = xstrdup(text);
+	return name;
 }
 
 /* The file of "use ARG" in the file FROM, by r68's rules: use x from the
@@ -3906,16 +4089,8 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 	size_t lens[4];
 	if (split_commas(args, strlen(args), pieces, lens, 4) != 2 || pieces[0][0] != '#')
 		return 0;
-	int reg;
-	if (lens[1] == 2 && (pieces[1][0] == 'd' || pieces[1][0] == 'D') && pieces[1][1] >= '0' && pieces[1][1] <= '7' &&
-	    !addr)
-		reg = pieces[1][1] - '0';
-	else if (lens[1] == 2 && (pieces[1][0] == 'a' || pieces[1][0] == 'A') && pieces[1][1] >= '0' &&
-		 pieces[1][1] <= '7' && (op == 0xD000 || op == 0x9000))
-		reg = 8 + pieces[1][1] - '0';
-	else if (lens[1] == 2 && strncasecmp(pieces[1], "sp", 2) == 0 && (op == 0xD000 || op == 0x9000))
-		reg = 15;
-	else
+	int reg = reg_number(pieces[1], lens[1]);
+	if (reg < 0 || (reg < 8 && addr) || (reg >= 8 && op != 0xD000 && op != 0x9000))
 		return 0;
 	int s = size == 'b' ? 0 : size == 'l' ? 2 : 1;
 	if (reg >= 8 && s == 0)
@@ -4222,11 +4397,42 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			error_text(out, l.args, strlen(l.args));
 			bputs(out, ": not found>");
 		} else {
-			bprintf(out, "*%s", text);
+			int include = separate && !st.maybe_odd && !st.in_macro;
+			if (include) {
+				/* -s: the used file translated into an output of its
+				 * own, with .mri 1 and the macros it defines moved to
+				 * its start (as the inline output's to the source's),
+				 * and included. Inline after byte data (as aligns at
+				 * an include there, see maybe_odd) and in a macro body
+				 * (as would include it at each expansion). */
+				struct buf saved = hoisted;
+				memset(&hoisted, 0, sizeof hoisted);
+				FILE *t = tmpfile();
+				if (t == NULL)
+					die("cannot make a temporary file");
+				translate_file(found, t, depth + 1);
+				struct buf u = { 0 };
+				bputs(&u, " .mri 1\n");
+				if (hoisted.n > 0)
+					bput(&u, hoisted.s, hoisted.n);
+				rewind(t);
+				char chunk[4096];
+				size_t got;
+				while ((got = fread(chunk, 1, sizeof chunk, t)) > 0)
+					bput(&u, chunk, got);
+				fclose(t);
+				free(hoisted.s);
+				hoisted = saved;
+				bprintf(out, " include %s", separate_output(found, u.s));
+				free(u.s);
+			} else {
+				bprintf(out, "*%s", text);
+			}
 			fprintf(fp, "%s\n", out->s);
 			out->n = 0;
 			out->s[0] = '\0';
-			translate_file(found, fp, depth + 1);
+			if (!include)
+				translate_file(found, fp, depth + 1);
 			/* The next line is the including file's next; after byte
 			 * data the marker is owed (as aligns at it, see maybe_odd)
 			 * and written before the next statement that aligns. */
@@ -4753,8 +4959,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				comma = strchr(l.args, ',');
 				tgt = comma ? comma + 1 : "";
 			}
-			int dreg = bdb && comma && comma - l.args == 2 && (l.args[0] == 'd' || l.args[0] == 'D') &&
-				l.args[1] >= '0' && l.args[1] <= '7' ? l.args[1] - '0' : -1;
+			int dreg = bdb && comma ? reg_number(l.args, (size_t)(comma - l.args)) : -1;
+			if (dreg >= 8)
+				dreg = -1;
 			long v;
 			int sh = !bdb && (size == 's' || size == 'b');
 			int param = st.in_macro && tgt[0] == '\\' && tgt[1] >= '1' && tgt[1] <= '9' && tgt[2] == '\0';
@@ -4813,6 +5020,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		    an > 4 && strcasecmp(l.args + an - 4, ",ccr") == 0) {
 			/* r68 takes the word size for ccr (the byte operation's code). */
 			snprintf(opb, sizeof opb, "%s.b", base);
+			op = opb;
+			annotate_op = 1;
+		} else if (long_refs && is_branch(base)) {
+			/* -y: every branch to a label 32-bit, an explicit .s or .w
+			 * too (r68's -y; to a constant as above) */
+			snprintf(opb, sizeof opb, "%s.l", base);
 			op = opb;
 			annotate_op = 1;
 		} else if (st.branch_sizing && size != 'l' && is_branch(base) && local_label(l.args)) {
@@ -4969,7 +5182,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					!register_list(pieces[i], alen) && !(alen > 2 && pieces[i][alen - 2] == '.') &&
 					/* ccr, sr: the registers, also where the source
 					 * defines a name ccr (ori #Carry,ccr) */
-					!is_r68_register(pieces[i], alen);
+					!is_reg(pieces[i], alen);
 				if (lens[i] == 2 && strncasecmp(pieces[i], "cc", 2) == 0) {
 					/* cc: r68's other name of ccr (ori
 					 * #Carry,cc) */
@@ -5014,8 +5227,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				/* only where as could take it for moveq: a data register;
 				 * and not with * in the value (#exit-*-8: a PC-relative
 				 * value, which as can't add another undefined term to) */
-				if (no_moveq && i == 0 && pieces[i][0] == '#' && k == 2 && lens[1] == 2 &&
-				    (pieces[1][0] == 'd' || pieces[1][0] == 'D') && pieces[1][1] >= '0' && pieces[1][1] <= '7' &&
+				int r1 = k == 2 ? reg_number(pieces[1], lens[1]) : -1;
+				if (no_moveq && i == 0 && pieces[i][0] == '#' && r1 >= 0 && r1 < 8 &&
 				    !has_location(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "+r68__0");
 					annotate = 1;
@@ -5373,7 +5586,7 @@ static int macro_name_clash(const char *name)
 
 static void usage(void)
 {
-	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
+	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-r] [-y] [-s] [-x EXT] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
 	printf("  Translates a Microware r68 source to a GNU as source for as --mri\n");
 	printf("  (\".mri 1\" inside), keeping its line numbers; see r68togas.md.\n");
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
@@ -5381,10 +5594,18 @@ static void usage(void)
 	printf("             padding of the sections (ucc: 2 with -m0, else 4, nop without -m)\n");
 	printf("  -b         r68's -b/-bt: branches to this source's labels sized by as\n");
 	printf("  -B         with -b: also to its global labels (as relaxes those)\n");
+	printf("  -r         r68's -r: registers only written with %% (%%d0); d0 is a symbol\n");
+	printf("  -y         r68's -y with -b (68020 and later): branches and PC-relative\n");
+	printf("             references to labels 32-bit\n");
 	printf("  -d D       the dialect: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68:\n");
 	printf("             its encodings where they differ, sections padded to 2)\n");
 	printf("  -u DIR     search DIR for use files (r68's -u)\n");
-	printf("  -o OUTPUT  write to OUTPUT (default: standard output)\n");
+	printf("  -o OUTPUT  write to OUTPUT (default: standard output); a directory: the\n");
+	printf("             output there, named after the source (.a gives .s, .s .gas.s)\n");
+	printf("  -s         each use file translated into a file of its own, next to the\n");
+	printf("             output and included (default: inline); without -o the output\n");
+	printf("             in the working directory, named after the source\n");
+	printf("  -x EXT     the extension of the outputs named after their sources\n");
 }
 
 /* What the Microware assemblers pad each section of a psect to: 2 for C
@@ -5422,6 +5643,17 @@ int main(int argc, char **argv)
 			st.branch_sizing = 1;
 		} else if (strcmp(argv[i], "-B") == 0) {
 			st.relax_globals = 1;
+		} else if (strcmp(argv[i], "-r") == 0) {
+			reg_prefix_only = 1;
+		} else if (strcmp(argv[i], "-y") == 0) {
+			long_refs = 1;
+		} else if (strcmp(argv[i], "-s") == 0) {
+			separate = 1;
+		} else if (strncmp(argv[i], "-x", 2) == 0) {
+			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
+			if (d == NULL || *d == '\0' || strchr(d, '/') != NULL)
+				die("-x takes an extension");
+			out_ext = *d == '.' ? d + 1 : d;
 		} else if (strncmp(argv[i], "-d", 2) == 0) {
 			/* -d c32 | ucc: the dialect (whose encodings) */
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
@@ -5459,8 +5691,26 @@ int main(int argc, char **argv)
 		usage();
 		return 1;
 	}
-	if (output != NULL && strcmp(output, source) == 0)
+	/* -o naming a directory, or -s without -o: the output named after the
+	 * source (output_name) there, or in the working directory; then never
+	 * over an existing file, which only an explicit -o file may be */
+	int named = output != NULL && !is_directory(output);
+	if (output != NULL && !named)
+		output = join(output, strlen(output), output_name(source));
+	else if (output == NULL && separate)
+		output = output_name(source);
+	if (output != NULL && (strcmp(output, source) == 0 || same_file(output, source)))
 		die("%s: won't write over the source", output);
+	if (output != NULL && !named && file_exists(output))
+		die("%s: exists; written only where -o names it", output);
+	if (separate) {
+		const char *slash = strrchr(output, '/');
+		out_dir = slash ? xstrndup(output, (size_t)(slash - output)) : xstrdup(".");
+		if (*out_dir == '\0') {
+			free(out_dir);
+			out_dir = xstrdup("/");
+		}
+	}
 	FILE *out = stdout;
 	char *temp = NULL, *psect_name = NULL;
 	if (output != NULL) {
@@ -5469,6 +5719,7 @@ int main(int argc, char **argv)
 		out = fopen(temp, "w");
 		if (out == NULL)
 			die("cannot write %s", temp);
+		note_made(temp);
 	}
 	/* The translation goes to a temporary file first: the psect's name,
 	 * known at its end, is written first, as .file before .mri 1 (a .mri 0

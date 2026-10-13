@@ -68,12 +68,12 @@ static const struct option options[] = {
 	{ "o", OPTVALUE, "[=<path>]", "Object file (output.r without a path)", NULL, O_O },
 	{ "p", NUMBER, "<n>", "Align orgs to <n> (2, 4, 8, 16)", "ignored", O_P },
 	{ "q", FLAG, "", "Quiet: no warnings or messages", NULL, O_Q },
-	{ "r", FLAG, "", "Registers must be written with %", "not supported", O_R },
+	{ "r", FLAG, "", "Registers must be written with %", NULL, O_R },
 	{ "s", FLAG, "", "Symbol table in the listing", NULL, O_S },
 	{ "u", VALUE, "[=]<dir>", "Search <dir> for use files", NULL, O_U },
 	{ "v", FLAG, "", "Print the version", NULL, O_V },
 	{ "x", FLAG, "", "Macro expansions in the listing", NULL, O_X },
-	{ "y", FLAG, "", "All branches long", "not supported", O_Y },
+	{ "y", FLAG, "", "All branches long (with -b, 68020 and later)", NULL, O_Y },
 	{ "z", OPTVALUE, "[=<path>]", "File names and options from standard input or <path>", NULL, O_Z },
 };
 #define NOPTIONS (sizeof options / sizeof options[0])
@@ -84,6 +84,8 @@ static struct {
 	int cpu;		/* -m */
 	int cpu_given;		/* -m given: r68 pads differently without it */
 	int branch_sizing;	/* -b, -bt */
+	int reg_prefix;		/* -r: registers only with %, as r68togas -r */
+	int long_refs;		/* -y: with -b, as r68togas -y */
 	int listing, symbols, conditionals, all_bytes, macros;
 	const char *out;	/* -o= ("output.r" for a bare -o); null: none */
 	struct args files;
@@ -177,14 +179,14 @@ static void apply(const struct option *o, const char *value)
 		break;
 	case O_O: st.out = value != NULL ? value : "output.r"; break;
 	case O_Q: os9_quiet = on; break;
-	case O_R: if (on) error("-r (registers written with %%) isn't supported"); break;
+	case O_R: st.reg_prefix = on; break;
 	case O_S: st.symbols = on; break;
 	case O_U: args_add(&st.dirs, "-u"); args_add(&st.dirs, value); break;
 	case O_V:
 		printf("%s: Microware r68's options; r68togas and GNU as (%s) assemble\n", os9_who, AS);
 		break;
 	case O_X: st.macros = on; break;
-	case O_Y: if (on) error("-y (all branches long) isn't supported"); break;
+	case O_Y: st.long_refs = on; break;
 	case O_Z: read_z(value); break;
 	}
 }
@@ -646,6 +648,16 @@ static void assemble(const char *source)
 		args_add(&argv, "-b");
 		if (relaxes_globals())
 			args_add(&argv, "-B");
+	}
+	if (st.reg_prefix)
+		args_add(&argv, "-r");
+	/* -y: only with -b, as in r68, which has no long branches to make
+	 * for a 68000 or 68010 then ("Spanreg must be specified") */
+	if (st.long_refs && st.branch_sizing) {
+		if (st.cpu < 2)
+			error("-y with -b needs a 68020 or later (-m2 to -m6): r68 stops "
+			      "(\"Spanreg must be specified for branch sizing\")");
+		args_add(&argv, "-y");
 	}
 	args_append(&argv, &st.dirs);
 	char *translated = NULL;
