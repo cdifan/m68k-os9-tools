@@ -4883,7 +4883,16 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		 * balignw), then nop, with -m2 and later trapf ($51FC), a
 		 * 4-byte rest trapf.w ($51FA $0000), 6 bytes each trapf.l
 		 * ($51FB and a long 0; tested 2026-10-13): balignw with nop
-		 * or trapf, the same up to align 4 */
+		 * or trapf, the same up to align 4. align (2): balign 1,
+		 * which makes no frag of its own but sets off MRI's pending
+		 * alignment (the zero byte) where an odd dc.b/ds.b left one:
+		 * an alignment frag between a label and * would make their
+		 * distance unknown to a conditional (ifgt 16-(*-lab)) */
+		if (!*l.args || strcmp(l.args, "2") == 0 || strcmp(l.args, "1") == 0) {
+			bprintf(out, "%s balign 1%s", labs, rest);
+			annotate = 1;
+			goto done;
+		}
 		bprintf(out, "%s balignw ", labs);
 		expression(out, *l.args ? l.args : "2", strlen(*l.args ? l.args : "2"));
 		bprintf(out, ",$%04X%s", st.cpu_given && st.cpu_level >= 20 ? 0x51FC : 0x4E71, rest);
