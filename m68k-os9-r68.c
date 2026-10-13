@@ -170,7 +170,14 @@ static void apply(const struct option *o, const char *value)
 	case O_D: case O_E: case O_F: case O_N: case O_P: if (on) note_ignored(o, value); break;
 	case O_G: st.all_bytes = on; break;
 	case O_L: st.listing = on; break;
-	case O_J: if (on) note_ignored(o, value); break;
+	case O_J:
+		/* the jump table: elf2mod's; but -j "implies -b" (r68 -?):
+		 * branches sized */
+		if (on) {
+			note_ignored(o, value);
+			st.branch_sizing = 1;
+		}
+		break;
 	case O_M:
 		if (strlen(value) != 1 || strchr("012346", value[0]) == NULL)
 			error("-m%s: the CPU is 0, 1, 2, 3, 4 or 6", value);
