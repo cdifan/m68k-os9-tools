@@ -319,14 +319,16 @@ static void operand(struct buf *b, const char *s, size_t n)
 			tokens(b, base, bn);
 			for (int i = 1; i < k; i++) {
 				bputc(b, ',');
-				/* %d0:w is d0.w */
-				struct buf x = { 0 };
-				tokens(&x, pieces[i], lens[i]);
-				for (char *c = x.s; c && *c; c++)
+				/* %d0:w is d0.w, %d0:l:4 d0.l*4 (before tokens(), which
+				 * drops a :w as a displacement's size; r68 takes an
+				 * index without a size as .l) */
+				char *x = xstrndup(pieces[i], lens[i]);
+				int colons = 0;
+				for (char *c = x; *c; c++)
 					if (*c == ':')
-						*c = '.';
-				bputs(b, x.s ? x.s : "");
-				free(x.s);
+						*c = colons++ ? '*' : '.';
+				tokens(b, x, strlen(x));
+				free(x);
 			}
 			bputc(b, ')');
 			return;
@@ -384,11 +386,16 @@ static void operand(struct buf *b, const char *s, size_t n)
 			int number = *end == '\0';
 			free(d);
 			if (number && (k >= 3 ? (v < -128 || v > 127) : (v < -32768 || v > 32767))) {
+				/* With an index, a number of 16 bits gets r68's .w, as
+				 * GNU as sizes it (r68 makes it 32 bits otherwise). */
+				int word = k >= 3 && v >= -32768 && v <= 32767;
 				bputc(b, '(');
 				for (int i = 0; i < k; i++) {
 					if (i)
 						bputc(b, ',');
 					tokens(b, pieces[i], lens[i]);
+					if (i == 0 && word)
+						bputs(b, ".w");
 				}
 				bputc(b, ')');
 				return;
@@ -509,6 +516,7 @@ static int mode_ucc;		/* -mode=ucc */
 static enum sect cur = S_CODE;	/* the section of the lines being read */
 static enum sect open_vsect = S_NONE;	/* the vsect being written, if any */
 static struct buf out;
+static struct buf comms;	/* .local + .comm, for the end */
 
 /* Switches the output to section S: a vsect for data, closed for the
  * code or another vsect kind. */
@@ -796,15 +804,15 @@ static void directive(const char *label, const char *op, const char *args)
 			error(".comm %.*s: a common symbol (not .local), which r68 can't make", (int)lens[0], pieces[0]);
 			return;
 		}
-		enum sect was = cur;
-		switch_to(S_BSS);
+		/* Kept for the end of the file, where GNU as puts them (after
+		 * all of .bss: its subsection 1), so that the layout is
+		 * GCC's. */
 		if (k == 3 && strtol(pieces[2], NULL, 0) > 1)
-			bputs(&out, " align\n");
-		put_symbol(&out, pieces[0], lens[0]);
-		bputs(&out, " ds.b ");
-		tokens(&out, pieces[1], lens[1]);
-		bputc(&out, '\n');
-		switch_to(was);
+			bputs(&comms, " align\n");
+		put_symbol(&comms, pieces[0], lens[0]);
+		bputs(&comms, " ds.b ");
+		tokens(&comms, pieces[1], lens[1]);
+		bputc(&comms, '\n');
 		return;
 	}
 	if (strcmp(op, ".weak") == 0 || strcmp(op, ".macro") == 0 || strcmp(op, ".rept") == 0 || strcmp(op, ".irp") == 0 ||
@@ -1100,6 +1108,10 @@ int main(int argc, char **argv)
 	for (lineno = 1; lineno <= nlines; lineno++)
 		translate_line(lines[lineno - 1]);
 	flush_pending();
+	if (comms.n) {
+		switch_to(S_BSS);
+		bput(&out, comms.s, comms.n);
+	}
 	switch_to(S_CODE);
 	bputs(&out, " ends\n");
 	if (errors)
