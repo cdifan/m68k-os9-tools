@@ -142,6 +142,10 @@ Most instruction lines need no change. Where the same text means something else 
 - **`jsr label` and `lea label,a0`** to a code label: r68 makes them absolute long, `gas`
   PC-relative; written `(label).l`.
 - **`(pcr)`**, r68's spelling of PC-relative: `(pc)`.
+- **`n(pc)` with a number** is a raw displacement in r68 and an absolute address in MRI: written
+  `(*+2+n)(pc)` (`*+4` after a `movem` mask or a bit number). The same for an equate of a number,
+  also one defined further on, and for a name of the offset counter (`do`/`lo`), whose value is
+  followed as r68 counts. An equate of a label (`Addr equ lab+2`) stays an address.
 - **The instructions r68 chooses:** `addi` and `subi` with #1 to #8 are `addq` and `subq` (written
   `add` and `sub`, for which `gas` chooses the same); `move.l #n,Dn` stays `move.l` (where `gas`
   would use `moveq`); `d(An)` stays 16 bits, also when 0 (written `(d).w(An)`); `ori.w #x,ccr` is

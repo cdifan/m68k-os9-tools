@@ -2957,6 +2957,57 @@ static void note_value(const char *name, const char *args)
 	cv_values[ncv++] = v;
 }
 
+/* The offset counter of org/do/lo (the prelude's r68__ofs) as far as it is
+ * known here, so that a do/lo name has a value like an equate (do.w 1 then
+ * name(pc): a constant before pc). Unknown in a conditional (both of its
+ * branches come here) up to the next org of a constant, and for good once
+ * a macro body has org, do or lo (its calls move the counter where it
+ * isn't seen). */
+static long ofs_value;
+static int ofs_known = 1, ofs_macro;
+
+static int constant_value(const char *s, long *v);
+
+static void note_offset(const char *base, const char *label, const char *args, char size)
+{
+	long v, n;
+	if (st.in_macro) {
+		ofs_macro = 1;
+		return;
+	}
+	if (ofs_macro || st.cond_depth > 0 || args == NULL) {
+		ofs_known = 0;
+		return;
+	}
+	if (strcmp(base, "org") == 0) {
+		ofs_known = constant_value(args, &v);
+		ofs_value = v;
+		return;
+	}
+	if (!ofs_known || !constant_value(args, &n)) {
+		ofs_known = 0;
+		return;
+	}
+	long bytes = size == 'b' ? 1 : size == 'l' ? 4 : 2;
+	if (strcmp(base, "do") == 0) {
+		if (bytes != 1)
+			ofs_value = (ofs_value + 1) / 2 * 2;
+		v = ofs_value;
+		ofs_value += bytes * n;
+	} else {
+		ofs_value -= bytes * n;
+		if (bytes != 1)
+			ofs_value &= ~1L;
+		v = ofs_value;
+	}
+	if (label == NULL)
+		return;
+	cv_names = xrealloc(cv_names, (ncv + 1) * sizeof *cv_names);
+	cv_values = xrealloc(cv_values, (ncv + 1) * sizeof *cv_values);
+	cv_names[ncv] = xstrdup(label);
+	cv_values[ncv++] = v;
+}
+
 /* The value of expression S if it is a constant (numbers, known equates). */
 static int constant_value(const char *s, long *v)
 {
@@ -4665,6 +4716,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "org") == 0) {
+		note_offset(base, NULL, l.args, size);
 		bputs(out, "r68__ofs set ");
 		expression(out, l.args, strlen(l.args));
 		bputs(out, rest);
@@ -4722,6 +4774,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		}
 	}
 	if (strcmp(base, "do") == 0 || strcmp(base, "lo") == 0) {
+		note_offset(base, l.label, l.args, size);
 		int bytes = size == 'b' ? 1 : size == 'l' ? 4 : 2;
 		struct buf nm = { 0 };
 		if (l.label)

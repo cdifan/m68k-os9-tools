@@ -1,0 +1,24 @@
+* A name of org/do/lo (an offset, do.w 1) before (pc) is a constant like an equate: both r68s
+* take it for the displacement itself (move.w W_Two(pc),d0: $303A $0002); the translation took
+* it for an address (as: the distance to $0002). lo, and do after another org, too; d(An)
+* unchanged.
+* fixed: 2026-10-14 r68togas: names of offsets (do, lo) are constants before (pc)
+* expect text: 303a0002 223a0004 343a1000 163a0003 41fa0006 382a0002 4e75 4e71
+ psect pc_const_offset,0,0,0,0,0
+ org 0
+W_One do.b 1
+W_Two do.w 1
+W_Thr do.l 2
+ org $1000
+W_Far do.w 1
+ org 8
+W_Neg lo.w 1
+W_Neb lo.b 3
+ move.w W_Two(pc),d0
+ move.l W_Thr(pc),d1
+ move.w W_Far(pc),d2
+ move.b W_Neb(pc),d3
+ lea W_Neg(pc),a0
+ move.w W_Two(a2),d4
+ rts
+ ends
