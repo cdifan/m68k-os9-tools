@@ -2,7 +2,7 @@
 * take it for the displacement itself (move.w W_Two(pc),d0: $303A $0002); the translation took
 * it for an address (as: the distance to $0002). lo, and do after another org, too; d(An)
 * unchanged.
-* fixed: 2026-10-14 r68togas: names of offsets (do, lo) are constants before (pc)
+* fixed: 77aed7c 2026-10-14 r68togas: names of offsets (do, lo) are constants before (pc)
 * expect text: 303a0002 223a0004 343a1000 163a0003 41fa0006 382a0002 4e75 4e71
  psect pc_const_offset,0,0,0,0,0
  org 0

@@ -1,0 +1,11 @@
+* A set of an external name (Val set ExtA) goes like an equ of one: its uses are relocated
+* against the external. Both r68s refuse the set ("illegal external reference") and take the
+* equ; a known relaxation (r68togas.md), kept 2026-10-14.
+* not r68: refuses the set
+* expect text: 00000000 203c00000000 4e71
+* expect reloc: R_68K_32          ExtA
+ psect set_ext,0,0,0,0,0
+Val set ExtA
+ dc.l Val
+ move.l #Val,d0
+ ends

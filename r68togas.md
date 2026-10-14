@@ -241,6 +241,8 @@ Most instruction lines need no change. Where the same text means something else 
   Microware assemblers get the symbol wrong in their objects (C 3.2's types it as uninitialized
   data, and both may give one of a label defined later the value 0); uses of the equate are
   relocated right in all three. Microware's bug, ours correct.
+- **`set` of an external name** (`Val set Ext`), which both Microware assemblers refuse (they take
+  `equ`): taken like `equ`.
 - **`set` symbols used before their first `set`** take the value they had at the end of r68's
   first pass (where symbols not set yet are 0): `NAME__final` in the epilogue, from a
   `NAME__p1` set before each `set`.
