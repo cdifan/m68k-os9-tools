@@ -1,0 +1,12 @@
+* A sum or difference of external names with a dot in them (Blk.Start+bsize, Blk.Start-Blk.End):
+* a link-time expression like those without a dot, the note naming them with the dot (as
+* rof2elf does from a ROF); names with a dot were left out, as had two undefined symbols to add
+* ("invalid operands").
+* fixed: 2026-10-14 r68togas: link-time expressions of names with a dot
+* expect text: 00000000 203c00000000 4e71
+* expect reloc: r68x_b41c413a+0x00000400
+* expect reloc: r68x_f5123f5e
+ psect ext_sum_dot,0,0,0,0,0
+ dc.l Blk.Start+bsize+1024
+ move.l #Blk.Start-Blk.End,d0
+ ends

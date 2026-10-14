@@ -1428,13 +1428,12 @@ static int name_match(const char *pat, const char *n, size_t len)
  * a macro's \1:) matched every name with that prefix as a pattern, which
  * left the source with no externals (V_Play+BASE). r68
  * leaves such a name to the link, also in a sum (ext_a+EXT_B,
- * lab_a-lab_b): a link-time expression. Not a name with a dot
- * (written as __dot__, see put_symbol). */
+ * lab_a-lab_b): a link-time expression. A name with a dot too (Mem.Beg,
+ * written as __dot__ in the field, see put_symbol): the note names it as
+ * the object will after m68k-os9-r68's renaming, and as rof2elf does. */
 static int external_name(const char *s, size_t n)
 {
 	static const char *const regs[] = { "sp", "pc", "sr", "ccr", "usp", "zpc", NULL };
-	if (memchr(s, '.', n) != NULL)
-		return 0;
 	if (n == 2 && strchr("dDaA", s[0]) && s[1] >= '0' && s[1] <= '7')
 		return 0;
 	for (const char *const *r = regs; *r; r++)
