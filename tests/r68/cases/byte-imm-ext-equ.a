@@ -1,7 +1,7 @@
 * A byte immediate that is an equate of an external (Ena_b equ Ext_b, a bit of a library's
 * equates, then btst.b #Ena_b,4(a0)): relocated as the whole extension word, as an external
 * named directly (byte-imm-ext); a0f6d83 looked only at the names in the instruction.
-* fixed: FIXME
+* fixed: 9de9ba6 2026-10-15 r68togas: byte immediates of externals also through equates (RdyBit equ LibBit)
 * expect text: 0828 0000 0004 08d1 0000 0000 0000 4e71
 * expect reloc: 00000002 R_68K_16
 * expect reloc: 00000008 R_68K_16
