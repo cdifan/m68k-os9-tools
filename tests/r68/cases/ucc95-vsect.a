@@ -3,7 +3,7 @@
 * (measured 2026-10-15 on 10 modules: a driver's statics placed at $86 after two others' of
 * $36 and $50; module data sizes); the code stays 4, padded with zeros.
 * fixed: bfaa6ae 2026-10-15 r68togas, rof2elf: -a= regression fix, later byte immediates, old libgen layout, ucc95 vsects; "gas" for GNU as
-* fixed: FIXME
+* fixed: 0ce4500 2026-10-15 r68togas: ucc95 pads the vsect's sections to 4, aligned to 2
 * options: -dialect=ucc95
 * not r68: the r68 at hand is the later one, which aligns to 4
 * expect size: .bss 8
