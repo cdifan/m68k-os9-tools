@@ -1,7 +1,7 @@
 * addq/subq of a difference of two vsect labels (before: "operands mismatch", as wants the
 * quick value at once): written as the instruction word, the value in its field by an expression
 * that as resolves at the end; as both Microware assemblers (forward: quick-label-diff-fwd).
-* fixed: FIXME
+* fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 * expect text: 5c88 5d41
  psect quick_label_diff,0,0,0,0,0
  vsect

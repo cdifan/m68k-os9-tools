@@ -2,7 +2,7 @@
 * or.b to memory, which is ori.b) and a bit number (btst, bset): relocated as the whole extension
 * word, R_68K_16, as both Microware assemblers do (linked: $FFFE for -2); before, R_68K_8 on its
 * low byte ($00FE). move.b keeps the byte (R_68K_8 at 0x23).
-* fixed: FIXME
+* fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 * expect text: 023c0000 003c0000 02000000 0c2800000004 00100000 08000000 08e800000004 103c0000
 * expect reloc: 00000002 R_68K_16          Ext_a
 * expect reloc: 00000006 R_68K_16          Ext_a

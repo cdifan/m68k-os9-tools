@@ -3,7 +3,7 @@
 # order, as both Microware linkers (measured 2026-10-15: these sources' modules, linked in both
 # orders, identical to C 3.2's L68's); before, all in address order. elf2mod takes the objects
 # from GNU ld's map (--ld-map).
-# fixed: FIXME
+# fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 src ra <<'EOF'
  psect ra,$101,$8000,1,0,entry
  vsect

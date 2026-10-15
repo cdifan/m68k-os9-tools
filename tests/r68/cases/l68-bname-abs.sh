@@ -2,7 +2,7 @@
 # descriptor, through an equate too, dc.l, bname+2): their offsets in the module, as both
 # Microware linkers write them (measured 2026-10-15: this source's module identical to C 3.2's
 # L68's); before, elf2mod took only PC-relative ones ("only PC-relative references to bname").
-# fixed: FIXME
+# fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 src dd <<'EOF'
  psect dd,$0F00,$8000,1,0,0
 Self_n equ bname

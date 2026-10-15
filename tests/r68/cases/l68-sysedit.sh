@@ -1,7 +1,7 @@
 # m68k-os9-l68: global _sysedit and _sysattr (a C source's @_sysedit: equ 7) give the module's
 # edition and attr/rev, over the root psect's and over -e= and -R=, as both Microware linkers
 # (measured 2026-10-15); before, the psect's.
-# fixed: FIXME
+# fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 src sr <<'EOF'
  psect sr,$101,$8000,1,0,entry
 entry rts

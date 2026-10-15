@@ -3,7 +3,7 @@
 # wasn't a constant there and as failed ("can't resolve `L0' {*ABS* section} - `Ext'"). Linked,
 # the same module as from Ultra C's r68's ROF (a negative reference and the offset in the bytes).
 # Also the byte immediates of an external (byte-imm-ext) linked: $FFFE for -2, as from r68's.
-# fixed: FIXME
+# fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 src cx <<'EOF'
  org 0
 F_a do.b 4

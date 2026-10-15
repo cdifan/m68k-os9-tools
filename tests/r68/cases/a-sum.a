@@ -1,6 +1,6 @@
 * A sum of two symbols defined with -a=: constants of the source, folded (before: a link-time
 * expression of two external names, which the link then failed on, "undefined symbol").
-* fixed: FIXME
+* fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules
 * options: -a=BASE=$580000 -a=SIZE=$80000
 * expect text: 20fc00600000 203c00600002
  psect a_sum,0,0,0,0,0
