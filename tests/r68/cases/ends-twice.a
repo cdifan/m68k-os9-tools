@@ -1,0 +1,13 @@
+* A second ends after the psect's own is taken as a comment. Both r68s refuse it ("bad
+* mnemonic"); a known relaxation (r68togas.md), kept 2026-10-15: an original object of such a
+* source was the same as ours.
+* not r68: refuses the second ends
+* expect text: 0005 4e71
+ psect ends_twice,0,0,0,0,0
+ vsect
+Var ds.w 1
+ ends
+Tab dc.w 5
+ nop
+ ends
+ ends

@@ -38,6 +38,10 @@ existing file that `-o` doesn't name, `-s`'s outputs included. So the round trip
 foo.s` (giving `foo.a`), then `r68togas foo.a` (which would give `foo.s`, GCC's original) stops
 unless `-o` names the file. A run that stops on an error removes the files it has written.
 
+**Input:** lines may end in CR (OS-9's line end), LF or CR LF, each counted as one line. A Ctrl-Z
+(DOS's end-of-file mark) ends a source or `use` file, as in both DOS-hosted Microware
+assemblers.
+
 A construct the translation doesn't cover is an error naming it, never silently different code.
 
 ## The output
@@ -225,6 +229,8 @@ Most instruction lines need no change. Where the same text means something else 
   leaves such an equate out of its object, so it is noted and `m68k-os9-r68` adds it. A use of it
   in the same source is an error (it would need a negated relocation). Not for a remote vsect's
   label.
+- **A second `ends`** after a psect's own: both Microware assemblers refuse it; the translation
+  takes it as a comment.
 
 ### Labels and symbols
 
