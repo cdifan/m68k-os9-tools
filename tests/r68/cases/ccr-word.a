@@ -1,0 +1,13 @@
+* ori.w/andi.w to ccr (an r68 source's ori.w #Carry,ccr): the byte form, as both Microware
+* assemblers take it (Ultra C's with a warning), and so a byte immediate of an external relocated
+* as the whole word (byte-imm-ext), one known only later written as the whole word
+* (byte-imm-later); a0f6d83 and bfaa6ae took only .b or no size to ccr.
+* fixed: FIXME
+* expect text: 003c0000 023cfffe 4e71 4e71
+* expect reloc: 00000002 R_68K_16          Ext_a
+ psect ccr_word,0,0,0,0,0
+ ori.w #Ext_a,ccr
+ andi.w #Val_b,ccr
+ nop
+Val_b equ -2
+ ends

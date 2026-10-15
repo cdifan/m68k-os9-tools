@@ -3172,7 +3172,11 @@ static void error_text(struct buf *b, const char *s, size_t n)
 		 * path's ..\tables.d had a tab) */
 		if (s[i] == '\\')
 			bputc(b, '\\');
-		bputc(b, s[i] == '<' ? '(' : s[i] == '>' ? ')' : s[i] == '"' ? '\'' : s[i]);
+		/* a single quote as a backquote: gas lost track of a quote in
+		 * a <...> macro argument where its input buffer ended there (a
+		 * conditional left open, "end of file inside conditional";
+		 * found 2026-10-15 with an r68error text 'to' or 'from') */
+		bputc(b, s[i] == '<' ? '(' : s[i] == '>' ? ')' : s[i] == '"' || s[i] == '\'' ? '`' : s[i]);
 	}
 }
 
@@ -4351,7 +4355,7 @@ static int byte_imm_words(struct buf *out, const char *labs, const char *base, c
 	unsigned word;
 	if (ccr) {
 		/* ori, andi, eori to ccr; the others have no such form */
-		if ((size != 0 && size != 'b') || (ops[k].op != 0x0000 && ops[k].op != 0x0200 && ops[k].op != 0x0A00))
+		if (size == 'l' || (ops[k].op != 0x0000 && ops[k].op != 0x0200 && ops[k].op != 0x0A00))
 			return 0;
 		word = ops[k].op | 0x3C;
 	} else {
@@ -4420,9 +4424,9 @@ static int word_byte_imm(const char *base, char size, const char *args)
 		(lens[1] == 2 && strncasecmp(pieces[1], "cc", 2) == 0);
 	int ok = 0;
 	for (int i = 0; imm[i] && !ok; i++)
-		ok = strcmp(base, imm[i]) == 0 && (size == 'b' || (size == 0 && ccr));
+		ok = strcmp(base, imm[i]) == 0 && (size == 'b' || (size != 'l' && ccr));
 	for (int i = 0; alu[i] && !ok; i++)
-		ok = strcmp(base, alu[i]) == 0 && (size == 'b' || (size == 0 && ccr));
+		ok = strcmp(base, alu[i]) == 0 && (size == 'b' || (size != 'l' && ccr));
 	for (int i = 0; bit[i] && !ok; i++)
 		ok = strcmp(base, bit[i]) == 0;
 	return ok && names_external(pieces[0] + 1, lens[0] - 1);

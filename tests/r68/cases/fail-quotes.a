@@ -1,0 +1,9 @@
+* Quotes in a fail text (a macro's fail with 'to' or 'from'): written as backquotes in the
+* r68error argument, as double quotes were already; gas lost track of a quote in a <...> macro
+* argument that its input buffer ended in, and reported a conditional further up as left open
+* ("end of file inside conditional"; found in an SDK source, depending on where its buffers end).
+* fixed: FIXME
+* expect error: needs `to` or `from`
+ psect fail_quotes,0,0,0,0,0
+ fail needs 'to' or 'from'
+ ends
