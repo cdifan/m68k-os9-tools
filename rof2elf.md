@@ -73,6 +73,12 @@ resolves them: link with those libraries.
   references. No equate's value is folded in.
 - **Other combinations** of references at one place are rejected (a PC-relative one with others,
   for example).
+- **A root psect** (one with a module type, like `cstart.r`'s) also gets absolute symbols holding
+  its module header's values, `__os9_typelang`, `__os9_attrev`, `__os9_edition` and
+  `__os9_stack`, and code symbols `__os9_entry` and `__os9_trapent` (only with a trap entry, not
+  0xFFFFFFFF), which elf2mod uses for the module header. A psect of type/language 0 (a library's)
+  keeps its attributes, revision, edition and stack in the local symbols `__os9l_attrev`,
+  `__os9l_edition` and `__os9l_stack`, for `elf2rof`.
 
 ## The ROF format
 

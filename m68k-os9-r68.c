@@ -506,6 +506,38 @@ static void dot_less_symbols(const char *object)
 	args_free(&add);
 }
 
+/* r68togas's .r68pcm (the fields that are an external less their place,
+ * dc.w Ext-*), only for elf2rof's ROF: removed from an ELF object, where
+ * the PC-relative relocation is all a link needs. */
+static void remove_pcm_notes(const char *object)
+{
+	FILE *fp = fopen(object, "rb");
+	if (fp == NULL)
+		return;
+	static const char name[] = ".r68pcm";
+	char buf[65536 + sizeof name];
+	size_t keep = 0, n;
+	int found = 0;
+	while (!found && (n = fread(buf + keep, 1, sizeof buf - keep, fp)) > 0) {
+		size_t len = keep + n;
+		for (size_t i = 0; i + sizeof name <= len + 1 && !found; i++)
+			found = memcmp(buf + i, name, sizeof name - 1) == 0;
+		keep = len < sizeof name ? len : sizeof name - 1;
+		memmove(buf, buf + len - keep, keep);
+	}
+	fclose(fp);
+	if (!found)
+		return;
+	struct args argv = { 0 };
+	args_add(&argv, OBJCOPY);
+	args_add(&argv, "--remove-section=.r68pcm");
+	args_add(&argv, "--remove-section=.rela.r68pcm");
+	args_add(&argv, object);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("removing .r68pcm from %s failed", object);
+	args_free(&argv);
+}
+
 /* Undefined symbols that no relocation uses are removed: the Microware
  * assemblers write an external reference only where one is used, and a
  * link takes in a library member for any undefined symbol (an equate of an
@@ -705,6 +737,8 @@ static void assemble(const char *source)
 	register_names(object);
 	unreferenced_externals(object);
 	section_alignment(object);
+	if (!rof)
+		remove_pcm_notes(object);
 
 	/* 3. A ROF, named for the psect. */
 	if (out != NULL && rof) {

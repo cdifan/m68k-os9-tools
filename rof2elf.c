@@ -814,6 +814,18 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   add_sym (&e, r->name, 0, 0, INFO (STB_LOCAL, 4 /* STT_FILE */), SHN_ABS);
   for (i = S_TEXT; i <= S_RBSS; i++)
     add_sym (&e, NULL, 0, 0, INFO (STB_LOCAL, STT_SECTION), i);
+  /* A psect of type/language 0 (a library's): its attributes, revision,
+     edition and stack as local symbols, which elf2rof writes back into
+     the ROF header (globals would clash in a link).  */
+  if (r->typelang == 0)
+    {
+      if (r->attrev != 0)
+	add_sym (&e, "__os9l_attrev", r->attrev, 0, INFO (STB_LOCAL, 0), SHN_ABS);
+      if (r->edition != 0)
+	add_sym (&e, "__os9l_edition", r->edition, 0, INFO (STB_LOCAL, 0), SHN_ABS);
+      if (r->stack != 0)
+	add_sym (&e, "__os9l_stack", r->stack, 0, INFO (STB_LOCAL, 0), SHN_ABS);
+    }
   e.nlocal = e.nsyms;
   /* Section symbol of section S is S + 1.  */
 

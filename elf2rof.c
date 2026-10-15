@@ -407,6 +407,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   Ext *exts = NULL;
   int nexts = 0, nlocs = 0, ndefs = 0;
   Ref *locs = NULL;
+  uint32_t lattrev = 0, ledition = 0, lstack = 0;
   uint32_t typelang = 0, attrev = 0, edition = 0, stack = 0, entry = 0,
 	   trapent = 0xFFFFFFFF;
   Def *defs = NULL;
@@ -538,6 +539,31 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	  nnotes = secs[i].size;
 	}
 
+  /* r68togas's .r68pcm: the code fields that are an external less their
+     own place (dc.w Ext-*), each a long relocated to the field; Microware's
+     assemblers write those as the external and a negated reference to
+     the psect's code, not as a PC-relative reference.  */
+  uint32_t *pcm = NULL;
+  size_t npcm = 0;
+  for (i = 1; i < nsecs; i++)
+    {
+      Sec *rs = &secs[i];
+      if (rs->type != SHT_RELA || rs->info >= nsecs || rs->entsize != 12
+	  || strcmp (secs[rs->info].name, ".r68pcm"))
+	continue;
+      for (j = 0; j < rs->size / 12; j++)
+	{
+	  const unsigned char *e = at (o, rs->offset + j * 12, 12);
+	  uint32_t info = get32 (e + 4), symi = info >> 8;
+	  int32_t addend = (int32_t) get32 (e + 8);
+	  if ((info & 0xFF) != R_68K_32 || symi == 0 || symi >= nsyms
+	      || syms[symi].area != A_CODE)
+	    die ("%s: .r68pcm: a field that isn't in the code", o->file);
+	  pcm = realloc (pcm, (npcm + 1) * sizeof *pcm);
+	  pcm[npcm++] = syms[symi].offset + (uint32_t) addend;
+	}
+    }
+
   /* Relocations.  */
   for (i = 1; i < nsecs; i++)
     {
@@ -649,12 +675,16 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 		{
 		  if (!strncmp (x.t[t].sym, "r68l_", 5))
 		    continue;
-		  if (x.t[t].coef != 1 && x.t[t].coef != -1)
-		    die ("%s: %s+0x%x: %s=%s: a multiplied external name, which "
-			 "a ROF can't take", o->file, s->name, (unsigned) roff,
-			 y->name, text);
-		  r.type = loc | bits | (x.t[t].coef < 0 ? R_NEG : 0);
-		  add_ext_ref (&exts, &nexts, x.t[t].sym, r);
+		  /* a multiplied one (4*F$Send, from \1+\1+\1+\1) as that many
+		     references to it, as Microware's assemblers write it */
+		  long c = x.t[t].coef, m;
+		  if (c > 64 || c < -64)
+		    die ("%s: %s+0x%x: %s=%s: an external name multiplied by more "
+			 "than 64, which a ROF can't take", o->file, s->name,
+			 (unsigned) roff, y->name, text);
+		  r.type = loc | bits | (c < 0 ? R_NEG : 0);
+		  for (m = c < 0 ? -c : c; m > 0; m--)
+		    add_ext_ref (&exts, &nexts, x.t[t].sym, r);
 		}
 	      /* the term names outlive x: they're kept in the Ext list */
 	      for (t = 0; t < x.n; t++)
@@ -672,17 +702,23 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	      if (y->bind == STB_WEAK)
 		die ("%s: weak undefined symbol %s: not supported by l68",
 		     o->file, y->name);
+	      int marked = 0;
+	      size_t q;
+	      for (q = 0; q < npcm && la == A_CODE; q++)
+		marked |= pcm[q] == lo;
 	      r.type = loc | (size == 1 ? R_BYTE : size == 2 ? R_WORD : R_LONG)
 		       | (rel ? R_REL : 0);
-	      if (rel && size == 4)
+	      if (rel && (size == 4 || (size == 2 && marked)))
 		{
 		  /* l68 doesn't compute 4-byte relative references; like
 		     Microware's assembler, add a negated reference to this
-		     psect's code instead: S - code + (A - offset).  */
+		     psect's code instead: S - code + (A - offset). So too a
+		     word that is an external less its place (dc.w Ext-*,
+		     .r68pcm), as Microware's assemblers write it.  */
 		  Ref n;
 		  store (o, p, size, addend - (int32_t) lo, 0, y->name, lo);
 		  r.type &= ~R_REL;
-		  n.type = T_CODE | loc | R_LONG | R_NEG;
+		  n.type = T_CODE | loc | (size == 2 ? R_WORD : R_LONG) | R_NEG;
 		  n.offset = lo;
 		  locs = realloc (locs, (nlocs + 1) * sizeof (Ref));
 		  locs[nlocs++] = n;
@@ -745,7 +781,24 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
     }
   }
 
-  /* Definitions: the global symbols; __os9_* give the header.  */
+  /* Definitions: the global symbols; __os9_* give the header. A psect of
+     type/language 0 (a library's) has no such globals, which would clash
+     in a link: its attributes, revision, edition and stack are the local
+     __os9l_attrev, __os9l_edition, __os9l_stack (r68togas, rof2elf), as
+     Microware's assemblers write them in the ROF header too.  */
+  for (j = 1; j < nsyms; j++)
+    {
+      Sym *y = &syms[j];
+      if (y->bind == STB_LOCAL && y->shndx == SHN_ABS && !strncmp (y->name, "__os9l_", 7))
+	{
+	  if (!strcmp (y->name, "__os9l_attrev"))
+	    lattrev = y->value;
+	  else if (!strcmp (y->name, "__os9l_edition"))
+	    ledition = y->value;
+	  else if (!strcmp (y->name, "__os9l_stack"))
+	    lstack = y->value;
+	}
+    }
   for (j = 1; j < nsyms; j++)
     {
       Sym *y = &syms[j];
@@ -800,6 +853,12 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
       ndefs++;
     }
 
+  if (typelang == 0)
+    {
+      attrev = lattrev;
+      edition = ledition;
+      stack = lstack;
+    }
   if (ndefs)
     qsort (defs, ndefs, sizeof (Def), cmp_def);
   if (nexts)

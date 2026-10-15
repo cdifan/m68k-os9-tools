@@ -4454,6 +4454,35 @@ static int names_external_depth(const char *s, size_t n, int depth)
 	return ext;
 }
 
+/* The elements of dc.w/dc.l ARGS (BYTES each) that are an external less
+ * their own place (dc.w Ext-*): each noted in .r68pcm (the prelude's
+ * r68pcm), relocated to the element, after the line (a label there on a
+ * ds.b 0, which gas doesn't align), for elf2rof to write as both Microware
+ * assemblers do: the external and a negated reference to the psect's code,
+ * where gas makes a PC-relative relocation like an instruction's. */
+static void pcm_marks(const char *args, int bytes)
+{
+	static int nlab;
+	const char *pieces[64];
+	size_t lens[64];
+	int n = split_commas(args, strlen(args), pieces, lens, 64);
+	int any = 0;
+	for (int k = 0; k < n; k++) {
+		if (lens[k] == 0 || memchr(pieces[k], '\'', lens[k]) != NULL || memchr(pieces[k], '"', lens[k]) != NULL)
+			return;	/* a string: the elements' sizes aren't known */
+		any |= has_location(pieces[k], lens[k]) && names_external(pieces[k], lens[k]);
+	}
+	if (!any)
+		return;
+	nlab++;
+	const char *uniq = st.in_macro ? "\\@" : "";
+	bprintf(&line_after, ".Lr68pcm%d%s ds.b 0\n", nlab, uniq);
+	for (int k = 0; k < n; k++)
+		if (has_location(pieces[k], lens[k]) && names_external(pieces[k], lens[k]))
+			bprintf(&line_after, " r68pcm .Lr68pcm%d%s-%d\n", nlab, uniq, (n - k) * bytes);
+	annotate = 1;
+}
+
 /* Whether instruction BASE (SIZE) with operands ARGS has a byte immediate of
  * an external that the Microware assemblers relocate as the whole extension
  * word (see word_imm): ori, andi, subi, addi, eori, cmpi .b or to ccr; or,
@@ -5234,6 +5263,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		expression_list(out, l.args, size != 'b');
 		dc_size = 0;
 		bputs(out, rest);
+		if (size != 'b' && !st.in_vsect)
+			pcm_marks(l.args, size == 'l' ? 4 : 2);
 		goto done;
 	}
 	if (strcmp(base, "equ") == 0 && l.label && strcmp(l.args, "*") == 0 && !st.in_vsect) {
@@ -6285,6 +6316,9 @@ int main(int argc, char **argv)
 	 * instruction word (a byte immediate of an external, word_byte_imm);
 	 * .reloc only outside MRI mode, the value through a symbol */
 	fputs("r68rw macro\n.Lr68w\\@ set \\1\n .mri 0\n .reloc .+2,R_68K_16,.Lr68w\\@\n .mri 1\n endm\n", out);
+	/* r68pcm PLACE: PLACE noted in .r68pcm (pcm_marks), a long relocated
+	 * to it */
+	fputs("r68pcm macro\n .mri 0\n .pushsection .r68pcm,\"\"\n .long \\1\n .popsection\n .mri 1\n endm\n", out);
 	/* r68com NAME,SIZE: a common block */
 	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
 	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
@@ -6457,6 +6491,19 @@ int main(int argc, char **argv)
 				else
 					expression(&e, pieces[i], lens[i]);
 				fprintf(out, " xdef %s\n%s equ %s%s\n", names[i], names[i], code ? "r68__btext+" : "", e.s);
+				free(e.s);
+			}
+			/* type/language 0: attributes, revision, edition and stack
+			 * as local symbols, for elf2rof's ROF header (__os9l_*) */
+			static const char *const lnames[] = { NULL, NULL, "__os9l_attrev", "__os9l_edition", "__os9l_stack" };
+			fprintf(out, " else\n");
+			for (int i = 2; i < k && i < 5; i++) {
+				struct buf e = { 0 };
+				if (st.ps_captured[i])
+					bprintf(&e, "r68__ps%d", i);
+				else
+					expression(&e, pieces[i], lens[i]);
+				fprintf(out, "%s equ %s\n", lnames[i], e.s);
 				free(e.s);
 			}
 			fprintf(out, " endc\n");
