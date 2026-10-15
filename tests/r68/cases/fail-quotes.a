@@ -2,7 +2,7 @@
 * r68error argument, as double quotes were already; gas lost track of a quote in a <...> macro
 * argument that its input buffer ended in, and reported a conditional further up as left open
 * ("end of file inside conditional"; found in an SDK source, depending on where its buffers end).
-* fixed: FIXME
+* fixed: 1d7ce3b 2026-10-15 r68togas: .w to ccr is the byte form for the byte immediates; quotes in error texts as backquotes
 * expect error: needs `to` or `from`
  psect fail_quotes,0,0,0,0,0
  fail needs 'to' or 'from'
