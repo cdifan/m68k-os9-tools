@@ -1,12 +1,14 @@
-* -dialect=ucc95: Ultra C's r68 of 1994-95 pads and aligns a psect's vsect (uninitialized and
-* initialized data) to 2, where the later one (ucc) takes 4; the code stays 4, padded with zeros
-* (measured 2026-10-15: a driver's statics placed at $86 after two others' of $36 and $50).
+* -dialect=ucc95: Ultra C's r68 of 1994-95 aligns a psect's vsect sections (uninitialized and
+* initialized data) to 2, where the later one (ucc) takes 4; their sizes padded to 4 as in ucc
+* (measured 2026-10-15 on 10 modules: a driver's statics placed at $86 after two others' of
+* $36 and $50; module data sizes); the code stays 4, padded with zeros.
 * fixed: bfaa6ae 2026-10-15 r68togas, rof2elf: -a= regression fix, later byte immediates, old libgen layout, ucc95 vsects; "gas" for GNU as
+* fixed: FIXME
 * options: -dialect=ucc95
-* not r68: the r68 at hand is the later one, which pads to 4
-* expect size: .bss 6
+* not r68: the r68 at hand is the later one, which aligns to 4
+* expect size: .bss 8
 * expect align: .bss 1
-* expect size: .data 2
+* expect size: .data 4
 * expect align: .data 1
 * expect align: .text 2
 * expect text: 4e710000

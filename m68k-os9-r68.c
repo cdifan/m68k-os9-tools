@@ -580,7 +580,7 @@ static void unreferenced_externals(const char *object)
  * (r68togas pads them, see its pad_alignment): 2 for C 3.2's R68
  * (-dialect=c32) and Ultra C's r68 -m0 and -m1, so that the linker places the next
  * psect's after it, as l68 does; gas gives them 4, the other dialect's. Ultra
- * C's r68 of 1994-95 (-dialect=ucc95): the vsect's sections 2, the code 4. */
+ * C's r68 of 1994-95 (-dialect=ucc95): the vsect's sections aligned to 2 (padded to 4). */
 static void section_alignment(const char *object)
 {
 	int c32 = st.dialect != NULL && strcmp(st.dialect, "c32") == 0;

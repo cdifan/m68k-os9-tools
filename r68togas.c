@@ -6342,12 +6342,12 @@ int main(int argc, char **argv)
 		} else {
 			fprintf(out, " section .text\n balignw %d,$%04X\n", to, fill);
 		}
-		/* Ultra C's r68 of 1994-95: the vsect's sections to 2 (measured
-		 * 2026-10-15: a driver's statics after two others' at $86) */
-		int dto = st.ucc95 ? 2 : to;
-		fprintf(out, " section .data\n balign %d,0\n section .bss\n balign %d\n", dto, dto);
+		/* (Ultra C's r68 of 1994-95 pads the vsect's sections to 4 as
+		 * well, but aligns them to 2: m68k-os9-r68 sets the alignment;
+		 * measured 2026-10-15 on 10 modules) */
+		fprintf(out, " section .data\n balign %d,0\n section .bss\n balign %d\n", to, to);
 		if (st.used_remote)
-			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", dto, dto);
+			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", to, to);
 		fputs(" section .text\n", out);
 	}
 	fputs(st.macro_syms.s ? st.macro_syms.s : "", out);
