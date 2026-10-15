@@ -1,6 +1,6 @@
 # An org/do offset minus an external (F_b-Ext(a2), #F_b-Ext): a link-time expression of the
 # negated external with the offset as its constant, as -Ext alone (neg-ext); before, the offset
-# wasn't a constant there and as failed ("can't resolve `L0' {*ABS* section} - `Ext'"). Linked,
+# wasn't a constant there and gas failed ("can't resolve `L0' {*ABS* section} - `Ext'"). Linked,
 # the same module as from Ultra C's r68's ROF (a negative reference and the offset in the bytes).
 # Also the byte immediates of an external (byte-imm-ext) linked: $FFFE for -2, as from r68's.
 # fixed: a0f6d83 2026-10-15 r68togas, l68, elf2mod: fixes from rebuilds of modules

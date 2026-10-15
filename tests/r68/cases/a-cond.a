@@ -1,0 +1,19 @@
+* Symbols defined with -a= in conditionals before the psect (ifdef, ifne of the value): known
+* there, as r68 takes them. a0f6d83 made them set symbols, which a use before their last set
+* takes as SYM__final, defined at the end: ifdef was silently false (dc.w Val_y an undefined
+* symbol), ifne "non-constant expression".
+* fixed: FIXME
+* options: -dialect=c32 -a=Flag_x -a=Num_n=3
+* expect text: 0005 0007
+ ifdef Flag_x
+Val_y equ 5
+ endc
+ ifne Num_n-3
+Val_z equ 6
+ else
+Val_z equ 7
+ endc
+ psect a_cond,0,0,0,0,0
+ dc.w Val_y
+ dc.w Val_z
+ ends

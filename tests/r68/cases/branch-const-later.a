@@ -1,5 +1,5 @@
 * A branch to an equate defined further on, as to one before (branch-const): both r68s take it
-* for the displacement itself (bhi Disp, Disp an equate of 14 at the end: $6200 $000E); as made
+* for the displacement itself (bhi Disp, Disp an equate of 14 at the end: $6200 $000E); gas made
 * relocations to absolute 14 of it. In a macro called with it, too.
 * fixed: e29666f 2026-10-13 r68togas: a constant before (pc) is the displacement, as both r68s; equates further on count
 * expect text: 4e71600e 6200000e 6200000e 4e714e71

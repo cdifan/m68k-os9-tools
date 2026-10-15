@@ -1,4 +1,4 @@
-* ifndef with a macro's name as a guard (ifndef Flag: r68 knows macros there, as only symbols;
+* ifndef with a macro's name as a guard (ifndef Flag: r68 knows macros there, gas only symbols;
 * the second definition redefined the macro); a parameter that is empty when the body expands
 * (Flag \2, called with an empty \2) counts no argument in the inner call; an argument named
 * like subi (SUBI) is a mnemonic only where the body uses it as an operation.

@@ -1,4 +1,4 @@
-* Character constants other than letters and digits are values (as splits operands at a comma
+* Character constants other than letters and digits are values (gas splits operands at a comma
 * in quotes); a dc element that only starts with a quote is a value.
 * fixed: 194231a 2026-10-09 r68togas: first fixes from comparisons with Microware's r68; m68k-os9-r68 -dialect=c32
 * fixed: 22a2b7c 2026-10-09 r68togas: more corpus fixes

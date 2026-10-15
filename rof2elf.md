@@ -104,6 +104,10 @@ code, initialized data and references. rof2elf reads type 1 (psects of ROF editi
 - `libgen` lists a psect's references to library symbols before the others; rof2elf sorts them by
   name, as r68 writes them, so the ELF object is the same as from the ROF.
 
+Ultra C 1.x's `libgen` wrote an older layout, ID `$2D00D5BB` (the later one `$2D00D5BC`), which
+rof2elf reads too: the header without the 4 reserved bytes (42 bytes), psect entries without the
+field after the stack size (62), reference entries with a 2-byte count (14); the rest the same.
+
 ## Microware compatibility
 
 Libraries made by `libgen` from ROFs of both editions convert to members byte-identical to the

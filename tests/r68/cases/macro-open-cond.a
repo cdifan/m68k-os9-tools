@@ -1,6 +1,6 @@
 * A macro body that leaves a conditional open (an iflt ... else without endc): r68 keeps it open
 * after the call, the rest of the source in it (assembled after a call that ends in the else
-* part, left out after one that doesn't: here the last nop); as refused the macro ("end of
+* part, left out after one that doesn't: here the last nop); gas refused the macro ("end of
 * macro inside conditional").
 * fixed: ca33983 2026-10-12 r68togas: conditionals a macro body leaves open stay open after the call; padding when ends is left out
 * expect text: 01020304 05060700

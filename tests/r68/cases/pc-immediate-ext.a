@@ -1,6 +1,6 @@
 * An immediate PC-relative to an external (movea.l #Ext-*-(fin-lab+2),a2: a symbol the linker
 * defines, its distance from the instruction): both r68s write a PC-relative reference on the
-* immediate (R_68K_PC32, PC16 for .w), its addend 2 plus the rest of the expression; as refused
+* immediate (R_68K_PC32, PC16 for .w), its addend 2 plus the rest of the expression; gas refused
 * an external less * ("invalid operands"). Written with 0 there and .reloc; move.l stays move.l.
 * fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
 * expect text: 4e71 247c00000000 b5fc00000000 203c00000000 323c0000 4e71 4e71

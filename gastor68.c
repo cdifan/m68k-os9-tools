@@ -1,4 +1,4 @@
-/* gastor68: GCC's GNU as output to Microware r68 sources.
+/* gastor68: GCC's gas output to Microware r68 sources.
  *
  * The reverse of r68togas, for what GCC writes (m68k-elfos9-gcc -S with
  * m68k-os9-xcc's flags): sections as the psect and vsects, registers
@@ -177,7 +177,7 @@ static int register_name(const char *s, size_t n, struct buf *b)
 		"fp0", "fp1", "fp2", "fp3", "fp4", "fp5", "fp6", "fp7", "fpcr", "fpsr", "fpiar", "zpc", NULL,
 	};
 	if (n == 2 && strncmp(s, "fp", 2) == 0) {
-		/* To GNU as, %fp is a6 (the frame pointer). */
+		/* To gas, %fp is a6 (the frame pointer). */
 		bputs(b, "a6");
 		return 1;
 	}
@@ -387,7 +387,7 @@ static void operand(struct buf *b, const char *s, size_t n)
 			free(d);
 			if (number && (k >= 3 ? (v < -128 || v > 127) : (v < -32768 || v > 32767))) {
 				/* With an index, a number of 16 bits gets r68's .w, as
-				 * GNU as sizes it (r68 makes it 32 bits otherwise). */
+				 * gas sizes it (r68 makes it 32 bits otherwise). */
 				int word = k >= 3 && v >= -32768 && v <= 32767;
 				bputc(b, '(');
 				for (int i = 0; i < k; i++) {
@@ -620,7 +620,7 @@ static size_t string_bytes(struct buf *b, const char *s, int nul)
 	return count;
 }
 
-/* The j<cc> mnemonics of GCC (j<cc> sized by GNU as) as r68's b<cc>.w. */
+/* The j<cc> mnemonics of GCC (j<cc> sized by gas) as r68's b<cc>.w. */
 static const char *branch(const char *op)
 {
 	static char r[40];
@@ -804,7 +804,7 @@ static void directive(const char *label, const char *op, const char *args)
 			error(".comm %.*s: a common symbol (not .local), which r68 can't make", (int)lens[0], pieces[0]);
 			return;
 		}
-		/* Kept for the end of the file, where GNU as puts them (after
+		/* Kept for the end of the file, where gas puts them (after
 		 * all of .bss: its subsection 1), so that the layout is
 		 * GCC's. */
 		if (k == 3 && strtol(pieces[2], NULL, 0) > 1)
@@ -995,7 +995,7 @@ static void prepass(char **lines, int n)
 static void usage(void)
 {
 	printf("usage: %s [-mode=c32|ucc] [-n=<psect>] [-o <output>] <source>\n", progname);
-	printf("  Translates GCC's GNU as output (m68k-elfos9-gcc -S) to a Microware r68\n");
+	printf("  Translates GCC's gas output (m68k-elfos9-gcc -S) to a Microware r68\n");
 	printf("  source; see gastor68.md.\n");
 	printf("  -mode=  the style of the psect line: C 3.2's (default) or Ultra C's\n");
 	printf("  -n=     the psect's name (default: from .file, else the source's name)\n");

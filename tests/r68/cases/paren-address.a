@@ -1,5 +1,5 @@
 * An address in parentheses without a register (move.l (4),a5) is an absolute long address in
-* r68, as a bare one; as took (4) for a short one.
+* r68, as a bare one; gas took (4) for a short one.
 * fixed: ad95f7e 2026-10-11 r68togas: an address in parentheses is long
 * expect text: 2a790000 00042a79 00000006 4a390000 00044ed5 20154e71
  psect paren_address,0,0,0,0,0

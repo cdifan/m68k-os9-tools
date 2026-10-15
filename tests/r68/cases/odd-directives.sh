@@ -1,4 +1,4 @@
-# as's MRI mode aligns at any directive after an odd dc.b (mri_pending_align), r68 only at an
+# gas's MRI mode aligns at any directive after an odd dc.b (mri_pending_align), r68 only at an
 # instruction or a dc.w: a macro definition after byte data (a name dc.b "Abc",0 then a macro)
 # is moved before the source; the line marker after a use file that ends in byte data is
 # written later, before the next aligning statement.

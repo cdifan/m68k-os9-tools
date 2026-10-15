@@ -1,7 +1,7 @@
 * (d,An,Xn), (d,An), (d,PC) and (d,PC,Xn) written with the displacement inside, on a 68020:
 * Ultra C's r68 always writes the full extension word with a 32-bit displacement (the index
 * suppressed where there is none, $0170), a constant before PC less 2 from the extension word
-* ((6,pc): 8); a number with .w stays 16 bits. The translation let as pick the brief or the
+* ((6,pc): 8); a number with .w stays 16 bits. The translation let gas pick the brief or the
 * 16-bit form. (Ultra C's r68 refuses the form on a 68000.)
 * fixed: d699c42 2026-10-13 r68togas: corner cases; align and index forms as Ultra C's r68; -m1 pads to 2
 * options: -m2

@@ -1,5 +1,5 @@
 * A macro named as an instruction but for its case (ANDI; r68's macro names are case sensitive,
-* as's not: the instruction andi called it); swap.l (the size ignored); $# (andi.w $#M,d1, a
+* gas's not: the instruction andi called it); swap.l (the size ignored); $# (andi.w $#M,d1, a
 * typo r68 takes for #); a psect whose type is set from names defined after it (TL set
 * (Dr<<8)+Ob before the definitions).
 * fixed: 7aaa984 2026-10-11 r68togas: macros named as instructions; swap.l; $#; psect values defined later

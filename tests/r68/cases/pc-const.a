@@ -1,6 +1,6 @@
 * A constant before (pc) (an equate, also one further on, an expression of them), not a label:
 * both r68s take it for the displacement itself, as a number (lea Disp(pc),a0, Disp an equate of
-* $10: $41FA $0010); as took it for address $10. In the index form too, and after a movem mask or
+* $10: $41FA $0010); gas took it for address $10. In the index form too, and after a movem mask or
 * a bit number. An equate of a label stays an address.
 * fixed: e29666f 2026-10-13 r68togas: a constant before (pc) is the displacement, as both r68s; equates further on count
 * expect text: 4e714e71 41fa0010 43fb0010 4cfa00030012 083a00010020 45faffea 4e714e71

@@ -1,5 +1,5 @@
 * Escaped quotes are the argument's own (TR.l \'AbCd\': 'AbCd', a number as an address, not
-* quotes r68 strips around it); a name as takes for a register (TC) passed as it is, a part of
+* quotes r68 strips around it); a name gas takes for a register (TC) passed as it is, a part of
 * the names the body makes (it was TC__r68: bTC__r68, and bTC undefined).
 * fixed: e80aac9 2026-10-11 r68togas: escaped quotes in macro arguments; register-named arguments
 * expect text: 2af94162 43640800 00034e71

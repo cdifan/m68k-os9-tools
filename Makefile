@@ -25,7 +25,7 @@ DESTDIR=/usr
 EXE=elf2mod
 EXE_ROF2ELF=rof2elf
 EXE_ELF2ROF=elf2rof
-# Source translators between Microware's r68 and GNU as
+# Source translators between Microware's r68 and gas
 TRANSLATORS=r68togas gastor68
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
 # libiberty runs the programs

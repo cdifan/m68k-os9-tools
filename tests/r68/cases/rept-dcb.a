@@ -1,4 +1,4 @@
-* rept N around one dc.b line after an odd number of bytes: no alignment (as aligns, r68 not).
+* rept N around one dc.b line after an odd number of bytes: no alignment (gas aligns, r68 not).
 * fixed: 22a2b7c 2026-10-09 r68togas: more corpus fixes
 * expect text: 01 0203 0203 0203 04
  psect rept_dcb,0,0,0,0,0

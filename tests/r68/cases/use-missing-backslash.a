@@ -1,4 +1,4 @@
-* A use file not found, its DOS path with backslashes: the message names it as written (as's
+* A use file not found, its DOS path with backslashes: the message names it as written (gas's
 * .error took \t in ..\tables.d for a tab).
 * fixed: 94188be 2026-10-12 r68togas: backslashes in error texts doubled (a use path's \t); comments with neutral names
 * expect error: use '..\tables.d': not found

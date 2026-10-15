@@ -1,4 +1,4 @@
-* A backslash in a dc string ('\', "a\b"): as's scrubber took \' in quotes for an escaped quote
+* A backslash in a dc string ('\', "a\b"): gas's scrubber took \' in quotes for an escaped quote
 * and ran the string on ("junk at end of line"), though MRI strings have no escapes; written as
 * $5c between the string's parts.
 * fixed: 83809c3 2026-10-11 r68togas: backslashes in dc strings

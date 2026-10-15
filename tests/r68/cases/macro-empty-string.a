@@ -1,4 +1,4 @@
-* A parameter alone in a dc.b string ("\2") with an empty argument: r68 makes no byte (as read
+* A parameter alone in a dc.b string ("\2") with an empty argument: r68 makes no byte (gas read
 * the '' it became as a quote character). The dc line is split, each such string in ifnc; a
 * label before it on a dz.b 0, in the code or a vsect as the dc.
 * fixed: df3f773 2026-10-12 r68togas: section statements only where the section changes; an empty argument in a dc.b string

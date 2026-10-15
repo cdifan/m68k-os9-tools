@@ -1,5 +1,5 @@
 * align (2) in the code between a label and a conditional on the distance from it to *: the
-* translation's balignw made an alignment frag there, which as can't size before the end, so the
+* translation's balignw made an alignment frag there, which gas can't size before the end, so the
 * conditional failed ("non-constant expression"). After an odd dc.b the zero byte as before.
 * fixed: 343bb6c 2026-10-13 r68togas: align (2) in the code without an alignment frag of its own
 * expect text: 4e71 0100 0200 0003 0405 00000000 4e71

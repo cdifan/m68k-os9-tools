@@ -134,6 +134,7 @@ the Microware assemblers pad it, so that a link simply concatenates them:
 | `-d ucc` with `-m0` or `-m1` | 2 | a zero byte where the size is odd |
 | `-d ucc` without `-m` | 4 | `nop`, after a zero byte where the size is odd |
 | `-d ucc` with `-m2` to `-m6` | 4 | `trapf`, likewise |
+| `-d ucc95` | 4 (the vsect's sections aligned to 2) | zeros |
 
 `m68k-os9-r68` gives the sections an alignment of 2 where the padding is 2 (`gas` makes 4), so
 that a link places the next psect right after. A psect without `ends` (some descriptors end that
@@ -181,6 +182,9 @@ Most instruction lines need no change. Where the same text means something else 
   relocate the whole extension word (16 bits), `gas` its low byte; written with `#0` and a
   16-bit relocation on the word. `move.b`, `dc.b` and an index displacement keep a byte, as in
   r68. Not in a macro body where the value is a parameter.
+- **Byte immediates known only later** in the same instructions (`ori.b #Val,d2` with `Val equ
+  -3` further on): r68 writes the whole value as the word; written as words with an expression
+  `gas` resolves at the end (data registers, `(An)`, `(An)+`, `-(An)`, `d(An)`, `ccr`).
 - **`addq`/`subq` of a difference of vsect labels**: written as the instruction word with the
   value in its field by an expression `gas` resolves at the end.
 - **An immediate PC-relative to an external** (`movea.l #edata-*-(End-Here+2),a2`): both
@@ -197,6 +201,9 @@ Most instruction lines need no change. Where the same text means something else 
 
 ### Branches
 
+- **Sizes:** without `-b`, r68 makes an unsized branch a word (with a warning), and so does the
+  translation. With `-b`, branches to the source's own labels are sized by `gas` (written
+  `jb<cc>`), with `-B` also those to its global labels.
 - **`-b`: a branch to the next statement** (`bra.s Done` with only blank or comment lines before
   `Done`) is left out, as r68 does, whatever its size. Not in macro bodies.
 - **Global labels:** `gas` keeps a relocation for a reference to a global symbol, which an 8-bit
@@ -282,6 +289,10 @@ align it down to even after counting.
   `$f8000000`), `gas` logically on 64 bits: written as a division of the sign-extended value.
 - **`|`** is OR in r68 and starts a comment in `gas`: written `!`. Unary **`^`** (not) is `~`.
   C-style hex **`0x112`** is `$112`. **`$` without a hex digit** takes the value after it.
+- **Character constants:** r68 reads `'C'` as a number, right-aligned (`dc.w 'C'` is `$0043`); MRI
+  as a string, left-aligned (`$4300`). In expressions and in `dc.w`/`dc.l` they are written as
+  numbers; constants other than a letter or digit always (`gas` splits operands at a comma in
+  quotes). A `dc` element that only starts with a quote (`' '+12`) is a value.
 - **Strings:** `"..."` is r68's string, written `'...'` in string contexts (`dc.b`, string
   operands of `dc.w`/`dc.l`). In r68 a backslash takes the next character literally (`\"` is
   `"`, `\t` is `t`); the translation writes the characters r68 means. The quotes of `use "file"`
@@ -335,6 +346,7 @@ linking, as with `l68`.
 - `\1` ... `\9` work as they are; `\#` (the argument count) is `NARG`.
 - **`\L<n>`** (an argument's length) has no MRI equivalent: a macro using it is called through the
   prelude's `r68L`, which passes the lengths (counting a renamed `@`, `_at_`, as one character).
+- **`\@`** is numbered as `gas` numbers it (see "Differences and limitations").
 - **Quoted arguments** (`"(a1,d1.w)"`) are passed without their quotes, as `<...>`; `!`, `<` and
   `>` inside are escaped with `!`. An escaped quote outside quotes (`\""ab> \""`) is not the start
   of a string.

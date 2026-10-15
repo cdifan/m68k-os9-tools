@@ -137,9 +137,10 @@ int file_is_ar(const char *path)
 	return file_starts_with(path, "!<arch>\n", 8);
 }
 
+/* (also Ultra C 1.x's older layout, $2D00D5BB, which rof2elf reads) */
 int file_is_libgen(const char *path)
 {
-	return file_starts_with(path, "\x2D\x00\xD5\xBC", 4);
+	return file_starts_with(path, "\x2D\x00\xD5\xBC", 4) || file_starts_with(path, "\x2D\x00\xD5\xBB", 4);
 }
 
 /* ----- Settings ----- */

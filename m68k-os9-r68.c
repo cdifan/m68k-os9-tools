@@ -2,7 +2,7 @@
  *
  * A drop-in for makefiles that call r68: the same options (Ultra C's, a
  * superset of C 3.2's), translating the source with r68togas and assembling
- * it with GNU as in its MRI mode; the object is ELF (-obj=elf, the default),
+ * it with gas in its MRI mode; the object is ELF (-obj=elf, the default),
  * a ROF (-obj=rof, -obj=ucc, through elf2rof) or, with -obj=gas, the
  * translated source itself. See m68k-os9-r68.md.
  *
@@ -54,11 +54,11 @@ struct option {
 /* In the order of Ultra C's r68 -?. */
 static const struct option options[] = {
 	{ "a", VALUE, "=<sym>[=<val>]", "Define a symbol (1 without a value)", NULL, O_A },
-	{ "b", FLAG, "", "Optimize branch sizes", "as always does", O_B },
-	{ "bt", FLAG, "", "Optimize branch sizes, long to externals", "as sizes them", O_BT },
+	{ "b", FLAG, "", "Optimize branch sizes", "gas always does", O_B },
+	{ "bt", FLAG, "", "Optimize branch sizes, long to externals", "gas sizes them", O_BT },
 	{ "c", FLAG, "", "List false conditionals too", NULL, O_C },
 	{ "d", NUMBER, "<n>", "Lines per listing page", "ignored", O_D },
-	{ "e", FLAG, "", "Don't print errors", "ignored: as prints them", O_E },
+	{ "e", FLAG, "", "Don't print errors", "ignored: gas prints them", O_E },
 	{ "f", FLAG, "", "Form feeds for page ejects", "ignored", O_F },
 	{ "g", FLAG, "", "List all code bytes", NULL, O_G },
 	{ "l", FLAG, "", "Listing to standard output", NULL, O_L },
@@ -192,7 +192,7 @@ static void apply(const struct option *o, const char *value)
 	case O_S: st.symbols = on; break;
 	case O_U: args_add(&st.dirs, "-u"); args_add(&st.dirs, value); break;
 	case O_V:
-		printf("%s: Microware r68's options; r68togas and GNU as (%s) assemble\n", os9_who, AS);
+		printf("%s: Microware r68's options; r68togas and gas (%s) assemble\n", os9_who, AS);
 		break;
 	case O_X: st.macros = on; break;
 	case O_Y: st.long_refs = on; break;
@@ -319,8 +319,8 @@ static char *psect_name(const char *path, const char *fallback)
 	return xstrdup(fallback);
 }
 
-/* Symbols named like a GNU as register (val, tc, ...) are NAME__r68 in
- * r68togas's output, since as can't have a symbol of that name; the
+/* Symbols named like a gas register (val, tc, ...) are NAME__r68 in
+ * r68togas's output, since gas can't have a symbol of that name; the
  * object's global and undefined ones get their names back. */
 static void register_names(const char *object)
 {
@@ -370,7 +370,7 @@ static void register_names(const char *object)
 }
 
 /* Whether the assembler sizes a branch to a global label of the same
- * file (the binutils change for m68k-elfos9; without it as keeps a
+ * file (the binutils change for m68k-elfos9; without it gas keeps a
  * relocation, and r68togas -b mustn't use jbra there): a probe. */
 static int relaxes_globals(void)
 {
@@ -432,7 +432,7 @@ static struct args output_lines(struct args *argv)
 }
 
 /* r68togas's .-LABEL symbols (Size equ .-Label, LABEL a vsect label:
- * in LABEL's section, the offset counter less LABEL's offset), which as
+ * in LABEL's section, the offset counter less LABEL's offset), which gas
  * leaves out of its object, being equated to an expression: each noted as
  * a word in .r68dlv whose relocation is SECTION+VALUE, its name and "g"
  * (global) or "l" in .r68dlvn; added as such, both sections removed. A
@@ -510,7 +510,7 @@ static void dot_less_symbols(const char *object)
  * assemblers write an external reference only where one is used, and a
  * link takes in a library member for any undefined symbol (an equate of an
  * external, Size2 equ Size1, or the twin of a label a conditional left
- * out, lab__r68pc equ lab, leave one in as's object). */
+ * out, lab__r68pc equ lab, leave one in gas's object). */
 static void unreferenced_externals(const char *object)
 {
 	struct args argv = { 0 };
@@ -579,16 +579,19 @@ static void unreferenced_externals(const char *object)
 /* The sections' alignment as the Microware assemblers pad a psect's
  * (r68togas pads them, see its pad_alignment): 2 for C 3.2's R68
  * (-dialect=c32) and Ultra C's r68 -m0 and -m1, so that the linker places the next
- * psect's after it, as l68 does; as gives them 4, the other dialect's. */
+ * psect's after it, as l68 does; gas gives them 4, the other dialect's. Ultra
+ * C's r68 of 1994-95 (-dialect=ucc95): the vsect's sections 2, the code 4. */
 static void section_alignment(const char *object)
 {
 	int c32 = st.dialect != NULL && strcmp(st.dialect, "c32") == 0;
-	if (!c32 && !(st.cpu_given && st.cpu <= 1))
+	int ucc95 = st.dialect != NULL && strcmp(st.dialect, "ucc95") == 0;
+	int all = c32 || (st.cpu_given && st.cpu <= 1);
+	if (!all && !ucc95)
 		return;
 	static const char *const sections[] = { ".text", ".data", ".bss", ".remote.data", ".remote.bss", NULL };
 	struct args argv = { 0 };
 	args_add(&argv, OBJCOPY);
-	for (const char *const *s = sections; *s; s++) {
+	for (const char *const *s = all ? sections : sections + 1; *s; s++) {
 		args_add(&argv, "--set-section-alignment");
 		args_addf(&argv, "%s=2", *s);
 	}
@@ -598,7 +601,7 @@ static void section_alignment(const char *object)
 	args_free(&argv);
 }
 
-/* GNU as's options for r68's -m<n>: the CPU, with the FPU (r68 takes its
+/* gas's options for r68's -m<n>: the CPU, with the FPU (r68 takes its
  * instructions for any CPU). */
 static void cpu_options(struct args *argv)
 {
@@ -608,7 +611,7 @@ static void cpu_options(struct args *argv)
 		args_add(argv, "-m68881");
 }
 
-/* GNU as's listing option for r68's listing options: -a with c (leave out
+/* gas's listing option for r68's listing options: -a with c (leave out
  * false conditionals; r68 lists them with -c), m (macro expansions, -x), s
  * (the symbols, -s); -l alone lists the source and code. */
 static void listing_options(struct args *argv)
@@ -682,7 +685,7 @@ static void assemble(const char *source)
 	if (gas)
 		return;
 
-	/* 2. GNU as: the object, ELF; a temporary one for a ROF, or for
+	/* 2. gas: the object, ELF; a temporary one for a ROF, or for
 	 * only checking (no -o). */
 	int rof = os9conv.obj == OBJ_ROF || os9conv.obj == OBJ_UCC;
 	char *object = out != NULL && !rof ? (char *)out : os9_temp(".o");

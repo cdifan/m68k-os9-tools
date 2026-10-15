@@ -1,5 +1,5 @@
 * Both r68s shift right a 32-bit signed value, arithmetically: $80000000>>4 is $f8000000 (C 3.2's
-* R68 and Ultra C's r68 alike); as's >> is logical on 64 bits.
+* R68 and Ultra C's r68 alike); gas's >> is logical on 64 bits.
 * fixed: 4ea5c19 2026-10-11 r68togas: >> arithmetic on 32 bits, as both r68s shift
 * expect text: f8000000 fffffffc 04000000 fffffff8 ffff4e71
  psect shift_right,0,0,0,0,0

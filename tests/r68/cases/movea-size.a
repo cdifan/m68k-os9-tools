@@ -1,4 +1,4 @@
-* movea without a size is long in both Microware assemblers (as: word); adda, suba, cmpa and
+* movea without a size is long in both Microware assemblers (gas: word); adda, suba, cmpa and
 * move to an address register stay word.
 * fixed: 63bfc80 2026-10-11 r68togas: movea without a size is long
 * expect text: 206f0004 d0c090c0 b0c0306f 00042241

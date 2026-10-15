@@ -1,4 +1,4 @@
-* exg.l: as takes no size.
+* exg.l: gas takes no size.
 * fixed: e99ca29 2026-10-09 r68togas: dots in names, exg.l, register names in any case, macro labels in a vsect
 * expect text: c141 c588
  psect exg_l,0,0,0,0,0

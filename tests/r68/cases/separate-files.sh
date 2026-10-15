@@ -1,6 +1,6 @@
 # r68togas -s: each use file translated into a file of its own next to the output, named after
-# it (vals.d gives vals.d.s), and included; assembled with as -I and the outputs' directory, the
-# code is the inline translation's. A use after byte data of odd length stays inline (as aligns
+# it (vals.d gives vals.d.s), and included; assembled with gas -I and the outputs' directory, the
+# code is the inline translation's. A use after byte data of odd length stays inline (gas aligns
 # at an include there). No existing file is written over, and a refused run leaves nothing; -o
 # naming a directory; -x. Before, -s and -x were unknown options.
 # fixed: a9ea4bb 2026-10-13 r68togas: %-registers, -r, -y, the separate-files mode (-s, -x); docs brought up to date

@@ -1,9 +1,9 @@
 #!/bin/bash
-# run.sh [CASE...]: the gastor68 test cases (gastor68.md, "Tests"): each cases/*.s, GNU as
+# run.sh [CASE...]: the gastor68 test cases (gastor68.md, "Tests"): each cases/*.s, gas
 # source as GCC writes it, is translated by gastor68 and checked against its "| expect:" lines
 # (each a text that a line of the translation contains, spaces collapsed); then the translation
 # assembled by m68k-os9-r68 (and by Ultra C's r68.exe when R68 is set, converted by rof2elf)
-# must give the code, data and relocations that GNU as gives for the source. "| cpu: 68020"
+# must give the code, data and relocations that gas gives for the source. "| cpu: 68020"
 # makes a case 68020 code with the 68881 (-m2 for the r68s); "| fixed:" names the commit that
 # fixed what a case tests (as in tests/r68).
 # Settings: TOOLS (a directory put first in PATH: m68k-os9-r68, r68togas, rof2elf), GASTOR68
@@ -62,12 +62,12 @@ run_case() {	# SOURCE
 		while read -r e; do [ -z "$e" ] && continue
 			collapse < "$t/$name.a" | grep -q -F -- "$(echo "$e" | collapse)" || why="$why no line \"$e\";"
 		done <<< "$(header expect "$src")"
-		${B}as $cpu --pcrel -o "$t/$name.gas.o" "$src" > "$t/$name.as.log" 2>&1 || why="$why as failed;"
+		${B}as $cpu --pcrel -o "$t/$name.gas.o" "$src" > "$t/$name.as.log" 2>&1 || why="$why gas failed;"
 		contents "$t/$name.gas.o" "$t/$name.gas"
 		if (cd "$t" && m68k-os9-r68 "$name.a" -q -m$m -o="$name.o") > "$t/$name.log" 2>&1 < /dev/null; then
 			contents "$t/$name.o" "$t/$name.our"
 			e=$(same "$t/$name.gas" "$t/$name.our")
-			[ -n "$e" ] && why="$why m68k-os9-r68 differs from as:$e"
+			[ -n "$e" ] && why="$why m68k-os9-r68 differs from gas:$e"
 		else
 			why="$why m68k-os9-r68 failed: $(head -1 "$t/$name.log");"
 		fi
@@ -78,7 +78,7 @@ run_case() {	# SOURCE
 			if [ -s "$mw/$name.r" ] && rof2elf -o "$t/$name.mw.o" "$mw/$name.r" > /dev/null 2>&1; then
 				contents "$t/$name.mw.o" "$t/$name.mw"
 				e=$(same "$t/$name.gas" "$t/$name.mw")
-				[ -n "$e" ] && why="$why r68 differs from as:$e"
+				[ -n "$e" ] && why="$why r68 differs from gas:$e"
 			else
 				why="$why r68 or rof2elf failed;"
 			fi

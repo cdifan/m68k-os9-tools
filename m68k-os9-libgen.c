@@ -923,7 +923,9 @@ static void list_ident(const char *file)
 		fprintf(listing, "Edition:         %u\n", h[12] << 8 | h[13]);
 		fprintf(listing, "Date created:    %s %2u, %u %02u:%02u:%02u\n", h[7] >= 1 && h[7] <= 12 ? months[h[7] - 1] : "?",
 			h[8], 1900 + h[6], h[9], h[10], h[11]);
-		fprintf(listing, "Threads:         %s\n", h[43] == 2 ? "safe" : "none");
+		/* (not in Ultra C 1.x's older header, $2D00D5BB) */
+		if (h[3] == 0xBC)
+			fprintf(listing, "Threads:         %s\n", h[43] == 2 ? "safe" : "none");
 	}
 	if (fp != NULL)
 		fclose(fp);

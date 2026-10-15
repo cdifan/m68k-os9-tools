@@ -1,9 +1,9 @@
-/* r68togas: Microware r68 assembler sources to GNU as sources (MRI mode).
+/* r68togas: Microware r68 assembler sources to gas sources (MRI mode).
  *
  * Translates r68's own layer of the language line by line, so that every
  * line keeps its number: the output starts with a prelude (MRI macros for
  * r68's directives), then the source behind a linemarker, rewritten in
- * place, then an epilogue (xdefs, the module header symbols). GNU as
+ * place, then an epilogue (xdefs, the module header symbols). gas
  * assembles it with ".mri 1" set in the prelude. See r68togas.md.
  *
  * MIT License; see elf2mod.c.
@@ -137,7 +137,7 @@ static void bprintf(struct buf *b, const char *format, ...)
 
 /* ----- Names ----- */
 
-/* GNU as's m68k register names (from binutils' tc-m68k.c), which it also
+/* gas's m68k register names (from binutils' tc-m68k.c), which it also
  * knows in upper case and, in MRI mode, without '%': as symbols they must be
  * renamed. Those that r68 knows as registers too are left out: there they
  * are registers anyway. */
@@ -171,7 +171,7 @@ static int in_list(const char *const *list, const char *s, size_t n, int any_cas
 	return 0;
 }
 
-/* Whether S (N chars) is a GNU as register name as a symbol would clash
+/* Whether S (N chars) is a gas register name as a symbol would clash
  * with it: lower or upper case, as gas enters them. */
 static int clashes(const char *s, size_t n)
 {
@@ -237,14 +237,14 @@ static void skip_percent(const char **s, size_t *n)
 
 static int defined_name(const char *s, size_t n);
 
-/* A symbol's name as GNU as gets it: '@' (legal in r68) as "_at_", a name
- * GNU as takes for a register with "__r68" after it (one r68 knows as a
+/* A symbol's name as gas gets it: '@' (legal in r68) as "_at_", a name
+ * gas takes for a register with "__r68" after it (one r68 knows as a
  * register too where the source defines it: a1 dc.b 1, CCR equ 0; with -r
  * any). */
 static void put_symbol(struct buf *b, const char *s, size_t n)
 {
 	/* A dot inside the name (labels lab.a ... lab.s):
-	 * __dot__, as would read bls.s lab.s's .s as a size;
+	 * __dot__, gas would read bls.s lab.s's .s as a size;
 	 * with __r68 after the name, whose dots m68k-os9-r68 gives back. */
 	int dots = 0;
 	for (size_t i = 0; i < n; i++) {
@@ -286,7 +286,7 @@ struct lexer {
 	int ok;
 };
 
-/* Translates an expression E (r68) to GNU as MRI syntax into B: every
+/* Translates an expression E (r68) to gas MRI syntax into B: every
  * binary operation below the top parenthesized by r68's precedence, | as !,
  * unary ^ as ~, 0x as $, character constants as numbers, '.' (the offset
  * counter) as r68__ofs, symbols renamed (put_symbol). When CHARS is set,
@@ -359,7 +359,7 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		if (*q != '\0')
 			q++;
 		if (p[1] == '#')
-			/* r68 counts empty arguments too, as's NARG doesn't:
+			/* r68 counts empty arguments too, gas's NARG doesn't:
 			 * the count the call set, captured by the expansion
 			 * (narg_capture) */
 			bputs(b, "r68__n\\@");
@@ -453,7 +453,7 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 			q++;
 		else
 			lx->ok = 0;
-		/* as splits operands at a comma, and ends them at a blank, in a
+		/* gas splits operands at a comma, and ends them at a blank, in a
 		 * quote too (move.b #',',(a3)+): only a letter or digit is
 		 * kept as a character. */
 		if (expr_chars || count != 1 || !isalnum((unsigned char)v))
@@ -545,14 +545,14 @@ static void parse_binary(struct lexer *lx, struct buf *b, int prec, int top)
 		if (prec == P_SHIFT && shift_masked() && right.s && !small) {
 			/* Ultra C's r68 shifts as the x86 does, the count
 			 * modulo 32 (1<<8+199 is 1<<15); C 3.2's
-			 * R68 and as give 0 */
+			 * R68 and gas give 0 */
 			bprintf(&count, "((%s)&31)", right.s);
 		} else {
 			bputs(&count, right.s ? right.s : "");
 		}
 		if (prec == P_SHIFT && strcmp(as, ">>") == 0 && left.s) {
 			/* Both r68s shift a 32-bit signed value: arithmetic
-			 * ($80000000>>4 is $f8000000); as's >> is logical on
+			 * ($80000000>>4 is $f8000000); gas's >> is logical on
 			 * 64 bits. Sign-extended X, (X-(X&(2^n-1)))/2^n. */
 			struct buf x = { 0 };
 			bprintf(&x, "((((%s)+$80000000)&$ffffffff)-$80000000)", left.s);
@@ -814,7 +814,7 @@ static void put_twin(struct buf *b, const char *s, size_t n);
 static void put_regs(struct buf *b, const char *s, size_t n)
 {
 	for (size_t i = 0; i < n;) {
-		/* %d0: r68's register prefix, which as (MRI) needn't */
+		/* %d0: r68's register prefix, which gas (MRI) needn't */
 		if (s[i] == '%' && i + 1 < n && isalpha((unsigned char)s[i + 1]) &&
 		    (i == 0 || !symchar((unsigned char)s[i - 1]))) {
 			size_t j = i + 1;
@@ -845,7 +845,7 @@ static int source_label(const char *s, size_t n);
 
 /* Whether operand S (N chars) is an address in parentheses without a
  * register ((4): move.l (4),a5), which r68 takes as an absolute
- * long address as a bare one; as as a short one. */
+ * long address as a bare one; gas as a short one. */
 static int paren_address(const char *s, size_t n)
 {
 	if (n < 3 || s[0] != '(' || s[n - 1] != ')')
@@ -928,7 +928,7 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 			 * later (Ultra C's r68 refuses the form on a 68000):
 			 * r68 always writes the full extension word with a
 			 * 32-bit displacement, the index suppressed where there
-			 * is none (as: zd0), also for (0,a0); a constant before
+			 * is none (gas: zd0), also for (0,a0); a constant before
 			 * PC less 2 from the extension word ((6,pc): 8). A
 			 * number with .w stays 16 bits; a symbol's .w is part of
 			 * its name in r68 (tested 2026-10-13). */
@@ -968,10 +968,10 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 		}
 		if (regs > 0) {
 			/* d(An): r68 keeps a 16-bit displacement, also of 0, which
-			 * as would drop; (d).w(An) keeps it, on any CPU. */
+			 * gas would drop; (d).w(An) keeps it, on any CPU. */
 			int an = regs == 1 && k == (open > 0 ? 1 : 2) && address_register(inner, ilen);
 			/* A number before (pc), or a constant (equates): both
-			 * r68s' raw displacement, which as (MRI) takes as an
+			 * r68s' raw displacement, which gas (MRI) takes as an
 			 * absolute address: the address it means, from the
 			 * extension word's. */
 			int pc = open > 0 && pc_register(inner, ilen) && (is_number(s, open) || source_constant(s, open));
@@ -996,7 +996,7 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				expression(b, s, open);
 				bputc(b, ')');
 			} else if (open > 0 && pc_register(inner, ilen) && k == 1) {
-				/* label(pc): 16 bits, as r68 keeps it: for a 68020 as
+				/* label(pc): 16 bits, as r68 keeps it: for a 68020 gas
 				 * would make a symbol whose distance it doesn't know
 				 * (a global's, an external's) the 32-bit (bd,PC) form;
 				 * (label).w(pc) is the same on a 68000. With -y 32 bits,
@@ -1008,7 +1008,7 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				bputs(b, long_refs ? ").l" : ").w");
 			} else if (open > 0 && pc_register(inner, ilen)) {
 				/* d(pc,Xn): 8 bits, the brief form, as r68 keeps it:
-				 * for a 68020 as would make a value it doesn't know in
+				 * for a 68020 gas would make a value it doesn't know in
 				 * its first pass (L12.-LI12., a label further on) the
 				 * full form with a 16-bit displacement. With -y the
 				 * full form with 32 bits, as r68's -y. */
@@ -1069,7 +1069,7 @@ static void string_operand(struct buf *b, const char *s, size_t n)
 {
 	char q = s[0];
 	/* A backslash of the string goes as $5c between the parts
-	 * ('\'): as's scrubber takes \' in quotes for an escaped quote and
+	 * ('\'): gas's scrubber takes \' in quotes for an escaped quote and
 	 * runs the string on, though MRI strings have no escapes. */
 	int open = 0, any = 0;
 	for (size_t i = 1; i < n; i++) {
@@ -1122,7 +1122,7 @@ struct line {
 	char *rest;		/* the comment after the operands, with its blank */
 };
 
-/* The comment field S (from its blank) as a ';' comment: GNU as takes text
+/* The comment field S (from its blank) as a ';' comment: gas takes text
  * after the operands as a comment, but not everywhere (fill, a macro body's
  * lines, which lose the blank in the expansion). */
 static char *comment(const char *s)
@@ -1248,7 +1248,7 @@ struct state {
 	int in_macro, macro_ifs;	/* in a macro definition; its open conditionals */
 	int cond_depth;		/* open conditionals outside macro definitions */
 	int branch_sizing;	/* -b: r68's -b/-bt */
-	int relax_globals;	/* -B: as relaxes branches to global symbols */
+	int relax_globals;	/* -B: gas relaxes branches to global symbols */
 	int cpu_level;		/* -m: 0, 10, 20, 30, 40, 60 */
 	char **locals;		/* -b: labels defined without ':' (scan_labels) */
 	int nlocals;
@@ -1298,7 +1298,7 @@ struct state {
 	char *macro_open;	/* per macro: its body leaves a conditional open */
 	int nends;		/* psect ends statements (.Lr68ends<n>) */
 	int ends_cond;		/* one in a conditional or macro body: whether one is
-				   assembled known only to as (r68__ended) */
+				   assembled known only to gas (r68__ended) */
 	unsigned *macro_twin;	/* per macro: the parameters it uses only as
 				   branch targets and on pc (twin_params) */
 	unsigned *macro_mem;	/* per macro: the parameters (bit n-1 for \n) its body
@@ -1309,7 +1309,7 @@ struct state {
 				   target (branch_const_flags) */
 	unsigned *macro_ops;	/* per macro: the parameters (bit n-1 for \n) its body
 				   uses as an operation (b\2, \1.w): mnemonic arguments */
-	/* as's MRI mode aligns at any directive after an odd dc.b, a line
+	/* gas's MRI mode aligns at any directive after an odd dc.b, a line
 	 * marker too: after byte data (maybe_odd) the lines put before a
 	 * statement (line_before) get no marker; one is owed, written before
 	 * the next statement that aligns anyway (aligning: an instruction,
@@ -1321,7 +1321,7 @@ struct state {
 	int nshapes;
 	char **gl;		/* the labels defined with ':' (scan_labels) */
 	int ngl;
-	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
+	char **mren_from, **mren_to;	/* macros renamed: gas's macro names ignore case */
 	int nmren;
 	int c32;		/* -d c32: C 3.2's R68's encodings */
 	int ucc95;		/* -d ucc95: Ultra C's r68 of 1994-95, code padded with zeros */
@@ -1335,7 +1335,7 @@ static struct state st;
 
 /* Whether the names of expression text S are all equ or set names whose
  * values were known where they were defined (st.complete), numbers aside:
- * as has its value there (a set to a name defined later would be 0). */
+ * gas has its value there (a set to a name defined later would be 0). */
 static int expr_complete(const char *s)
 {
 	for (const char *p = s; *p;) {
@@ -1691,7 +1691,7 @@ static int label_alias(char sec, char *name, size_t size)
  * one relocation takes it as it is. A label of this source in it (one,
  * added, with external names: Block+Field) is its section's alias in the
  * note (label_alias), (label-alias) added to the symbol: the label's
- * offset, which as computes. */
+ * offset, which gas computes. */
 static char *r68x_expression(const char *s)
 {
 	struct lin v = { { NULL, 0 }, 0, 1, s, NULL, 0, 0 };
@@ -1701,7 +1701,7 @@ static char *r68x_expression(const char *s)
 		/* not PC-relative (Table+Off(pc)): the linkers make the
 		 * expression's symbol absolute, which a PC-relative
 		 * relocation can't take (r68's ROF has the distance in the
-		 * bytes and Off absolute, which as can't write) */
+		 * bytes and Off absolute, which gas can't write) */
 		if (v.labc != 1 || v.x.n == 0 || twin_mode ||
 		    !label_alias(label_section(v.lab, v.labn), alias, sizeof alias))
 			v.ok = 0;
@@ -1747,7 +1747,7 @@ static char *r68x_expression(const char *s)
  * link-time expression whatever names the arguments are (a macro's
  * \1+\1+\1+\1+256*4, 4*\1): .Lr68xm<k> plus the numbers, an alias that
  * each call sets for its arguments before the expansion (macro_aliases;
- * as keeps the value an earlier use saw); <k> numbers the macro's
+ * gas keeps the value an earlier use saw); <k> numbers the macro's
  * distinct expressions of terms (two lines may share one). Null if
  * it isn't one: another symbol of the source, another operator, one
  * term. */
@@ -1951,7 +1951,7 @@ static const char *data_section(int initialized)
  * same source the counter less LABEL's address (a negated reference, which
  * ELF can't express: an error, see parse_unary). Written into B as the
  * former, from the section's start (r68__bdata, r68__bbss in the prelude);
- * as leaves such a symbol out of its object, so it is also noted for
+ * gas leaves such a symbol out of its object, so it is also noted for
  * m68k-os9-r68, which adds it (.r68dlv, in translate's prelude). 0 if A is
  * not of that form (or the label is in a remote section). */
 static int dot_less_vsect(struct buf *b, const char *name, const char *a, size_t n)
@@ -2153,7 +2153,7 @@ static void translate_file(const char *path, FILE *out, int depth);
 
 /* Whether name S (N chars), in an expression, is a set symbol not set yet
  * (outside macro bodies, which expand later): r68 takes its final value
- * there, as must as (NAME__final, defined at the end). */
+ * there, gas must take it too (NAME__final, defined at the end). */
 static int forward_set(const char *s, size_t n)
 {
 	if (st.in_macro)
@@ -2270,7 +2270,7 @@ static const char *strcasestr_(const char *s, const char *t)
 }
 
 /* The CPU an instruction needs (10 for the 68010 ... 60), 0 for any:
- * r68 takes every instruction whatever its -m, as doesn't. */
+ * r68 takes every instruction whatever its -m, gas doesn't. */
 static int cpu_needed(const char *base, char size, const char *args)
 {
 	static const struct { const char *name; int level; } table[] = {
@@ -2348,10 +2348,10 @@ static int global_label(const char *s, size_t n)
 }
 
 /* A global label of this source in a PC-relative operand or as a branch
- * target: r68 resolves it in the file, as resolves a global symbol only at
+ * target: r68 resolves it in the file, gas resolves a global symbol only at
  * link time (a relocation; an error in an 8-bit field, as (pc,Xn) and .s
  * branches have). Written as NAME__r68pc, a local equate of NAME (epilogue),
- * which as resolves. */
+ * which gas resolves. */
 static void put_twin(struct buf *b, const char *s, size_t n)
 {
 	struct buf t = { 0 };
@@ -3061,7 +3061,7 @@ static int source_constant(const char *s, size_t n)
 }
 
 /* Whether expression S (N chars) has only numbers and names equated so
- * far, so that as can compute it (and mask it: r68 writes a move.b
+ * far, so that gas can compute it (and mask it: r68 writes a move.b
  * immediate as its low byte, $00nn, as the whole value, $FF7F for ^$80). */
 /* Whether expression S (N chars) uses the location counter: a * where an
  * operand starts (not a multiplication). */
@@ -3111,7 +3111,7 @@ static int small_number(const char *s, size_t n)
 }
 
 /* A moveq value of a number 128..255 added to more terms ($80+Ext):
- * r68 takes the byte, as wants -128..127. */
+ * r68 takes the byte, gas wants -128..127. */
 static int moveq_high_sum(const char *s, size_t n)
 {
 	const char *p = s, *end = s + n;
@@ -3464,7 +3464,7 @@ static int is_macro(const char *op)
 
 /* A macro call's arguments: a quoted one passes its text without the
  * quotes in r68, as <...> does in MRI; the others as operands. */
-/* S as a macro argument in <...>: as's MRI macros take ! there as an escape,
+/* S as a macro argument in <...>: gas's MRI macros take ! there as an escape,
  * and count < and > ("HELLO!", a shift): those escaped. */
 static void put_angle(struct buf *b, const char *s, size_t n)
 {
@@ -3530,7 +3530,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		b = &arg;
 		if (lens[i] == 0 && k > 1) {
 			/* an empty argument (MAC X,Y,,,,,,,): <>, as
-			 * as's MRI macros drop a bare one, which counts in r68's
+			 * gas's MRI macros drop a bare one, which counts in r68's
 			 * \# and moves the later ones */
 			angled = 1;
 		} else if (lens[i] >= 2 && ((pieces[i][0] == '"' && pieces[i][lens[i] - 1] == '"') ||
@@ -3539,7 +3539,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			 * (MAC '@7' with #'\1' in the body: '@7'); in "...",
 			 * a backslash takes the next character, and a string
 			 * left in it ("\"ABC: \"", a macro's for a dc.b
-			 * \1) is one in as's quotes, '...' */
+			 * \1) is one in gas's quotes, '...' */
 			const char *a = pieces[i] + 1;
 			size_t an = lens[i] - 2;
 			if (pieces[i][0] == '"' && memchr(a, '\\', an) != NULL) {
@@ -3581,7 +3581,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			free(t.s);
 		} else if (memchr(pieces[i], '=', lens[i]) != NULL) {
 			/* = (Mac >150,=,.b,V_Done(a2)): a keyword argument
-			 * to as's macros; in <> */
+			 * to gas's macros; in <> */
 			bput(b, pieces[i], lens[i]);
 			angled = 1;
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
@@ -3601,7 +3601,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 		} else if (lens[i] > 0 && (isalpha((unsigned char)pieces[i][0]) || pieces[i][0] == '_') &&
 			   strspn(pieces[i], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$") == lens[i] &&
 			   clashes(pieces[i], lens[i])) {
-			/* a name as takes for a register (TC: a bit TC,
+			/* a name gas takes for a register (TC: a bit TC,
 			 * which the body makes mTC and bTC): as it is, a part
 			 * of the names the body makes (NAME__r68 made bTC__r68) */
 			bput(b, pieces[i], lens[i]);
@@ -3635,7 +3635,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			/* through r68L, which passes it on in <> again: its
 			 * !, < and > escaped twice (Mac Hdr_,Err!) */
 			/* and in <> on the r68L call line too: <!<...!>> (Mac
-			 * >150,=,...: as took a bare = for a keyword argument;
+			 * >150,=,...: gas took a bare = for a keyword argument;
 			 * Mac Abcd,k<>0 lost its <>) */
 			bputs(b, "<!<");
 			for (const char *c = t; *c; c++) {
@@ -3889,7 +3889,7 @@ static int uses_narg(const char *text)
 }
 
 /* A call of macro NAME with ARGS whose body uses \#: where an argument is
- * empty, which r68's \# counts and as's NARG doesn't (MAC
+ * empty, which r68's \# counts and gas's NARG doesn't (MAC
  * X,Y,,,,,,, has 9), r68__narg set to r68's count and r68__nset
  * to 1, on lines before (line_before), which the expansion's first lines
  * take instead of NARG (r68__n\@, so that a call in the body doesn't
@@ -4071,7 +4071,7 @@ static void movem_operands(struct buf *b, const char *args)
 		if (i)
 			bputc(b, ',');
 		if (pieces[i][0] == '#' && predec && i == 0) {
-			/* The mask's bit order reversed, by as itself: a symbol for
+			/* The mask's bit order reversed, by gas itself: a symbol for
 			 * it in the epilogue. */
 			struct buf e = { 0 };
 			expression(&e, pieces[i] + 1, lens[i] - 1);
@@ -4178,7 +4178,7 @@ static int rept_of_bytes(const char *args)
 /* -d c32: add, sub, and, or and cmp with an immediate source and a data
  * register destination, written without the i: C 3.2's R68 uses the
  * <ea>,Dn form with the immediate as its operand (and.l #2,d0: $C0BC
- * $00000002), as and Ultra C's r68 the immediate instructions (ANDI:
+ * $00000002), gas and Ultra C's r68 the immediate instructions (ANDI:
  * $0280 ...). Written as words: the opcode, then the immediate (through
  * the prelude's r68imml for a long, r68immb for a byte of an external).
  * 1 if done. */
@@ -4194,7 +4194,7 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 			op = ops[i].op;
 	/* adda/suba #imm,An (add/sub to an address register too): C 3.2's
 	 * R68 writes ADDA/SUBA with the immediate also for #1..#8, where
-	 * as and Ultra C's r68 make ADDQ/SUBQ */
+	 * gas and Ultra C's r68 make ADDQ/SUBQ */
 	int addr = 0;
 	if (strcmp(base, "adda") == 0)
 		op = 0xD000, addr = 1;
@@ -4235,10 +4235,48 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 
 static int names_external(const char *s, size_t n);
 
+/* Operand E (EN chars) as an effective address of the simple kinds: a data or
+ * address register, (An), (An)+, -(An), d(An); its mode and register, and for
+ * d(An) the displacement (*DISP, *DN chars, else null). 1 if it is one. */
+static int simple_ea(const char *e, size_t en, int *mode, int *reg, const char **disp, size_t *dn)
+{
+	int r;
+	*disp = NULL;
+	*dn = 0;
+	if ((r = reg_number(e, en)) >= 0) {
+		*mode = r >= 8 ? 1 : 0;
+	} else if (en >= 4 && e[0] == '(' && e[en - 1] == ')' && (r = reg_number(e + 1, en - 2)) >= 8) {
+		*mode = 2;
+	} else if (en >= 5 && e[0] == '(' && e[en - 1] == '+' && e[en - 2] == ')' &&
+		   (r = reg_number(e + 1, en - 3)) >= 8) {
+		*mode = 3;
+	} else if (en >= 5 && e[0] == '-' && e[1] == '(' && e[en - 1] == ')' && (r = reg_number(e + 2, en - 3)) >= 8) {
+		*mode = 4;
+	} else {
+		const char *lp = memchr(e, '(', en);
+		if (lp == NULL || lp == e || e[en - 1] != ')' || (r = reg_number(lp + 1, (size_t)(e + en - 1 - lp - 1))) < 8)
+			return 0;
+		*mode = 5;
+		*disp = e;
+		*dn = (size_t)(lp - e);
+	}
+	*reg = r & 7;
+	return 1;
+}
+
+/* Whether immediate V (VN chars) is a constant of the source that isn't known
+ * here (a difference of labels, an equate further on): neither known yet,
+ * nor naming an external, a macro parameter or the location. */
+static int later_value(const char *v, size_t vn)
+{
+	return !known_value(v, vn) && !names_external(v, vn) && memchr(v, '\\', vn) == NULL &&
+		!has_location(v, vn);
+}
+
 /* addq/subq #VALUE,<ea> where VALUE isn't known yet but is a constant of the
- * source (a difference of two vsect labels, #OffP-OnP): as wants the 3-bit
+ * source (a difference of two vsect labels, #OffP-OnP): gas wants the 3-bit
  * field's value at once, r68 takes it; written as words, the value in the
- * field by an expression as resolves at the end ((v&7)<<9: 8 as 0; no
+ * field by an expression gas resolves at the end ((v&7)<<9: 8 as 0; no
  * check of 1..8). Data and address registers, (An), (An)+, -(An), d(An).
  * 1 if done. */
 static int quick_words(struct buf *out, const char *labs, const char *base, char size, const char *args,
@@ -4253,31 +4291,11 @@ static int quick_words(struct buf *out, const char *labs, const char *base, char
 		return 0;
 	const char *v = pieces[0] + 1;
 	size_t vn = lens[0] - 1;
-	if (known_value(v, vn) || names_external(v, vn) || memchr(v, '\\', vn) != NULL)
+	int mode, reg;
+	const char *disp;
+	size_t dn;
+	if (!later_value(v, vn) || !simple_ea(pieces[1], lens[1], &mode, &reg, &disp, &dn))
 		return 0;
-	const char *e = pieces[1];
-	size_t en = lens[1];
-	int mode, reg, r;
-	const char *disp = NULL;
-	size_t dn = 0;
-	if ((r = reg_number(e, en)) >= 0) {
-		mode = r >= 8 ? 1 : 0;
-		reg = r & 7;
-	} else if (en >= 4 && e[0] == '(' && e[en - 1] == ')' && (r = reg_number(e + 1, en - 2)) >= 8) {
-		mode = 2, reg = r & 7;
-	} else if (en >= 5 && e[0] == '(' && e[en - 1] == '+' && e[en - 2] == ')' &&
-		   (r = reg_number(e + 1, en - 3)) >= 8) {
-		mode = 3, reg = r & 7;
-	} else if (en >= 5 && e[0] == '-' && e[1] == '(' && e[en - 1] == ')' && (r = reg_number(e + 2, en - 3)) >= 8) {
-		mode = 4, reg = r & 7;
-	} else {
-		const char *lp = memchr(e, '(', en);
-		if (lp == NULL || lp == e || e[en - 1] != ')' || (r = reg_number(lp + 1, (size_t)(e + en - 1 - lp - 1))) < 8)
-			return 0;
-		mode = 5, reg = r & 7;
-		disp = e;
-		dn = (size_t)(lp - e);
-	}
 	if (mode == 1 && size == 'b')
 		return 0;
 	int s = size == 'b' ? 0 : size == 'l' ? 2 : 1;
@@ -4285,6 +4303,65 @@ static int quick_words(struct buf *out, const char *labs, const char *base, char
 	struct buf x = { 0 };
 	expression(&x, v, vn);
 	bprintf(out, "%s dc.w $%04X!((((%s)&7))<<9)", labs, word, x.s);
+	free(x.s);
+	if (disp != NULL) {
+		bputc(out, ',');
+		expression(out, disp, dn);
+	}
+	bputs(out, rest);
+	annotate = 1;
+	return 1;
+}
+
+/* A byte immediate known only later (andi.b #L1-L2,d0, ori.b #Fw,(a0) with Fw
+ * an equate further on) in ori, andi, subi, addi, eori, cmpi .b, to ccr, and
+ * or, and, sub, add, eor, cmp .b (which are those; not C 3.2's <ea>,Dn form,
+ * c32_immediate): both Microware assemblers write the whole value as the
+ * extension word ($FFFE for -2; checked 2026-10-15), gas only its low byte
+ * where it learns the value at the end ($00FE). Written as words, the value
+ * as a word by an expression gas resolves at the end: the opcode, the value,
+ * the displacement of d(An). Data registers, (An), (An)+, -(An), d(An), ccr.
+ * 1 if done. */
+static int byte_imm_words(struct buf *out, const char *labs, const char *base, char size, const char *args,
+			  const char *rest)
+{
+	static const struct { const char *i, *alu; unsigned op; } ops[] = {
+		{ "ori", "or", 0x0000 }, { "andi", "and", 0x0200 }, { "subi", "sub", 0x0400 },
+		{ "addi", "add", 0x0600 }, { "eori", "eor", 0x0A00 }, { "cmpi", "cmp", 0x0C00 },
+	};
+	int k = -1;
+	for (int i = 0; i < (int)(sizeof ops / sizeof *ops); i++)
+		if (strcmp(base, ops[i].i) == 0 || strcmp(base, ops[i].alu) == 0)
+			k = i;
+	if (k < 0)
+		return 0;
+	const char *pieces[4];
+	size_t lens[4];
+	if (split_commas(args, strlen(args), pieces, lens, 4) != 2 || pieces[0][0] != '#')
+		return 0;
+	const char *v = pieces[0] + 1;
+	size_t vn = lens[0] - 1;
+	if (!later_value(v, vn))
+		return 0;
+	int ccr = (lens[1] == 3 && strncasecmp(pieces[1], "ccr", 3) == 0) ||
+		(lens[1] == 2 && strncasecmp(pieces[1], "cc", 2) == 0);
+	int mode, reg;
+	const char *disp = NULL;
+	size_t dn = 0;
+	unsigned word;
+	if (ccr) {
+		/* ori, andi, eori to ccr; the others have no such form */
+		if ((size != 0 && size != 'b') || (ops[k].op != 0x0000 && ops[k].op != 0x0200 && ops[k].op != 0x0A00))
+			return 0;
+		word = ops[k].op | 0x3C;
+	} else {
+		if (size != 'b' || !simple_ea(pieces[1], lens[1], &mode, &reg, &disp, &dn) || mode == 1)
+			return 0;
+		word = ops[k].op | (unsigned)mode << 3 | (unsigned)reg;
+	}
+	struct buf x = { 0 };
+	expression(&x, v, vn);
+	bprintf(out, "%s dc.w $%04X,(%s)", labs, word, x.s);
 	free(x.s);
 	if (disp != NULL) {
 		bputc(out, ',');
@@ -4440,11 +4517,11 @@ static int next_is_label(const char *name)
  * operand (movea.l #Ext-*-(End-Here+2),a2: a linker symbol's distance
  * from the instruction), in instruction OP with operands ARGS, labels LABS
  * and comment REST, size SIZE (l or w): both r68s write a PC-relative
- * reference (R_68K_PC32, PC16) on the immediate; as can't take an
+ * reference (R_68K_PC32, PC16) on the immediate; gas can't take an
  * external less *. Written into OUT as the instruction with 0 there and
  * the relocation by .reloc, the addend (2, the field's offset from *, and
  * the rest of the expression) an equate, which may name later labels.
- * Not after byte data with labels (as would align between the labels and
+ * Not after byte data with labels (gas would align between the labels and
  * the instruction's own); 0 if ARGS isn't of that form. */
 static int pc_immediate(const char *op, const char *args, const char *labs, const char *rest, char size,
 			struct buf *out)
@@ -4498,7 +4575,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	string_params = st.in_macro;
 	st.aligning = 0;
 	/* \' in a macro body is a quote when the body expands
-	 * (MAC.w #\'@7\'), which as would read as an escaped quote and run
+	 * (MAC.w #\'@7\'), which gas would read as an escaped quote and run
 	 * the string past endm: a quote here; \\' too (MAC.l #\\'????\\',
 	 * whose escaped backslash came out as \' as well) */
 	char *unesc = NULL;
@@ -4646,7 +4723,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			size_t lens[8];
 			int k = split_commas(l.args, strlen(l.args), pieces, lens, 8);
 			for (int i = 1; i < k && i < 7; i++) {
-				/* equ of the expression in parentheses: as keeps it
+				/* equ of the expression in parentheses: gas keeps it
 				 * as an expression, to be resolved at the end, of the
 				 * set symbols as they are here (a bare name set to
 				 * something not yet known would be its value now, 0) */
@@ -4692,7 +4769,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.section = ".text";
 		} else {
 			st.in_psect = 0;
-			/* a label alone, which as's MRI mode doesn't align at
+			/* a label alone, which gas's MRI mode doesn't align at
 			 * (a set would be): whether this ends is assembled, for
 			 * the padding (r68__ended); in a macro body once, for
 			 * the first expansion that gets there */
@@ -4714,7 +4791,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "ttl") == 0 || strcmp(base, "spc") == 0 || strcmp(base, "page") == 0) {
-		/* after byte data a comment: as aligns at a directive there
+		/* after byte data a comment: gas aligns at a directive there
 		 * (a ttl after a use file's Name dc.b ...,0) */
 		if (st.maybe_odd)
 			bprintf(out, "*%s", text);
@@ -4738,9 +4815,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				/* -s: the used file translated into an output of its
 				 * own, with .mri 1 and the macros it defines moved to
 				 * its start (as the inline output's to the source's),
-				 * and included. Inline after byte data (as aligns at
+				 * and included. Inline after byte data (gas aligns at
 				 * an include there, see maybe_odd) and in a macro body
-				 * (as would include it at each expansion). */
+				 * (gas would include it at each expansion). */
 				struct buf saved = hoisted;
 				memset(&hoisted, 0, sizeof hoisted);
 				FILE *t = tmpfile();
@@ -4770,7 +4847,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			if (!include)
 				translate_file(found, fp, depth + 1);
 			/* The next line is the including file's next; after byte
-			 * data the marker is owed (as aligns at it, see maybe_odd)
+			 * data the marker is owed (gas aligns at it, see maybe_odd)
 			 * and written before the next statement that aligns. */
 			if (st.maybe_odd) {
 				bputs(out, "*");
@@ -4783,7 +4860,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "fail") == 0) {
-		/* An error with the rest of the line as its text (as's fail
+		/* An error with the rest of the line as its text (gas's fail
 		 * takes an expression). */
 		const char *t = strstr(text, l.op) + strlen(l.op);
 		while (*t == ' ' || *t == '\t')
@@ -4798,7 +4875,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	}
 	if (strcmp(base, "rept") == 0 && rept_of_bytes(l.args)) {
 		/* rept N around one dc line: that line's list N times (the
-		 * rept and endr lines comments). In MRI mode as aligns before
+		 * rept and endr lines comments). In MRI mode gas aligns before
 		 * a rept after an odd number of bytes, r68 doesn't
 		 * (dc.b 0, then Tab rept 23 dc.b ... endr);
 		 * and a label on the rept in a vsect belongs to the data that
@@ -4932,7 +5009,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	if (st.in_macro && !st.macro_variant && !dc_split && strcmp(base, "dc") == 0 && size == 'b' &&
 	    param_string_element(l.args)) {
 		/* A string of a parameter alone ("\2"): r68 makes no byte of
-		 * an empty argument, as reads '' as a quote. The line split,
+		 * an empty argument, gas reads '' as a quote. The line split,
 		 * each such string in ifnc '\N','' (exempt from MRI's
 		 * alignment after an odd dc.b, as conditionals are). */
 		const char *pieces[64];
@@ -5106,7 +5183,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "equ") == 0 && l.label && strcmp(l.args, "*") == 0 && !st.in_vsect) {
-		/* label equ *: a plain label (as can't relax a branch to a
+		/* label equ *: a plain label (gas can't relax a branch to a
 		 * global symbol equated to "*"). */
 		bprintf(out, "%s%s", labs, rest);
 		goto done;
@@ -5129,7 +5206,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			labs = lab.s;
 			free(nm.s);
 		} else if (strcmp(base, "macro") == 0 && l.label != NULL && macro_name_clash(l.label)) {
-			/* r68's macro names are case sensitive, as's aren't: a
+			/* r68's macro names are case sensitive, gas's aren't: a
 			 * name that only the case tells from one of the prelude's
 			 * (OS9, which calls os9) or from another macro is
 			 * defined as NAME__r68m<n>, and called so. */
@@ -5156,7 +5233,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.mren_to[st.nmren++] = xstrdup(lab.s);
 		}
 		/* r68 takes an endc in a macro body that closes nothing (a
-		 * board's definitions file), as doesn't: dropped. */
+		 * board's definitions file), gas doesn't: dropped. */
 		if (strcmp(base, "macro") == 0) {
 			st.in_macro = 1;
 			st.macro_ifs = 0;
@@ -5164,7 +5241,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.in_macro = 0;
 			/* conditionals the body leaves open (an iflt ... else
 			 * without endc): r68 keeps them open after the call,
-			 * the rest of the source in them; as refuses the
+			 * the rest of the source in them; gas refuses the
 			 * macro. Closed here, r68__mo set where the body ends
 			 * in an assembled part; each call followed by ifne
 			 * r68__mo, open to the end of the source (macro_open). */
@@ -5180,7 +5257,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.cond_depth++;
 		} else if (!st.in_macro && strcmp(base, "endc") == 0) {
 			/* An endc that closes nothing (also
-			 * outside macros): r68 ignores it, as doesn't: dropped. */
+			 * outside macros): r68 ignores it, gas doesn't: dropped. */
 			if (st.cond_depth == 0) {
 				bprintf(out, "*%s", text);
 				goto done;
@@ -5201,7 +5278,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.section = NULL;
 		if ((strcmp(base, "ifdef") == 0 || strcmp(base, "ifndef") == 0) && is_macro(l.args)) {
 			/* ifndef Flag, a macro's name (a use file's guard): r68 knows
-			 * macros there, as only symbols: the one each macro
+			 * macros there, gas only symbols: the one each macro
 			 * statement sets */
 			struct buf nm = { 0 };
 			put_symbol(&nm, macro_orig(l.args), strlen(macro_orig(l.args)));
@@ -5213,7 +5290,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (strcmp(base, "ifp1") == 0) {
 			/* r68's first pass only (defsfile: ifp1, use
 			 * oskdefs.d, endc): its definitions hold in the
-			 * second; as has one pass */
+			 * second; gas has one pass */
 			bprintf(out, "%s ifne 1%s", labs, rest);
 			annotate_op = 1;
 			goto done;
@@ -5267,7 +5344,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (strcmp(base, "macro") == 0) {
 			/* r68's macro takes no operand: what follows is a comment
 			 * (MAC macro * for old ...), which
-			 * as would take for a parameter list */
+			 * gas would take for a parameter list */
 			if (*l.args)
 				bprintf(out, ";%s", l.args);
 		} else if (strcmp(base, "ifc") == 0 || strcmp(base, "ifnc") == 0) {
@@ -5348,9 +5425,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (st.c32 && !st.in_macro && is_branch(base) && (size == 's' || size == 'b') && short_external(l.args)) {
 			/* -d c32: a short branch to an external (bcs.s ext): C 3.2's
 			 * R68 writes an 8-bit PC-relative reference that l68
-			 * resolves (Ultra C's refuses it); as computes the byte in
+			 * resolves (Ultra C's refuses it); gas computes the byte in
 			 * place and refuses. The opcode and a 0, the relocation
-			 * by .reloc: as checks even a PC-relative byte against an
+			 * by .reloc: gas checks even a PC-relative byte against an
 			 * undefined symbol for its range, its position subtracted
 			 * (a branch beyond the section's first 128 bytes refused) */
 			static const char *const cc[] = { "ra", "sr", "hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl",
@@ -5375,7 +5452,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* -b: a branch to the next statement's label, nothing
 			 * but blank and comment lines between (bra.s Done, then
 			 * Done): r68 leaves it out, bsr too (Ultra C's r68,
-			 * tested 2026-10-13); as would write a word branch */
+			 * tested 2026-10-13); gas would write a word branch */
 			bprintf(out, "%s%s", *labs ? labs : "*", rest);
 			annotate = 1;
 			goto done;
@@ -5404,35 +5481,35 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			annotate_op = 1;
 		} else if (st.branch_sizing && size != 'l' && is_branch(base) && local_label(l.args)) {
 			/* r68 -b sizes every branch to a label of this source, an
-			 * explicit .s or .w too; in MRI mode as sizes only jbra,
-			 * jb<cc> and jbsr. Not to an external label (as makes an
-			 * absolute jmp on the 68000), nor to a global one unless as
+			 * explicit .s or .w too; in MRI mode gas sizes only jbra,
+			 * jb<cc> and jbsr. Not to an external label (gas makes an
+			 * absolute jmp on the 68000), nor to a global one unless gas
 			 * relaxes those (-B). */
-			/* as has no jblo, jbhs */
+			/* gas has no jblo, jbhs */
 			snprintf(opb, sizeof opb, "j%s", strcmp(base, "blo") == 0 ? "bcs" : strcmp(base, "bhs") == 0 ? "bcc" : base);
 			op = opb;
 		} else if (strcmp(base, "movea") == 0 && size == 0 && !is_macro(l.op)) {
 			/* movea without a size: long in both Microware
-			 * assemblers (as: word); adda, suba, cmpa and move to an
+			 * assemblers (gas: word); adda, suba, cmpa and move to an
 			 * address register stay word in both (tested) */
 			snprintf(opb, sizeof opb, "movea.l");
 			op = opb;
 			annotate_op = 1;
 		} else if ((strcmp(base, "exg") == 0 || strcmp(base, "swap") == 0) && size) {
 			/* exg.l, swap.l: r68 takes the
-			 * size, as doesn't */
+			 * size, gas doesn't */
 			snprintf(opb, sizeof opb, "%s", base);
 			op = opb;
 			annotate_op = 1;
 		} else if (strcmp(base, "addi") == 0 || strcmp(base, "subi") == 0) {
-			/* r68 makes addi/subi #1..8 addq/subq; as does that for
+			/* r68 makes addi/subi #1..8 addq/subq; gas does that for
 			 * add/sub. */
 			snprintf(opb, sizeof opb, "%.3s%s", base, l.op + 4);
 			op = opb;
 			annotate_op = 1;
 		}
 		if (strcmp(base, "movep") == 0 && (l.args[0] == '(' || strstr(l.args, ",(") != NULL)) {
-			/* movep (a1),d0: r68 takes (An) as 0(An), as wants the
+			/* movep (a1),d0: r68 takes (An) as 0(An), gas wants the
 			 * displacement */
 			struct buf a = { 0 };
 			for (const char *c = l.args; *c; c++) {
@@ -5444,7 +5521,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			l.args = a.s;
 			annotate = 1;
 		}
-		/* move.l #n,Dn: r68 doesn't make it moveq, as would. */
+		/* move.l #n,Dn: r68 doesn't make it moveq, gas would. */
 		int no_moveq = strcmp(base, "move") == 0 && size == 'l';
 		/* move.b with a negative immediate: r68 writes the extension
 		 * word $00nn, as $FFnn (both $FFnn for andi.b and the others). */
@@ -5453,7 +5530,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		 * (andi.b #Ext,d0, andi #Ext,ccr; and.b #Ext,(a0), which are
 		 * them) and a bit number (btst #Ext,<ea>): both Microware
 		 * assemblers relocate the whole extension word (16 bits, $FFFE
-		 * for -2), as only the low byte (move.b keeps a byte). #0 and
+		 * for -2), gas only the low byte (move.b keeps a byte). #0 and
 		 * the prelude's r68rw before the instruction. Not with a macro
 		 * parameter (unknown). */
 		int word_imm = word_byte_imm(base, size, l.args) && !is_macro(l.op);
@@ -5530,6 +5607,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			goto done;
 		if (!is_macro(l.op) && quick_words(out, labs, base, size, l.args, rest))
 			goto done;
+		if (!is_macro(l.op) && byte_imm_words(out, labs, base, size, l.args, rest))
+			goto done;
 		size_t start = out->n;
 		bprintf(out, "%s %s ", labs, op);
 		int need = cpu_needed(base, size, l.args);
@@ -5552,7 +5631,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputc(out, ',');
 				/* A bare address (move.l a6,Space with Space
 				 * equ $c0): absolute long in both of Microware's
-				 * assemblers, as takes a short one for a small value.
+				 * assemblers, gas takes a short one for a small value.
 				 * Not a branch's target. */
 				int addr_op = memory_instruction(base);
 				/* the address without a bit field ({offset:width}:
@@ -5580,7 +5659,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				} else if (strcmp(base, "moveq") == 0 && i == 0 && pieces[i][0] == '#' &&
 					   known_value(pieces[i] + 1, lens[i] - 1) && !small_number(pieces[i] + 1, lens[i] - 1)) {
 					/* moveq #128..#255: r68 takes the byte (moveq #$80
-					 * gives -128), as wants -128..127. */
+					 * gives -128), gas wants -128..127. */
 					struct buf e = { 0 };
 					expression(&e, pieces[i] + 1, lens[i] - 1);
 					bprintf(out, "#((%s)&$ff)-(((%s)&$80)<<1)", e.s, e.s);
@@ -5589,7 +5668,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				} else if (strcmp(base, "moveq") == 0 && i == 0 && pieces[i][0] == '#' &&
 					   moveq_high_sum(pieces[i] + 1, lens[i] - 1)) {
 					/* moveq #$80+Ext (an external): the same byte
-					 * with the constant less 256, which as takes */
+					 * with the constant less 256, which gas takes */
 					bputs(out, "#-$100+(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputc(out, ')');
@@ -5617,9 +5696,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					operand(out, pieces[i] + alen, lens[i] - alen, 0);
 				} else
 					operand(out, pieces[i], lens[i], abs_here);
-				/* only where as could take it for moveq: a data register;
+				/* only where gas could take it for moveq: a data register;
 				 * and not with * in the value (#exit-*-8: a PC-relative
-				 * value, which as can't add another undefined term to) */
+				 * value, which gas can't add another undefined term to) */
 				int r1 = k == 2 ? reg_number(pieces[1], lens[1]) : -1;
 				if (no_moveq && i == 0 && pieces[i][0] == '#' && r1 >= 0 && r1 < 8 &&
 				    !has_location(pieces[i] + 1, lens[i] - 1)) {
@@ -5714,7 +5793,7 @@ static void translate_file(const char *path, FILE *out, int depth)
 	if (!read_text(path, &text))
 		die("cannot read %s", path);
 	/* after byte data (a use file of equates after a descriptor's
-	 * dc.b "Rbf",0) the marker is owed: as aligns at it (maybe_odd) */
+	 * dc.b "Rbf",0) the marker is owed: gas aligns at it (maybe_odd) */
 	if (depth > 0 && st.maybe_odd)
 		st.marker_owed = 1;
 	else
@@ -5737,7 +5816,7 @@ static void translate_file(const char *path, FILE *out, int depth)
 		int was_macro = st.in_macro, cond = st.cond_depth;
 		translate_line(raw, &line, path, lineno, out, depth);
 		/* A macro defined outside conditionals and other macros: moved
-		 * before the source (hoisted), as's MRI mode aligning at its
+		 * before the source (hoisted), gas's MRI mode aligning at its
 		 * macro statement after an odd dc.b (descriptor templates:
 		 * Mgr dc.b "Scf",0 then a Desc macro), which r68 doesn't;
 		 * a comment line keeps the source's line numbers. */
@@ -5780,9 +5859,9 @@ static void translate_file(const char *path, FILE *out, int depth)
 		} else {
 			fputs(whole.s, out);
 			/* A statement translated into several lines (psect: its
-			 * section and r68__sid): the next line's number, else as
+			 * section and r68__sid): the next line's number, else gas
 			 * counts each later line too high; after byte data owed
-			 * (as aligns at a marker), not in a macro body (replayed
+			 * (gas aligns at a marker), not in a macro body (replayed
 			 * by each expansion) */
 			const char *nl = strchr(whole.s, '\n');
 			if (nl != NULL && nl[1] != '\0' && !st.in_macro) {
@@ -5929,13 +6008,13 @@ static const char prelude[] =
 	" section .text\n"
 	"r68__btext\n";
 
-/* Whether a macro named NAME would clash in as, whose macro names ignore
+/* Whether a macro named NAME would clash in gas, whose macro names ignore
  * case: with a prelude macro or with a macro defined before whose name
  * differs from NAME only in case. */
 static int macro_name_clash(const char *name)
 {
-	/* as's own directives, which MRI mode knows without a dot and finds
-	 * before a macro (a macro ERROR: as's error, "argument must be a
+	/* gas's own directives, which MRI mode knows without a dot and finds
+	 * before a macro (a macro ERROR: gas's error, "argument must be a
 	 * string") */
 	static const char *const directives[] = { "error", "warning", "print", "fail", "abort", "include",
 		"incbin", "list", "nolist", "format", "noformat", "page", "nopage", "title", "sbttl", "eject",
@@ -5952,7 +6031,7 @@ static int macro_name_clash(const char *name)
 		if (strcasecmp(name, *d) == 0)
 			return 1;
 	/* and the instructions: r68's macro names are case sensitive, so
-	 * a macro ANDI leaves the instruction andi alone, as's call it */
+	 * a macro ANDI leaves the instruction andi alone, gas's call it */
 	static const char *const insns[] = { "abcd", "add", "adda", "addi", "addq", "addx", "and", "andi", "asl",
 		"asr", "bchg", "bclr", "bset", "btst", "bra", "bsr", "bhi", "bls", "bcc", "bcs", "bhs", "blo",
 		"bne", "beq", "bvc", "bvs", "bpl", "bmi", "bge", "blt", "bgt", "ble", "chk", "clr", "cmp", "cmpa",
@@ -5980,13 +6059,13 @@ static int macro_name_clash(const char *name)
 static void usage(void)
 {
 	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-r] [-y] [-s] [-x EXT] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
-	printf("  Translates a Microware r68 source to a GNU as source for as --mri\n");
+	printf("  Translates a Microware r68 source to a gas source for m68k-elfos9-as --mri\n");
 	printf("  (\".mri 1\" inside), keeping its line numbers; see r68togas.md.\n");
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
 	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060); also the\n");
 	printf("             padding of the sections (ucc: 2 with -m0, else 4, nop without -m)\n");
-	printf("  -b         r68's -b/-bt: branches to this source's labels sized by as\n");
-	printf("  -B         with -b: also to its global labels (as relaxes those)\n");
+	printf("  -b         r68's -b/-bt: branches to this source's labels sized by gas\n");
+	printf("  -B         with -b: also to its global labels (gas relaxes those)\n");
 	printf("  -r         r68's -r: registers only written with %% (%%d0); d0 is a symbol\n");
 	printf("  -y         r68's -y with -b (68020 and later): branches and PC-relative\n");
 	printf("             references to labels 32-bit\n");
@@ -6035,10 +6114,11 @@ int main(int argc, char **argv)
 				bputs(&defs, "1");
 			bputc(&defs, '\n');
 			/* a name of the source, a constant: not external in a sum
-			 * of two (-a=BASE=.. -a=SIZE=..: #BASE+SIZE) */
+			 * of two (-a=BASE=.. -a=SIZE=..: #BASE+SIZE). As an
+			 * equate, not a set symbol: a set symbol used before its
+			 * last set is SYM__final, defined at the end, which a
+			 * conditional (ifdef SYM, ifne SYM) sees too late */
 			char *name = xstrndup(d, n);
-			st.sets = xrealloc(st.sets, (st.nsets + 1) * sizeof *st.sets);
-			st.sets[st.nsets++] = xstrdup(name);
 			add_equate(name);
 			note_value(name, eq ? eq + 1 : "1");
 			free(name);
@@ -6128,7 +6208,7 @@ int main(int argc, char **argv)
 	}
 	/* The translation goes to a temporary file first: the psect's name,
 	 * known at its end, is written first, as .file before .mri 1 (a .mri 0
-	 * later would make as expand earlier MRI macros' strings wrongly). */
+	 * later would make gas expand earlier MRI macros' strings wrongly). */
 	FILE *final = out;
 	out = tmpfile();
 	if (out == NULL)
@@ -6186,7 +6266,7 @@ int main(int argc, char **argv)
 		}
 		st.nlocals = k;
 		if (st.relax_globals) {
-			/* -B: as sizes branches to global labels too */
+			/* -B: gas sizes branches to global labels too */
 			for (int j = 0; j < nglobals; j++) {
 				st.locals = xrealloc(st.locals, (st.nlocals + 1) * sizeof *st.locals);
 				st.locals[st.nlocals++] = globals[j];
@@ -6197,17 +6277,17 @@ int main(int argc, char **argv)
 	translate_file(source, out, 0);
 	r68x_ok = 0;
 	/* A psect without ends: the end of its code, before the line marker
-	 * (which as aligns after an odd dc.b, as any directive) */
+	 * (which gas aligns after an odd dc.b, as any directive) */
 	/* Without ends where the source has none outside conditionals; where
 	 * one is in a conditional or a macro body (after a call of a macro
 	 * leaving a conditional open, which can leave the rest of the source
-	 * out), as tells: r68__ended. */
+	 * out), gas tells: r68__ended. */
 	int open_conds = st.cond_depth;
 	int maybe_ends = pad_alignment() == 4 && !st.in_vsect && (st.section == NULL || same_section(".text"));
 	int no_ends = maybe_ends && st.in_psect && st.cond_depth == 0;
 	int dyn_ends = maybe_ends && !no_ends && st.npsects > 0 && (st.ends_cond || st.cond_depth > 0);
 	/* r68 ends a source in a conditional without a word
-	 * (ifne DEBUG): closed here, as doesn't. */
+	 * (ifne DEBUG): closed here, gas doesn't. */
 	if (st.cond_depth > 0)
 		fprintf(out, "* closing %d conditional%s the source leaves open, as r68 does\n", st.cond_depth,
 			st.cond_depth > 1 ? "s" : "");
@@ -6247,7 +6327,7 @@ int main(int argc, char **argv)
 			/* A psect without ends (descriptors of 1992-1994 ported
 			 * trees): Ultra C's r68 fills an odd size with zeros to
 			 * 4, an even one as with ends (measured 2026-10-11). The
-			 * line marker added the zero byte (as's MRI alignment
+			 * line marker added the zero byte (gas's MRI alignment
 			 * after an odd dc.b), ds.b the rest where the size at
 			 * r68__pend was 1 mod 4. The label is on a ds.b, which
 			 * isn't aligned (a label alone would move with the
@@ -6258,9 +6338,12 @@ int main(int argc, char **argv)
 		} else {
 			fprintf(out, " section .text\n balignw %d,$%04X\n", to, fill);
 		}
-		fprintf(out, " section .data\n balign %d,0\n section .bss\n balign %d\n", to, to);
+		/* Ultra C's r68 of 1994-95: the vsect's sections to 2 (measured
+		 * 2026-10-15: a driver's statics after two others' at $86) */
+		int dto = st.ucc95 ? 2 : to;
+		fprintf(out, " section .data\n balign %d,0\n section .bss\n balign %d\n", dto, dto);
 		if (st.used_remote)
-			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", to, to);
+			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", dto, dto);
 		fputs(" section .text\n", out);
 	}
 	fputs(st.macro_syms.s ? st.macro_syms.s : "", out);
@@ -6332,7 +6415,7 @@ int main(int argc, char **argv)
 		/* the link-time expressions' definitions (r68x_note.h), not loaded */
 		fprintf(final, " .section " R68X_SECTION ",\"\"\n .ascii \"%s\"\n .text\n", r68x_notes.s);
 	if (st.ndlvs > 0) {
-		/* the .-LABEL symbols (dot_less_vsect), which as leaves out: each
+		/* the .-LABEL symbols (dot_less_vsect), which gas leaves out: each
 		 * one's value as a relocation in .r68dlv, its name and whether
 		 * global in .r68dlvn, for m68k-os9-r68 to add it */
 		fputs(" .section .r68dlv,\"\"\n", final);

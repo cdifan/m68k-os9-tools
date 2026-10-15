@@ -1,0 +1,23 @@
+* A byte immediate known only later (a difference of labels further on, an equate further on)
+* in andi, ori, cmpi, addi .b, or.b (ori.b), to ccr: the whole value as the extension word, as
+* both Microware assemblers write it ($FFFE for -2; checked 2026-10-15 with Ultra C's r68);
+* before, gas wrote only its low byte ($00FE). move.b keeps $00FE, as in both; a bit number is
+* the same either way (0 to 31).
+* fixed: FIXME
+* expect text: 0200fffe 02010002 0002fffd 0c28fffd0004 023cfffe 08d10002 0604fffe 0006fffe 1e3c00fe 4e71 4e71 4e71
+ psect byte_imm_later,0,0,0,0,0
+ andi.b #Lab_a-Lab_b,d0
+ andi.b #Lab_b-Lab_a,d1
+ ori.b #Val_a,d2
+ cmpi.b #Val_a,4(a0)
+ andi #Lab_a-Lab_b,ccr
+ bset #Lab_b-Lab_a,(a1)
+ addi.b #Lab_a-Lab_b,d4
+ or.b #Lab_a-Lab_b,d6
+ move.b #Lab_a-Lab_b,d7
+Lab_a
+ nop
+Lab_b
+ nop
+Val_a equ -3
+ ends

@@ -1,5 +1,5 @@
 * Labels named like registers (a1, D0:): both r68s take them, and they are symbols in expressions
-* (#a1, dc.l D0); as refused them ("already defined"). Renamed with __r68 where the source
+* (#a1, dc.l D0); gas refused them ("already defined"). Renamed with __r68 where the source
 * defines such a name, given back in the object's global symbols.
 * fixed: e0b4e33 2026-10-12 r68togas: labels and equates named like r68's registers
 * expect sym: D D0 00000003

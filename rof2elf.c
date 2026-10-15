@@ -388,12 +388,17 @@ parse_rof (In *in, Rof *r)
    count entries, -1 ends a list.  Each psect's code is followed by its
    initialized data, remote
    initialized data and debug information, as in a ROF; its local
-   references are a count and the references, as in a ROF.  */
+   references are a count and the references, as in a ROF.
+   Ultra C 1.x's libgen (1993-95, the libraries of OS-9 V3.0 and PC Bridge
+   2.1) wrote an older layout, ID $2D00D5BB: the header without the
+   reserved 4 bytes (42), the psect entries without the field after the
+   stack size (62), the reference entries with a 2-byte count (14); the
+   rest the same (found 2026-10-15 by comparing two editions of a
+   library; such a library converted to the later layout links
+   identically).  */
 #define LIBGEN_ID	0x2D00D5BC
-#define LIBGEN_HEADER	46
+#define LIBGEN_ID_OLD	0x2D00D5BB
 #define LIBGEN_DEF	22
-#define LIBGEN_PSECT1	66
-#define LIBGEN_REF	16
 #define LIBGEN_END	0xFFFFFFFF
 
 /* The bytes at OFFSET of data of SIZE, holding N items of ITEM bytes.  */
@@ -422,7 +427,7 @@ lib16 (const unsigned char *p)
 static int
 is_libgen (const unsigned char *data, size_t size)
 {
-  return size >= 4 && lib32 (data) == LIBGEN_ID;
+  return size >= 4 && (lib32 (data) == LIBGEN_ID || lib32 (data) == LIBGEN_ID_OLD);
 }
 
 /* The references of a libgen reference list: COUNT of them at OFFSET, each
@@ -492,6 +497,13 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
   const unsigned char *defs, *strs, *psects, *irefs, *erefs, *h;
   unsigned type;
   uint64_t at;
+  /* the layout: the later one, or Ultra C 1.x's (see LIBGEN_ID_OLD) */
+  int old = lib32 (data) == LIBGEN_ID_OLD;
+  const uint32_t LIBGEN_HEADER = old ? 42 : 46;
+  const uint32_t LIBGEN_PSECT1 = old ? 62 : 66;
+  const uint32_t LIBGEN_REF = old ? 14 : 16;
+  const uint32_t pf = old ? 4 : 0;	/* psect fields after the stack size */
+  const uint32_t rc = old ? 2 : 4;	/* a reference entry's count */
 
   if (size < LIBGEN_HEADER)
     die ("%s: truncated libgen library", file);
@@ -554,12 +566,12 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
       r->code = lib32 (e + 18);
       r->debug = lib32 (e + 22);
       r->stack = lib32 (e + 26);
-      codeoff = lib32 (e + 34);
-      locoff = lib32 (e + 38);
-      ihead = lib32 (e + 50);
-      ehead = lib32 (e + 54);
-      r->name = LIBGEN_NAME (lib32 (e + 58));
-      dhead = lib32 (e + 62);
+      codeoff = lib32 (e + 34 - pf);
+      locoff = lib32 (e + 38 - pf);
+      ihead = lib32 (e + 50 - pf);
+      ehead = lib32 (e + 54 - pf);
+      r->name = LIBGEN_NAME (lib32 (e + 58 - pf));
+      dhead = lib32 (e + 62 - pf);
 
       if ((uint64_t) codeoff + r->code + r->idata + r->ridata + r->debug > size)
 	die ("%s: truncated libgen library", file);
@@ -591,7 +603,7 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
 	  if (k >= nirefs || guard >= nirefs)
 	    die ("%s: bad reference list in libgen library", file);
 	  h = irefs + (size_t) k * LIBGEN_REF;
-	  def = lib32 (h + 12);
+	  def = lib32 (h + rc + 8);
 	  if (def >= ndefs)
 	    die ("%s: bad reference in libgen library", file);
 	  r->exts = realloc (r->exts, (r->nexts + 1) * sizeof (char *));
@@ -599,10 +611,10 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
 	    die ("out of memory%s", "");
 	  r->exts[r->nexts] =
 	    LIBGEN_NAME (lib32 (defs + (size_t) def * LIBGEN_DEF + 6));
-	  lib_refs (data, size, lib32 (h), lib32 (h + 4), r->nexts, r, &nalloc,
-		    file);
+	  lib_refs (data, size, old ? lib16 (h) : lib32 (h), lib32 (h + rc),
+		    r->nexts, r, &nalloc, file);
 	  r->nexts++;
-	  k = lib32 (h + 8);
+	  k = lib32 (h + rc + 4);
 	}
       for (k = ehead, guard = 0; k != LIBGEN_END; guard++)
 	{
@@ -612,11 +624,11 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
 	  r->exts = realloc (r->exts, (r->nexts + 1) * sizeof (char *));
 	  if (!r->exts)
 	    die ("out of memory%s", "");
-	  r->exts[r->nexts] = LIBGEN_NAME (lib32 (h + 12));
-	  lib_refs (data, size, lib32 (h), lib32 (h + 4), r->nexts, r, &nalloc,
-		    file);
+	  r->exts[r->nexts] = LIBGEN_NAME (lib32 (h + rc + 8));
+	  lib_refs (data, size, old ? lib16 (h) : lib32 (h), lib32 (h + rc),
+		    r->nexts, r, &nalloc, file);
 	  r->nexts++;
-	  k = lib32 (h + 8);
+	  k = lib32 (h + rc + 4);
 	}
 
       /* Local references: a count (2 or 4 bytes, by the ROF series) and
@@ -971,7 +983,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	  && !(neg->type & R_REL) && sec == S_TEXT)
 	{
 	  /* A constant less this ROF's code (K-*, both r68s write it so):
-	     PC-relative to the absolute zero, symbol 0, as GNU as writes it
+	     PC-relative to the absolute zero, symbol 0, as gas writes it
 	     (*ABS*).  */
 	  addend += off;
 	  type = size == 1 ? R_68K_PC8 : size == 2 ? R_68K_PC16 : R_68K_PC32;

@@ -1,5 +1,5 @@
 * Ultra C's r68 shifts as the x86 does, the count modulo 32: 1<<8+199 is 1<<207, that is
-* 1<<15; as gives 0, as C 3.2's R68 does (-dialect=c32 keeps that).
+* 1<<15; gas gives 0, as C 3.2's R68 does (-dialect=c32 keeps that).
 * fixed: 563dfcb 2026-10-11 r68togas: shift counts modulo 32 in Ultra C's dialect
 * expect text: 323c8000 00000002 0000000c
  psect shift_count,0,0,0,0,0

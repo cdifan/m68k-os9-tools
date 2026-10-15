@@ -1,5 +1,5 @@
 * A global label passed to a macro that uses it as a branch target (b\1 \2 in the body, called
-* with ne.s,Lab) or on pc: its local twin, as outside macros (as left the .s branch to the
+* with ne.s,Lab) or on pc: its local twin, as outside macros (gas left the .s branch to the
 * global symbol to the linker: "value of -6 too large for field of 1 byte").
 * fixed: b864f65 2026-10-11 r68togas: global labels passed to macros for branch targets and pc as twins
 * expect text: 4e714e71 66fc41fa fffa4e71

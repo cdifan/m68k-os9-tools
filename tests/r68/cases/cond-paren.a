@@ -1,6 +1,6 @@
 * A conditional with its operand right after it in parentheses (ifeq(Flag-1)): r68 ends the
 * operation at the parenthesis; the translation took the whole for one name, so it didn't count
-* the conditional, dropped its endc as one closing nothing, and as reached the end of the file
+* the conditional, dropped its endc as one closing nothing, and gas reached the end of the file
 * inside the conditional.
 * fixed: 9bebdc5 2026-10-12 r68togas: a conditional's operand in parentheses right after it (ifeq(...))
 * expect text: 00024e71

@@ -1,7 +1,7 @@
-* r68's \# counts empty arguments too (a,, is 3; a,b,,,,,,, is 9), as's NARG doesn't: the count
-* is set before the call (r68__narg) and captured by the expansion; an empty argument is <> (as's
+* r68's \# counts empty arguments too (a,, is 3; a,b,,,,,,, is 9), gas's NARG doesn't: the count
+* is set before the call (r68__narg) and captured by the expansion; an empty argument is <> (gas's
 * MRI macros dropped a bare one from NARG); after byte data the lines put before a call get no
-* line marker (as aligns at one after an odd dc.b), one is written later.
+* line marker (gas aligns at one after an odd dc.b), one is written later.
 * fixed: 9d8fa34 2026-10-11 r68togas: \# counts empty arguments; no line marker after byte data
 * expect text: 01020309 09020000
 CNT macro

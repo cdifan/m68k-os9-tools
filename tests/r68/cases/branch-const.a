@@ -1,6 +1,6 @@
 * A branch to a constant (an equate, a number, an expression of them), not a label: both r68s
 * take the constant for the displacement itself, no relocation (bhi Disp, Disp an equate of 14:
-* $6200 $000E); as branched to address 14. db<cc> the same.
+* $6200 $000E); gas branched to address 14. db<cc> the same.
 * fixed: 0e06269 2026-10-12 r68togas: a branch to a constant takes it for the displacement, as both r68s
 * expect text: 4e71600e 6200000e 61000010 51c9000e 4e714e71
 Disp equ 14

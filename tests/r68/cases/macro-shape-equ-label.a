@@ -1,7 +1,7 @@
 * A macro whose operand subtracts a parameter, with an equate of constants beside it
 * (#Base+2*Width-(\2)), called with a label: the equate kept the expression out of the
 * link-time aliases (another symbol of the source) until equates of external names went in,
-* after which the call set the alias to the negated label, which as refused.
+* after which the call set the alias to the negated label, which gas refused.
 * fixed: b102b1a 2026-10-12 r68togas: an equate of constants keeps an expression out of the macro aliases again
 * not r68: r68 makes the operand a negated reference to the label, which rof2elf can't take
 * expect size: .text 00000008
