@@ -1,0 +1,14 @@
+* A byte immediate that is an equate of an external (Ena_b equ Ext_b, a bit of a library's
+* equates, then btst.b #Ena_b,4(a0)): relocated as the whole extension word, as an external
+* named directly (byte-imm-ext); a0f6d83 looked only at the names in the instruction.
+* fixed: FIXME
+* expect text: 0828 0000 0004 08d1 0000 0000 0000 4e71
+* expect reloc: 00000002 R_68K_16
+* expect reloc: 00000008 R_68K_16
+* expect reloc: 0000000c R_68K_16
+Ena_b equ Ext_b
+ psect byte_imm_ext_equ,0,0,0,0,0
+ btst.b #Ena_b,4(a0)
+ bset #Ena_b,(a1)
+ ori.b #Ena_b,d0
+ ends

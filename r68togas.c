@@ -4376,9 +4376,58 @@ static int byte_imm_words(struct buf *out, const char *labs, const char *base, c
 	return 1;
 }
 
-/* Whether expression S (N chars) names an external (external_name), and no
+/* Whether expression S (N chars) names an external (external_name), also
+ * through an equate of one (RdyBit equ LibBit, LibBit a library's), and no
  * macro parameter. */
+static int names_external_depth(const char *s, size_t n, int depth);
+
 static int names_external(const char *s, size_t n)
+{
+	return names_external_depth(s, n, 0);
+}
+
+/* Expression S (N chars) with each equate that names an external replaced
+ * by its value in parentheses, recursively (RdyBit, RdyBit equ LibBit: (LibBit)). */
+static char *through_equates(const char *s, size_t n, int depth)
+{
+	struct buf b = { 0 };
+	for (size_t i = 0; i < n;) {
+		if (s[i] == '\'') {
+			size_t j = i + 1;
+			while (j < n && s[j] != '\'')
+				j++;
+			j = j < n ? j + 1 : n;
+			bprintf(&b, "%.*s", (int)(j - i), s + i);
+			i = j;
+		} else if (s[i] == '$' || s[i] == '%' || isdigit((unsigned char)s[i])) {
+			size_t j = i + 1;
+			while (j < n && isalnum((unsigned char)s[j]))
+				j++;
+			bprintf(&b, "%.*s", (int)(j - i), s + i);
+			i = j;
+		} else if (symstart((unsigned char)s[i])) {
+			size_t j = i;
+			while (j < n && symchar((unsigned char)s[j]))
+				j++;
+			const char *eq = depth < 8 && !external_name(s + i, j - i) ? equate_text(s + i, j - i) : NULL;
+			if (eq != NULL && names_external(eq, strlen(eq))) {
+				char *t = through_equates(eq, strlen(eq), depth + 1);
+				bprintf(&b, "(%s)", t);
+				free(t);
+			} else {
+				bprintf(&b, "%.*s", (int)(j - i), s + i);
+			}
+			i = j;
+		} else {
+			bputc(&b, s[i++]);
+		}
+	}
+	if (b.s == NULL)
+		bputs(&b, "");
+	return b.s;
+}
+
+static int names_external_depth(const char *s, size_t n, int depth)
 {
 	int ext = 0;
 	for (size_t i = 0; i < n;) {
@@ -4395,7 +4444,8 @@ static int names_external(const char *s, size_t n)
 			size_t j = i;
 			while (j < n && symchar((unsigned char)s[j]))
 				j++;
-			ext |= external_name(s + i, j - i);
+			const char *eq = depth < 8 && !external_name(s + i, j - i) ? equate_text(s + i, j - i) : NULL;
+			ext |= external_name(s + i, j - i) || (eq != NULL && names_external_depth(eq, strlen(eq), depth + 1));
 			i = j;
 		} else {
 			i++;
@@ -5678,8 +5728,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputc(out, ')');
 					annotate = 1;
 				} else if (word_imm && i == 0) {
+					/* equates of externals by their values: gas's .reloc
+					 * refuses a symbol that only aliases an external */
+					char *v = through_equates(pieces[i] + 1, lens[i] - 1, 0);
 					struct buf e = { 0 };
-					expression(&e, pieces[i] + 1, lens[i] - 1);
+					expression(&e, v, strlen(v));
+					free(v);
 					bputs(&line_before, " r68rw ");
 					put_angle(&line_before, e.s, e.n);
 					bputc(&line_before, '\n');
