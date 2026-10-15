@@ -28,6 +28,7 @@ suitably linked ELF file (see "The ELF input").
 | `--header=SIZE` | `0x48` (the program header, the default), `0x3C` (`M$Exec`, `M$Excpt`, `M$Mem`; name last) or `0x30` (no fields; name last) |
 | `--raw` | the module's body only: no header, name or CRC (see "Raw output") |
 | `--entry=none` | no entry point, whatever `__os9_entry` says |
+| `--ld-map=FILE` | GNU `ld`'s map of the link, for the order of the pointer tables and the jump table |
 
 A stack, entry point, data area, initialized data or trap entry that is non-zero but has no field
 in the chosen header is an error.
@@ -87,7 +88,14 @@ size (`__os9_stack`), entry point (`__os9_entry`) and uninitialized trap entry (
 The options override them. Without them: a program module, object code, reentrant, revision 1,
 edition 0, stack 0xC00.
 
+A global `_sysedit` or `_sysattr` (from any object: a C file's `@_sysedit: equ 7`) gives the
+edition, or the attributes and revision, over all of these and over `--edit` and `--revs`, as both
+Microware linkers take them.
+
 ## The pointer tables
+
+The initialized data's pointer tables (`M$IRefs`: the pointers to the code, then those to the data)
+list the pointers in address order, or, with `--ld-map`, as both Microware linkers do:
 
 - first the jump table's entries, in reverse order;
 

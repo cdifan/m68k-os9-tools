@@ -1143,7 +1143,7 @@ static int no_operands(const char *op)
 {
 	static const char *const names[] = {
 		"nop", "rts", "rte", "rtr", "reset", "trapv", "illegal", "endc", "else", "endm", "endr",
-		"ends", "endsect", "end", "pag", "page", NULL,
+		"ends", "endsect", "end", "pag", "page", "fnop", "pflusha", "pflushan", "bgnd", NULL,
 	};
 	char base[16];
 	size_t i;
@@ -1324,6 +1324,7 @@ struct state {
 	char **mren_from, **mren_to;	/* macros renamed: as's macro names ignore case */
 	int nmren;
 	int c32;		/* -d c32: C 3.2's R68's encodings */
+	int ucc95;		/* -d ucc95: Ultra C's r68 of 1994-95, code padded with zeros */
 	int cpu_given;		/* -m given (r68 without -m pads as with -m2..6, with nop) */
 	int rept_fold, rept_state;	/* a rept of one dc line folded: its count; 1: the dc
 					   next, 2: the endr */
@@ -1495,6 +1496,7 @@ static void lin_binary(struct lin *v, int prec);
 
 static int lin_depth;
 static const char *equate_text(const char *s, size_t n);
+static int cv_known(const char *s, size_t n, long *v);
 static void lin_binary(struct lin *v, int prec);
 
 static void lin_unary(struct lin *v)
@@ -1561,6 +1563,14 @@ static void lin_unary(struct lin *v)
 		 * external names goes as its expression (PD_Mine
 		 * equ PD_Base+18 in M$DTyp+PD_Mine-PD_OPT) */
 		const char *eq = !external_name(p, q - p) ? equate_text(p, q - p) : NULL;
+		long cv;
+		if (eq == NULL && !external_name(p, q - p) && cv_known(p, q - p, &cv)) {
+			/* a constant of the source that isn't an equate: an
+			 * org/do offset (E.Field-P$Ext(a2)) */
+			v->c = cv;
+			v->p = q;
+			return;
+		}
 		if (eq != NULL && lin_depth < 8) {
 			struct lin sub = { { NULL, 0 }, 0, 1, eq, NULL, 0, 0 };
 			lin_depth++;
@@ -2830,6 +2840,17 @@ static void add_equate(const char *name)
 static char **cv_names;
 static long *cv_values;
 static int ncv;
+
+/* The value of name S (N chars) if it is known so far (cv_names). */
+static int cv_known(const char *s, size_t n, long *v)
+{
+	for (int i = ncv - 1; i >= 0; i--)
+		if (strlen(cv_names[i]) == n && strncmp(cv_names[i], s, n) == 0) {
+			*v = cv_values[i];
+			return 1;
+		}
+	return 0;
+}
 
 static int cv_expr(const char **p, long *v);
 /* cv_prescan: names not equated yet are looked up in the pre-scan's equates
@@ -4212,6 +4233,124 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 	return 1;
 }
 
+static int names_external(const char *s, size_t n);
+
+/* addq/subq #VALUE,<ea> where VALUE isn't known yet but is a constant of the
+ * source (a difference of two vsect labels, #OffP-OnP): as wants the 3-bit
+ * field's value at once, r68 takes it; written as words, the value in the
+ * field by an expression as resolves at the end ((v&7)<<9: 8 as 0; no
+ * check of 1..8). Data and address registers, (An), (An)+, -(An), d(An).
+ * 1 if done. */
+static int quick_words(struct buf *out, const char *labs, const char *base, char size, const char *args,
+		       const char *rest)
+{
+	int sub = strcmp(base, "subq") == 0;
+	if (!sub && strcmp(base, "addq") != 0)
+		return 0;
+	const char *pieces[4];
+	size_t lens[4];
+	if (split_commas(args, strlen(args), pieces, lens, 4) != 2 || pieces[0][0] != '#')
+		return 0;
+	const char *v = pieces[0] + 1;
+	size_t vn = lens[0] - 1;
+	if (known_value(v, vn) || names_external(v, vn) || memchr(v, '\\', vn) != NULL)
+		return 0;
+	const char *e = pieces[1];
+	size_t en = lens[1];
+	int mode, reg, r;
+	const char *disp = NULL;
+	size_t dn = 0;
+	if ((r = reg_number(e, en)) >= 0) {
+		mode = r >= 8 ? 1 : 0;
+		reg = r & 7;
+	} else if (en >= 4 && e[0] == '(' && e[en - 1] == ')' && (r = reg_number(e + 1, en - 2)) >= 8) {
+		mode = 2, reg = r & 7;
+	} else if (en >= 5 && e[0] == '(' && e[en - 1] == '+' && e[en - 2] == ')' &&
+		   (r = reg_number(e + 1, en - 3)) >= 8) {
+		mode = 3, reg = r & 7;
+	} else if (en >= 5 && e[0] == '-' && e[1] == '(' && e[en - 1] == ')' && (r = reg_number(e + 2, en - 3)) >= 8) {
+		mode = 4, reg = r & 7;
+	} else {
+		const char *lp = memchr(e, '(', en);
+		if (lp == NULL || lp == e || e[en - 1] != ')' || (r = reg_number(lp + 1, (size_t)(e + en - 1 - lp - 1))) < 8)
+			return 0;
+		mode = 5, reg = r & 7;
+		disp = e;
+		dn = (size_t)(lp - e);
+	}
+	if (mode == 1 && size == 'b')
+		return 0;
+	int s = size == 'b' ? 0 : size == 'l' ? 2 : 1;
+	unsigned word = 0x5000u | (sub ? 0x100u : 0) | (unsigned)s << 6 | (unsigned)mode << 3 | (unsigned)reg;
+	struct buf x = { 0 };
+	expression(&x, v, vn);
+	bprintf(out, "%s dc.w $%04X!((((%s)&7))<<9)", labs, word, x.s);
+	free(x.s);
+	if (disp != NULL) {
+		bputc(out, ',');
+		expression(out, disp, dn);
+	}
+	bputs(out, rest);
+	annotate = 1;
+	return 1;
+}
+
+/* Whether expression S (N chars) names an external (external_name), and no
+ * macro parameter. */
+static int names_external(const char *s, size_t n)
+{
+	int ext = 0;
+	for (size_t i = 0; i < n;) {
+		if (s[i] == '\'') {
+			for (i++; i < n && s[i] != '\''; i++)
+				;
+			i++;
+		} else if (s[i] == '\\') {
+			return 0;
+		} else if (s[i] == '$' || s[i] == '%' || isdigit((unsigned char)s[i])) {
+			for (i++; i < n && isalnum((unsigned char)s[i]); i++)
+				;
+		} else if (symstart((unsigned char)s[i])) {
+			size_t j = i;
+			while (j < n && symchar((unsigned char)s[j]))
+				j++;
+			ext |= external_name(s + i, j - i);
+			i = j;
+		} else {
+			i++;
+		}
+	}
+	return ext;
+}
+
+/* Whether instruction BASE (SIZE) with operands ARGS has a byte immediate of
+ * an external that the Microware assemblers relocate as the whole extension
+ * word (see word_imm): ori, andi, subi, addi, eori, cmpi .b or to ccr; or,
+ * and, sub, add, eor, cmp .b with an immediate (which are those; not C 3.2's
+ * <ea>,Dn form, c32_immediate); btst, bchg, bclr, bset #n. */
+static int word_byte_imm(const char *base, char size, const char *args)
+{
+	static const char *const imm[] = { "ori", "andi", "subi", "addi", "eori", "cmpi", NULL };
+	static const char *const alu[] = { "or", "and", "sub", "add", "eor", "cmp", NULL };
+	static const char *const bit[] = { "btst", "bchg", "bclr", "bset", NULL };
+	if (args[0] != '#')
+		return 0;
+	const char *pieces[4];
+	size_t lens[4];
+	if (split_commas(args, strlen(args), pieces, lens, 4) != 2)
+		return 0;
+	int ccr = (lens[1] == 3 && strncasecmp(pieces[1], "ccr", 3) == 0) ||
+		(lens[1] == 2 && strncasecmp(pieces[1], "cc", 2) == 0);
+	int ok = 0;
+	for (int i = 0; imm[i] && !ok; i++)
+		ok = strcmp(base, imm[i]) == 0 && (size == 'b' || (size == 0 && ccr));
+	for (int i = 0; alu[i] && !ok; i++)
+		ok = strcmp(base, alu[i]) == 0 && (size == 'b' || (size == 0 && ccr));
+	for (int i = 0; bit[i] && !ok; i++)
+		ok = strcmp(base, bit[i]) == 0;
+	return ok && names_external(pieces[0] + 1, lens[0] - 1);
+}
+
 /* Translates one statement line into OUT (one line, no newline). */
 /* A call of a macro whose body leaves a conditional open (macro_open):
  * r68 assembles the rest of the source in it, which is left out where
@@ -5310,6 +5449,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		/* move.b with a negative immediate: r68 writes the extension
 		 * word $00nn, as $FFnn (both $FFnn for andi.b and the others). */
 		int byte_imm = strcmp(base, "move") == 0 && size == 'b' && l.args[0] == '#';
+		/* A byte immediate of an external in the immediate instructions
+		 * (andi.b #Ext,d0, andi #Ext,ccr; and.b #Ext,(a0), which are
+		 * them) and a bit number (btst #Ext,<ea>): both Microware
+		 * assemblers relocate the whole extension word (16 bits, $FFFE
+		 * for -2), as only the low byte (move.b keeps a byte). #0 and
+		 * the prelude's r68rw before the instruction. Not with a macro
+		 * parameter (unknown). */
+		int word_imm = word_byte_imm(base, size, l.args) && !is_macro(l.op);
 		pc_ext_offset = strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0 ||
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
 			  strcmp(base, "bset") == 0) && l.args[0] == '#') ? 4 : 2;
@@ -5381,6 +5528,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		}
 		if (st.c32 && !is_macro(l.op) && c32_immediate(out, labs, base, size, l.args, rest))
 			goto done;
+		if (!is_macro(l.op) && quick_words(out, labs, base, size, l.args, rest))
+			goto done;
 		size_t start = out->n;
 		bprintf(out, "%s %s ", labs, op);
 		int need = cpu_needed(base, size, l.args);
@@ -5444,6 +5593,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputs(out, "#-$100+(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputc(out, ')');
+					annotate = 1;
+				} else if (word_imm && i == 0) {
+					struct buf e = { 0 };
+					expression(&e, pieces[i] + 1, lens[i] - 1);
+					bputs(&line_before, " r68rw ");
+					put_angle(&line_before, e.s, e.n);
+					bputc(&line_before, '\n');
+					free(e.s);
+					bputs(out, "#0");
 					annotate = 1;
 				} else if (byte_imm && i == 0 && known_value(pieces[i] + 1, lens[i] - 1)) {
 					bputs(out, "#(");
@@ -5832,8 +5990,9 @@ static void usage(void)
 	printf("  -r         r68's -r: registers only written with %% (%%d0); d0 is a symbol\n");
 	printf("  -y         r68's -y with -b (68020 and later): branches and PC-relative\n");
 	printf("             references to labels 32-bit\n");
-	printf("  -d D       the dialect: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68:\n");
-	printf("             its encodings where they differ, sections padded to 2)\n");
+	printf("  -d D       the dialect: ucc (Ultra C's r68, the default), c32 (C 3.2's R68:\n");
+	printf("             its encodings where they differ, sections padded to 2) or ucc95\n");
+	printf("             (Ultra C's r68 of 1994-95: as ucc, the code padded with zeros)\n");
 	printf("  -u DIR     search DIR for use files (r68's -u)\n");
 	printf("  -o OUTPUT  write to OUTPUT (default: standard output); a directory: the\n");
 	printf("             output there, named after the source (.a gives .s, .s .gas.s)\n");
@@ -5875,6 +6034,14 @@ int main(int argc, char **argv)
 			else
 				bputs(&defs, "1");
 			bputc(&defs, '\n');
+			/* a name of the source, a constant: not external in a sum
+			 * of two (-a=BASE=.. -a=SIZE=..: #BASE+SIZE) */
+			char *name = xstrndup(d, n);
+			st.sets = xrealloc(st.sets, (st.nsets + 1) * sizeof *st.sets);
+			st.sets[st.nsets++] = xstrdup(name);
+			add_equate(name);
+			note_value(name, eq ? eq + 1 : "1");
+			free(name);
 		} else if (strcmp(argv[i], "-b") == 0) {
 			st.branch_sizing = 1;
 		} else if (strcmp(argv[i], "-B") == 0) {
@@ -5891,11 +6058,12 @@ int main(int argc, char **argv)
 				die("-x takes an extension");
 			out_ext = *d == '.' ? d + 1 : d;
 		} else if (strncmp(argv[i], "-d", 2) == 0) {
-			/* -d c32 | ucc: the dialect (whose encodings) */
+			/* -d c32 | ucc | ucc95: the dialect (whose encodings) */
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
-			if (d == NULL || (strcmp(d, "c32") != 0 && strcmp(d, "ucc") != 0))
-				die("-d takes c32 or ucc");
+			if (d == NULL || (strcmp(d, "c32") != 0 && strcmp(d, "ucc") != 0 && strcmp(d, "ucc95") != 0))
+				die("-d takes c32, ucc or ucc95");
 			st.c32 = strcmp(d, "c32") == 0;
+			st.ucc95 = strcmp(d, "ucc95") == 0;
 		} else if (strncmp(argv[i], "-m", 2) == 0) {
 			const char *d = argv[i][2] ? argv[i] + 2 + (argv[i][2] == '=') : (i + 1 < argc ? argv[++i] : NULL);
 			/* With the FPU: r68 takes its instructions for any CPU.
@@ -5975,6 +6143,10 @@ int main(int argc, char **argv)
 	/* r68immb OPCODE,VALUE: an instruction word and a byte immediate of an
 	 * external (-d c32) */
 	fputs("r68immb macro\n dc.w \\1\n dc.b 0,\\2\n endm\n", out);
+	/* r68rw VALUE: VALUE relocated as the 16-bit word after the next
+	 * instruction word (a byte immediate of an external, word_byte_imm);
+	 * .reloc only outside MRI mode, the value through a symbol */
+	fputs("r68rw macro\n.Lr68w\\@ set \\1\n .mri 0\n .reloc .+2,R_68K_16,.Lr68w\\@\n .mri 1\n endm\n", out);
 	/* r68com NAME,SIZE: a common block */
 	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
 	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
@@ -6054,12 +6226,15 @@ int main(int argc, char **argv)
 	 * (measured 2026-10-09, -m1 2026-10-13): C 3.2's R68 and Ultra C's
 	 * r68 -m0 and -m1 to 2; Ultra C's r68 otherwise to 4, the code with
 	 * nop (without -m) or trapf (-m2..6), after a zero byte where the size
-	 * is odd. m68k-os9-r68 gives the sections that alignment too. */
+	 * is odd; Ultra C's r68 of 1994-95 (-d ucc95) with zeros (measured
+	 * 2026-10-15 on the objects of an OS-9 V3.0 port). m68k-os9-r68 gives
+	 * the sections that alignment too. */
 	{
 		int to = pad_alignment();
-		unsigned fill = st.cpu_given ? 0x51FC : 0x4E71;
+		unsigned fill = st.ucc95 ? 0 : st.cpu_given ? 0x51FC : 0x4E71;
 		fprintf(out, "* padding: each section to %d, as %s\n", to,
-			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0/-m1" : st.cpu_given ? "Ultra C's r68 -m2..6" : "Ultra C's r68");
+			st.c32 ? "C 3.2's R68" : to == 2 ? "Ultra C's r68 -m0/-m1" : st.ucc95 ? "Ultra C's r68 of 1994-95" :
+			st.cpu_given ? "Ultra C's r68 -m2..6" : "Ultra C's r68");
 		if (to == 2) {
 			fprintf(out, " section .text\n balign 2,0\n");
 		} else if (dyn_ends) {

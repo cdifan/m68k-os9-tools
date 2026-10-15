@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 struct modheader {
 	uint16_t magic;
@@ -86,6 +87,7 @@ int opt_xalign = 0; // -x: the code's start in the module aligned to this, zero 
 int opt_raw = 0; // --raw: the module's body only, no header, name or CRC
 int opt_noentry = 0; // --entry=none: no entry point, whatever __os9_entry says
 int opt_namepad = 0; // --name-pad: zero bytes after the name (l68 -x on a trap library)
+const char *opt_ldmap = NULL; // --ld-map: GNU ld's map of the link, for the order of M$IRefs
 #define DEFAULT_STACK 0x00000C00
 #define DEFAULT_REVS 1
 #define DEFAULT_EDIT 0
@@ -148,11 +150,66 @@ void vec_free(Vec *vec) {
 typedef struct idref {
 	uint32_t addr;
 	int text;
+	int obj; // the object it came from, in link order (--ld-map)
 } IdRef;
 
 int cmp_idref(const void *a, const void *b) {
 	uint32_t x = ((const IdRef*)a)->addr, y = ((const IdRef*)b)->addr;
 	return x < y ? -1 : x > y;
+}
+
+// Both Microware linkers list the pointers object by object, the last
+// object linked first, each object's in address order (measured
+// 2026-10-15).
+int cmp_idref_obj(const void *a, const void *b) {
+	const IdRef *p = a, *q = b;
+	if(p->obj != q->obj) return p->obj > q->obj ? -1 : 1;
+	return cmp_idref(a, b);
+}
+
+// An input section of the initialized data in GNU ld's map: its start, its
+// size and its object's place in the link.
+typedef struct inputsec {
+	uint64_t start, size;
+	int obj;
+} InputSec;
+
+// The objects' parts of .data and .remote.data in GNU ld's map MAP: their
+// input sections (" .data  0x... 0x... file", the name alone on a line
+// when long, the rest on the next); the objects numbered in their order of
+// appearance. The number of input sections, -1 if MAP can't be read.
+long read_ldmap(const char *map, InputSec **secs) {
+	FILE *fp = fopen(map, "r");
+	if(!fp) return -1;
+	static char files[256][1024];
+	char line[4096];
+	int nfiles = 0, in_data = 0;
+	long n = 0;
+	*secs = NULL;
+	while(fgets(line, sizeof line, fp)) {
+		if(line[0] == '.') {
+			char name[64];
+			in_data = sscanf(line, "%63s", name) == 1 && (!strcmp(name, ".data") || !strcmp(name, ".remote.data"));
+			continue;
+		}
+		if(!in_data || line[0] != ' ' || line[1] != '.') continue;
+		char name[256], file[1024];
+		unsigned long long start = 0, size = 0;
+		int k = sscanf(line, " %255s 0x%llx 0x%llx %1023s", name, &start, &size, file);
+		if(k == 1 && fgets(line, sizeof line, fp))
+			k = 1 + sscanf(line, " 0x%llx 0x%llx %1023s", &start, &size, file);
+		if(k != 4 || size == 0) continue;
+		int f;
+		for(f = 0; f < nfiles && strcmp(files[f], file); f++);
+		if(f == nfiles) {
+			if(nfiles == 256) continue;
+			strcpy(files[nfiles++], file);
+		}
+		*secs = realloc(*secs, (n + 1) * sizeof(InputSec));
+		(*secs)[n++] = (InputSec){ start, size, f };
+	}
+	fclose(fp);
+	return n;
 }
 
 // Symbols Microware's linker defines whose values depend on the module's
@@ -307,6 +364,7 @@ int opt(int *argc, char ***argv) {
 		{ "raw",   no_argument,       NULL, 'R' + 0x100 },
 		{ "entry", required_argument, NULL, 'E' + 0x100 },
 		{ "name-pad", required_argument, NULL, 'P' + 0x100 },
+		{ "ld-map", required_argument, NULL, 'M' + 0x100 },
 		{ "help",  no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 },
 	};
@@ -352,6 +410,9 @@ int opt(int *argc, char ***argv) {
 				return 0;
 			}
 			opt_noentry = 1;
+			break;
+		case 'M' + 0x100:
+			opt_ldmap = optarg;
 			break;
 		case 'P' + 0x100:
 			opt_namepad = strtol(optarg, NULL, 0);
@@ -402,6 +463,8 @@ int opt(int *argc, char ***argv) {
 			printf("      --raw              write the module's body only: no header, name or CRC\n");
 			printf("      --entry=none       no entry point, whatever __os9_entry says\n");
 			printf("      --name-pad=BYTES   zero bytes after the name (as l68 -x= pads a trap library)\n");
+			printf("      --ld-map=FILE      GNU ld's map of the link: the initialized data's pointers\n");
+			printf("                         (M$IRefs) by object, the last first, as l68 lists them\n");
 			printf("  A stack, entry point, data area, initialized data or trap entry that is\n");
 			printf("  nonzero but has no field in the chosen header is an error.\n");
 			printf("  -h, --help             show this help\n");
@@ -553,6 +616,10 @@ int main(int argc, char *argv[]) {
 
 	// Module header values from a mainline ROF converted by rof2elf.
 	asymbol *s_typelang = NULL, *s_attrev = NULL, *s_edition = NULL, *s_stack = NULL, *s_entry = NULL, *s_trapent = NULL;
+	// _sysedit and _sysattr, globals of any object (a C source's @_sysedit:
+	// equ 19): the edition and attr/rev, over the root psect's and -e, as
+	// both Microware linkers (measured 2026-10-15)
+	asymbol *s_sysedit = NULL, *s_sysattr = NULL;
 	for(long i = 0; i < nsyms; i++) {
 		const char *n = bfd_asymbol_name(syms[i]);
 		if(!strcmp(n, "__os9_typelang")) s_typelang = syms[i];
@@ -561,6 +628,8 @@ int main(int argc, char *argv[]) {
 		else if(!strcmp(n, "__os9_stack")) s_stack = syms[i];
 		else if(!strcmp(n, "__os9_entry")) s_entry = syms[i];
 		else if(!strcmp(n, "__os9_trapent")) s_trapent = syms[i];
+		else if(!strcmp(n, "_sysedit") && (syms[i]->flags & BSF_GLOBAL)) s_sysedit = syms[i];
+		else if(!strcmp(n, "_sysattr") && (syms[i]->flags & BSF_GLOBAL)) s_sysattr = syms[i];
 	}
 	if(s_entry) {
 		entry = bfd_asymbol_value(s_entry);
@@ -585,8 +654,12 @@ int main(int argc, char *argv[]) {
 		if(rel->sym_ptr_ptr >= syms && rel->sym_ptr_ptr < syms + nsyms) refd[rel->sym_ptr_ptr - syms] = 1;
 		int ls = linker_symbol(rel->sym_ptr_ptr[0]);
 		if(ls) {
-			if(rel->howto->type != 4 /* R_68K_PC32 */ && rel->howto->type != 5 /* R_68K_PC16 */) {
-				printf("%s at .text+%08lx: only PC-relative references to %s are supported\n", rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name);
+			// PC-relative, or absolute (dc.w bname in a descriptor: the
+			// offset in the module, as both Microware linkers write it,
+			// measured 2026-10-15; as a code label's, see CodeRef)
+			if(rel->howto->type != 4 /* R_68K_PC32 */ && rel->howto->type != 5 /* R_68K_PC16 */ &&
+			   rel->howto->type != 1 /* R_68K_32 */ && rel->howto->type != 2 /* R_68K_16 */) {
+				printf("%s at .text+%08lx: only PC-relative and 16- and 32-bit references to %s are supported\n", rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name);
 				return 1;
 			}
 			tls = realloc(tls, (ntls + 1) * sizeof(LsRef));
@@ -897,6 +970,29 @@ int main(int argc, char *argv[]) {
 		free(targets);
 	}
 
+	// The pointers in l68's order (by object, the last first), from ld's
+	// map; in address order without one.
+	if(opt_ldmap) {
+		InputSec *isecs;
+		long nisecs = read_ldmap(opt_ldmap, &isecs);
+		if(nisecs < 0) {
+			printf("cannot read the map %s\n", opt_ldmap);
+			return 1;
+		}
+		for(size_t i = 0; i < ndrefs; i++) {
+			drefs[i].obj = INT_MAX; // in no object's data (the jump table): first
+			for(long k = 0; k < nisecs; k++) {
+				uint32_t st = DOFF((bfd_vma)isecs[k].start);
+				if(drefs[i].addr >= st && drefs[i].addr - st < isecs[k].size) {
+					drefs[i].obj = isecs[k].obj;
+					break;
+				}
+			}
+		}
+		free(isecs);
+		qsort(drefs, ndrefs, sizeof(IdRef), cmp_idref_obj);
+	}
+
 	// fix pointer in .data to 0-based
 	for(size_t i = 0; i < ndrefs; i++) {
 		uint32_t *p = (void*)(vec->buf + iidata + drefs[i].addr - idstart);
@@ -928,12 +1024,12 @@ int main(int argc, char *argv[]) {
 	mh->name = BE32(iname);
 	mh->accs = BE16(opt_perms >= 0 ? opt_perms : 0x0555); // r-xr-xr-x by default
 	uint16_t typelang = opt_typelang >= 0 ? (uint16_t)opt_typelang : s_typelang ? (uint16_t)bfd_asymbol_value(s_typelang) : 0x0101;
-	uint16_t attrev = s_attrev ? bfd_asymbol_value(s_attrev) : 0x8000 | DEFAULT_REVS;
+	uint16_t attrev = s_sysattr ? bfd_asymbol_value(s_sysattr) : s_attrev ? bfd_asymbol_value(s_attrev) : 0x8000 | DEFAULT_REVS;
 	mh->type = typelang >> 8; // prgm by default
 	mh->lang = typelang & 0xFF; // objct by default
 	mh->attr = (attrev >> 8) | (opt_sticky ? 0x40 : 0); // reentrant by default
-	mh->revs = opt_revs >= 0 ? opt_revs : (attrev & 0xFF);
-	mh->edit = BE16(opt_edit >= 0 ? opt_edit : s_edition ? (int)bfd_asymbol_value(s_edition) : DEFAULT_EDIT); // any
+	mh->revs = opt_revs >= 0 && !s_sysattr ? opt_revs : (attrev & 0xFF);
+	mh->edit = BE16(s_sysedit ? (int)bfd_asymbol_value(s_sysedit) : opt_edit >= 0 ? opt_edit : s_edition ? (int)bfd_asymbol_value(s_edition) : DEFAULT_EDIT); // any
 	mh->usage = BE32(0); // reserved
 	mh->symbol = BE32(0); // reserved
 	uint16_t parity = 0xFFFF;
@@ -968,7 +1064,20 @@ int main(int argc, char *argv[]) {
 			continue; // a far one, through the jump table
 		}
 		int64_t off = r->kind == LSYM_BTEXT ? 0 : r->kind == LSYM_BNAME ? (int64_t)iname : (int64_t)etextoff;
-		if(i < ntls) {
+		if(i < ntls && (r->type == 1 /* R_68K_32 */ || r->type == 2 /* R_68K_16 */)) {
+			// absolute: the offset in the module (no relocation at load)
+			int64_t v = off + r->addend;
+			unsigned char *p = (unsigned char*)vec->buf + itext + r->addr;
+			if(r->type == 2) {
+				if(v < -0x8000 || v > 0xFFFF) {
+					printf("R_68K_16 at .text+%08x: the module symbol's offset %lld doesn't fit\n", r->addr, (long long)v);
+					return 1;
+				}
+				p[0] = v >> 8; p[1] = v;
+			} else {
+				p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+			}
+		} else if(i < ntls) {
 			// PC-relative: from the field itself, as GNU ld computes it.
 			int64_t v = off + r->addend - (int64_t)(itext + r->addr);
 			unsigned char *p = (unsigned char*)vec->buf + itext + r->addr;

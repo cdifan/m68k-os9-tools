@@ -1,0 +1,24 @@
+* A byte immediate of an external in the immediate instructions (andi.b, to ccr, cmpi.b, and
+* or.b to memory, which is ori.b) and a bit number (btst, bset): relocated as the whole extension
+* word, R_68K_16, as both Microware assemblers do (linked: $FFFE for -2); before, R_68K_8 on its
+* low byte ($00FE). move.b keeps the byte (R_68K_8 at 0x23).
+* fixed: FIXME
+* expect text: 023c0000 003c0000 02000000 0c2800000004 00100000 08000000 08e800000004 103c0000
+* expect reloc: 00000002 R_68K_16          Ext_a
+* expect reloc: 00000006 R_68K_16          Ext_a
+* expect reloc: 0000000a R_68K_16          Ext_a
+* expect reloc: 0000000e R_68K_16          Ext_a+0x00000001
+* expect reloc: 00000014 R_68K_16          Ext_a
+* expect reloc: 00000018 R_68K_16          Ext_a
+* expect reloc: 0000001c R_68K_16          Ext_a
+* expect reloc: 00000023 R_68K_8           Ext_a
+ psect byte_imm_ext,0,0,0,0,0
+ andi #Ext_a,ccr
+ ori.b #Ext_a,ccr
+ andi.b #Ext_a,d0
+ cmpi.b #Ext_a+1,4(a0)
+ or.b #Ext_a,(a0)
+ btst #Ext_a,d0
+ bset #Ext_a,4(a0)
+ move.b #Ext_a,d0
+ ends

@@ -1,0 +1,11 @@
+* An instruction without operands (fnop, also pflusha, pflushan, bgnd): what follows it is a
+* comment, as after nop (before: "operands mismatch -- statement `fnop set' ignored").
+* fixed: FIXME
+* options: -m2
+* not r68: Ultra C's r68 writes fnop as $F200 0000 (fmove fp0,fp0), C 3.2's R68020 as $F280 0000
+* expect text: f2800000 4e714e71
+ psect fnop_comment,0,0,0,0,0
+ fnop set the unit idle
+ nop
+ nop
+ ends

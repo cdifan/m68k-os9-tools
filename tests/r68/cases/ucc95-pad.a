@@ -1,0 +1,11 @@
+* -dialect=ucc95: Ultra C's r68 of 1994-95 pads the code to 4 with zeros, where the later one
+* (ucc) pads with nop (measured 2026-10-15 on objects of an OS-9 V3.0 port); otherwise as ucc.
+* fixed: FIXME
+* options: -dialect=ucc95
+* not r68: the r68 at hand is the later one, which pads with nop
+* expect text: 4e714e714e710000
+ psect ucc95_pad,0,0,0,0,0
+ nop
+ nop
+ nop
+ ends

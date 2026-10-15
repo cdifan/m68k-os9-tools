@@ -1,0 +1,9 @@
+* A sum of two symbols defined with -a=: constants of the source, folded (before: a link-time
+* expression of two external names, which the link then failed on, "undefined symbol").
+* fixed: FIXME
+* options: -a=BASE=$580000 -a=SIZE=$80000
+* expect text: 20fc00600000 203c00600002
+ psect a_sum,0,0,0,0,0
+ move.l #BASE+SIZE,(a0)+
+ move.l #BASE+SIZE+2,d0
+ ends

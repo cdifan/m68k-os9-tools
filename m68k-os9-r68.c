@@ -120,7 +120,9 @@ static void usage(void)
 	}
 	printf("Options of this program:\n");
 	usage_line("-dialect=<d>", "whose encodings and padding where Microware's assemblers\n"
-		"                      differ: ucc (Ultra C's r68, the default) or c32 (C 3.2's R68)");
+		"                      differ: ucc (Ultra C's r68, the default), c32 (C 3.2's R68)\n"
+		"                      or ucc95 (Ultra C's r68 of 1994-95: as ucc, the code padded\n"
+		"                      with zeros)");
 	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
 		"                      translated source, for m68k-os9-as; standard output\n"
 		"                      without -o)");
@@ -217,9 +219,9 @@ static void option(const char *arg)
 		error("-sysl= is no longer an option: a library's equates stay external, as r68 leaves "
 		      "them, for the link (l68 -l=sys.l)");
 	if (ci_prefix(text, "dialect=")) {
-		if (!ci_eq(text + 8, "c32") && !ci_eq(text + 8, "ucc"))
-			error("-dialect= takes c32 or ucc");
-		st.dialect = ci_eq(text + 8, "c32") ? "c32" : "ucc";
+		if (!ci_eq(text + 8, "c32") && !ci_eq(text + 8, "ucc") && !ci_eq(text + 8, "ucc95"))
+			error("-dialect= takes c32, ucc or ucc95");
+		st.dialect = ci_eq(text + 8, "c32") ? "c32" : ci_eq(text + 8, "ucc95") ? "ucc95" : "ucc";
 		return;
 	}
 	if (ci_prefix(text, "obj=") && ci_eq(text + 4, "r68"))

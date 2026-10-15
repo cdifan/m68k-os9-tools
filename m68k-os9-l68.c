@@ -604,13 +604,15 @@ int main(int argc, char **argv)
 	args_add(&l.link, "-nostdlib");
 	args_add(&l.link, "-Wl,-q");
 	args_add(&l.link, "-Wl,--no-check-sections");
+	/* GNU ld's map, also without -m/-s: elf2mod lists the initialized
+	 * data's pointers by object from it, as l68 */
 	const char *map_stdout = NULL;
-	if (st.map != NULL) {
-		const char *map = st.map;
-		if (strcmp(map, "-") == 0)
-			map = map_stdout = os9_temp(".map");
-		args_addf(&l.link, "-Wl,-Map=%s", map);
-	}
+	const char *map = st.map;
+	if (map == NULL)
+		map = os9_temp(".map");
+	else if (strcmp(map, "-") == 0)
+		map = map_stdout = os9_temp(".map");
+	args_addf(&l.link, "-Wl,-Map=%s", map);
 	args_add(&l.link, "-T");
 	char *base = st.raw ? concat("0x", st.base != NULL ? st.base : "0", NULL) : xstrdup("0x400000");
 	/* Raw output (-r) isn't biased either, whatever the type (as l68). */
@@ -642,6 +644,8 @@ int main(int argc, char **argv)
 	l.no_jmptbl = !st.jmptbl;
 	args_add(&l.mod, "--header");
 	args_add(&l.mod, header);
+	args_add(&l.mod, "--ld-map");
+	args_add(&l.mod, map);
 	if (name_last)
 		args_add(&l.mod, "-N");
 	if (st.raw)

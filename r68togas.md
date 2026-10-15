@@ -17,6 +17,7 @@ stops after the translation. The reverse, for GCC's output, is [gastor68](gastor
 |---|---|
 | `-a <sym>[=<val>]` | define a symbol (1 without a value), as r68's `-a=`; written into the output as a `set` line |
 | `-m <n>` | the CPU, as r68's `-m` (0 the 68000 ... 6 the 68060); written as an `.arch` directive; it also chooses the padding (see "Dialects") |
+| `-d ucc\|c32\|ucc95` | the dialect: whose encodings and padding the output gives (see "Dialects") |
 | `-b` | r68's `-b`: branches to the source's own labels sized by `gas`; `-B` also those to its global labels |
 | `-r` | r68's `-r`: registers only with `%` (`%d0`); a plain `d0` is a symbol |
 | `-y` | r68's `-y`, with `-b`, on a 68020 or later: branches and PC-relative references to labels 32-bit |
@@ -121,6 +122,8 @@ Where Microware's assemblers differ, the output follows one of them byte for byt
 - **`c32`:** Microware C 3.2's assemblers, `r68` (68000) and `r68020`, which give the same
   objects for the sources both take. They differ from Ultra C's in some immediate encodings (see
   "Immediates") and pad to 2.
+- **`ucc95`:** Ultra C's `r68` of 1994-95: as `ucc`, but the code padded with zeros and the
+  vsect's sections aligned to 2.
 
 **Padding:** each section of the psect (code, data, uninitialized data, remote data) is padded as
 the Microware assemblers pad it, so that a link simply concatenates them:
@@ -162,6 +165,8 @@ Most instruction lines need no change. Where the same text means something else 
   epilogue defines as the bit reversal of the original expression.
 - **An operand right after the operation without a blank** (`andi.l#^$ff,d7`, `moveq#1,d0`,
   `tst.l(a0)`): r68 ends the operation at `#`, `(`, `-` or `*`.
+- **Instructions without operands** (`rts`, `nop`, `fnop`, `pflusha`, `bgnd`): the rest of the
+  line is a comment.
 - **Registers written with `%`** (`%d0`, `%PC`, `%fp0`), which Ultra C's `r68` takes: written
   without the `%`. With `-r`, registers are only those with `%`; a plain register name is a
   symbol, written with `__r68` after it.
@@ -171,6 +176,13 @@ Most instruction lines need no change. Where the same text means something else 
 
 - **`move.b` with a negative immediate:** r68 writes `$00nn` (`andi.b` and the others `$FFnn`, as
   `gas`); the value is masked.
+- **Byte immediates of externals** in `ori`, `andi`, `subi`, `addi`, `eori`, `cmpi` `.b` (also to
+  `ccr`) and the bit number of `btst`, `bchg`, `bclr`, `bset #n`: both Microware assemblers
+  relocate the whole extension word (16 bits), `gas` its low byte; written with `#0` and a
+  16-bit relocation on the word. `move.b`, `dc.b` and an index displacement keep a byte, as in
+  r68. Not in a macro body where the value is a parameter.
+- **`addq`/`subq` of a difference of vsect labels**: written as the instruction word with the
+  value in its field by an expression `gas` resolves at the end.
 - **An immediate PC-relative to an external** (`movea.l #edata-*-(End-Here+2),a2`): both
   Microware assemblers write a PC-relative reference on the immediate; written with 0, a label on
   the instruction and a `.reloc`. Not in macro bodies.
@@ -373,12 +385,25 @@ linking, as with `l68`.
 
 ## Microware compatibility
 
+With its dialect, the translation gives the same objects as Microware's assemblers: Ultra C's
+`r68` (`ucc`, `ucc95`) and C 3.2's `r68` and `r68020` (`c32`). The comparison is byte for byte
+after `rof2elf`: the code (from a link of the object alone), the data, the global symbols and the
+relocations, against the Microware assembler's object of the same source. It is checked on the
+cases in `tests/r68` and on a large set of real r68 sources (more than a million lines in more
+than 3,300 files), and through more than 1,100 modules rebuilt from such sources and compared with
+the originals.
+
 C 3.2's two assemblers give identical objects for the sources both take (`r68020 -m0` against
 `r68`, and `-m2` too); between Ultra C's `r68 -m2` and C 3.2's `r68020 -m2`, every difference
 found is one the dialects cover.
 
+Microware bugs, ours correct:
+
 - **A global equate of a label** gets a wrong type or value in Microware's objects (see "Labels
   and symbols"); uses are relocated right.
+- **`addq`/`subq` of a difference of vsect labels defined further on** (`addq.l #Fw2-Fw1,a0`):
+  both Microware assemblers list the right words but write zeros into the object for that
+  instruction, at times for the next ones too. The translation writes the listed words.
 
 The reference manuals are the *OS-9 Assembler/Linker User Manual* (Microware 77165106) for
 C 3.2's assembler and *Using Ultra C/C++* for Ultra C's `r68`. Where they and the assemblers
@@ -407,6 +432,8 @@ differ, the assemblers are followed.
   #imm,d16(a0)`, registers with `%`); expressions of externals with `*` or `/`; `set` of an
   external name; a second `ends`; `dc.b 'xy'` (kept as a string); `rept` with LF line ends (Ultra
   C's `r68` needs CR LF there).
+- **`fnop`:** Ultra C's `r68` writes `$F200 0000`, C 3.2's `r68020` and the translation `$F280
+  0000`, Motorola's encoding.
 - **68020 and later:** the sources measured are mostly 68000 code; 68000 code at `-m2` gives the
   same objects as both Microware assemblers, but the 68020 instructions and addressing modes are
   checked on fewer sources.
@@ -420,5 +447,8 @@ differ, the assemblers are followed.
 
       TOOLS=<dir> [R68=<r68.exe> R68WORK=/mnt/c/...] bash tests/r68/run.sh [CASE...]
 
+- **`test/r68corpus`** in the superproject: scripts that assemble any set of r68 sources with
+  `m68k-os9-r68` and with both Microware assemblers (Ultra C's `r68` directly, C 3.2's in vDos)
+  and compare the objects; Microware's outputs are never stored.
 - **`make check-r68`** in `test/abi-exec`: tests whose assembly side is written in r68 syntax
   (`r68tests/`), translated, assembled and run with their C side.
