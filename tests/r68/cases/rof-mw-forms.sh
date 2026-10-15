@@ -4,7 +4,7 @@
 # code ($74), not a PC-relative one; an external added to itself (\1+\1+\1+\1, 4*Ext) is four
 # references to it (before, elf2rof refused it: "a multiplied external name"). The ELF object
 # keeps no .r68pcm (r68togas's note of the Ext-* fields).
-# fixed: FIXME
+# fixed: 2cd9555 2026-10-16 r68togas, elf2rof, rof2elf: ROF output as Microware's (header edition, Ext-*, multiplied externals)
 src rf <<'EOF'
 Mul4 macro
  move.l \1+\1+\1+\1(a3),-(a7)
