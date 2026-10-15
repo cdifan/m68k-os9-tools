@@ -1,7 +1,7 @@
 * -dialect=ucc95: Ultra C's r68 of 1994-95 pads and aligns a psect's vsect (uninitialized and
 * initialized data) to 2, where the later one (ucc) takes 4; the code stays 4, padded with zeros
 * (measured 2026-10-15: a driver's statics placed at $86 after two others' of $36 and $50).
-* fixed: FIXME
+* fixed: bfaa6ae 2026-10-15 r68togas, rof2elf: -a= regression fix, later byte immediates, old libgen layout, ucc95 vsects; "gas" for GNU as
 * options: -dialect=ucc95
 * not r68: the r68 at hand is the later one, which pads to 4
 * expect size: .bss 6

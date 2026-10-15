@@ -3,7 +3,7 @@
 * both Microware assemblers write it ($FFFE for -2; checked 2026-10-15 with Ultra C's r68);
 * before, gas wrote only its low byte ($00FE). move.b keeps $00FE, as in both; a bit number is
 * the same either way (0 to 31).
-* fixed: FIXME
+* fixed: bfaa6ae 2026-10-15 r68togas, rof2elf: -a= regression fix, later byte immediates, old libgen layout, ucc95 vsects; "gas" for GNU as
 * expect text: 0200fffe 02010002 0002fffd 0c28fffd0004 023cfffe 08d10002 0604fffe 0006fffe 1e3c00fe 4e71 4e71 4e71
  psect byte_imm_later,0,0,0,0,0
  andi.b #Lab_a-Lab_b,d0
