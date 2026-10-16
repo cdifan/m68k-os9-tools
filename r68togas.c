@@ -17,6 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #include "r68x_note.h"
 
@@ -38,6 +42,21 @@ static void die(const char *format, ...)
 	for (int i = 0; i < nmade; i++)
 		remove(made[i]);
 	exit(1);
+}
+
+/* An anonymous temporary file, as tmpfile(): Windows' tmpfile() makes it in
+ * the drive's root, which a user may not write to; there one in the
+ * temporary directory, deleted when closed. */
+static FILE *temp_file(void)
+{
+#ifdef _WIN32
+	char dir[MAX_PATH], path[MAX_PATH];
+	if (GetTempPathA(sizeof dir, dir) == 0 || GetTempFileNameA(dir, "r68", 0, path) == 0)
+		return NULL;
+	return fopen(path, "w+bD");
+#else
+	return tmpfile();
+#endif
 }
 
 static void note_made(char *path)
@@ -5056,7 +5075,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				 * (gas would include it at each expansion). */
 				struct buf saved = hoisted;
 				memset(&hoisted, 0, sizeof hoisted);
-				FILE *t = tmpfile();
+				FILE *t = temp_file();
 				if (t == NULL)
 					die("cannot make a temporary file");
 				translate_file(found, t, depth + 1);
@@ -6464,7 +6483,7 @@ int main(int argc, char **argv)
 	 * known at its end, is written first, as .file before .mri 1 (a .mri 0
 	 * later would make gas expand earlier MRI macros' strings wrongly). */
 	FILE *final = out;
-	out = tmpfile();
+	out = temp_file();
 	if (out == NULL)
 		die("cannot make a temporary file");
 	if (arch != NULL)
