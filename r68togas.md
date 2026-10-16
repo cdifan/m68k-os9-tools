@@ -448,6 +448,9 @@ differ, the assemblers are followed.
   global labels made with `\@` show it.
 - **`@` and `_at_` in one source:** where a source has names with `@`, a global name with `_at_`
   of its own comes out with `@` too.
+- **Quotes in a `fail` text** come out as backquotes in the message (double quotes, `<` and `>`
+  too, as `` ` ``, `(` and `)`): `gas` loses track of quotes in a macro argument where its input
+  buffer ends.
 - **A vsect after byte data of odd length in the code:** MRI mode aligns the code to 2 at the
   `vsect`, which r68 doesn't, so the code gets a zero byte there. GCC's output can have this;
   [gastor68](gastor68.md) avoids it by writing the vsects after the code.
