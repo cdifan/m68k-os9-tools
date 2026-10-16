@@ -64,7 +64,7 @@ static int by_name(const void *a, const void *b)
 	return strcmp(((const struct r68x_term *)a)->sym, ((const struct r68x_term *)b)->sym);
 }
 
-/* The text of X, terms sorted; LD: quoted names, spaces around *. */
+/* The text of X, terms sorted; LD: quoted names, spaces around *, ABSOLUTE(). */
 static char *text(const struct r68x *x, int ld)
 {
 	struct r68x_term *t = alloc(x->n * sizeof *t);
@@ -73,19 +73,24 @@ static char *text(const struct r68x *x, int ld)
 	qsort(t, x->n, sizeof *t, by_name);
 	size_t size = 16;
 	for (int i = 0; i < x->n; i++)
-		size += strlen(t[i].sym) + 32;
+		size += strlen(t[i].sym) + 48;
 	char *s = alloc(size), *p = s;
 	*p = '\0';
 	for (int i = 0; i < x->n; i++) {
 		long c = t[i].coef;
 		const char *sign = c < 0 ? "-" : i ? "+" : "";
 		long a = c < 0 ? -c : c;
-		const char *q = ld ? "\"" : "";
+		/* for ld, a term negated or multiplied as ABSOLUTE(): ld keeps
+		 * -sym and 2*sym of a section-relative symbol relative to its
+		 * section, adding the section's address back (-btext in a ROM
+		 * at $400000 came out $400000) */
+		const char *q = ld ? (c != 1 ? "ABSOLUTE(\"" : "\"") : "";
+		const char *qe = ld ? (c != 1 ? "\")" : "\"") : "";
 		if (a == 1)
-			p += sprintf(p, "%s%s%s%s", ld && i ? (c < 0 ? " - " : " + ") : sign, q, t[i].sym, q);
+			p += sprintf(p, "%s%s%s%s", ld && i ? (c < 0 ? " - " : " + ") : sign, q, t[i].sym, qe);
 		else
 			p += sprintf(p, ld ? "%s%ld * %s%s%s" : "%s%ld*%s%s%s", ld && i ? (c < 0 ? " - " : " + ") : sign, a, q,
-				t[i].sym, q);
+				t[i].sym, qe);
 	}
 	free(t);
 	return s;
