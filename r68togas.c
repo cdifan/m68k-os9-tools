@@ -1241,6 +1241,7 @@ static void free_line(struct line *l)
 struct state {
 	int in_psect, in_vsect, remote;
 	int used_remote;	/* a vsect remote seen */
+	int used_pcm;		/* a .r68pcm note written (pcm_marks) */
 	char **lsnames;		/* the source's labels with their sections (label_section) */
 	char *lssecs;
 	int nls;
@@ -4513,7 +4514,10 @@ static int less_code_label(const char *s, size_t n)
  * (.Lr68pcm set there: gas keeps each use of a set symbol at its value
  * then, so a rept or a macro may repeat it, where a label would be
  * defined again; no macro of the prelude, whose use would count in the
- * source's \@ numbers), for elf2rof to write as both Microware
+ * source's \@ numbers; MRI's section, as .pushsection needs .mri 0, and
+ * gas, which prepares its input ahead in the mode then, takes lines
+ * after a .mri 1 at a buffer's end in the wrong one), for elf2rof to
+ * write as both Microware
  * assemblers do: the external and a negated reference to the psect's code,
  * where gas makes a PC-relative relocation like an instruction's. */
 static void pcm_marks(const char *args, int bytes)
@@ -4529,11 +4533,12 @@ static void pcm_marks(const char *args, int bytes)
 	}
 	if (!any)
 		return;
-	bputs(&line_after, ".Lr68pcm set *\n .mri 0\n .pushsection .r68pcm,\"\"\n");
+	bputs(&line_after, ".Lr68pcm set *\n section .r68pcm\n");
 	for (int k = 0; k < n; k++)
 		if ((has_location(pieces[k], lens[k]) || less_code_label(pieces[k], lens[k])) && names_external(pieces[k], lens[k]))
-			bprintf(&line_after, " .long .Lr68pcm-%d\n", (n - k) * bytes);
-	bputs(&line_after, " .popsection\n .mri 1\n");
+			bprintf(&line_after, " dc.l .Lr68pcm-%d\n", (n - k) * bytes);
+	bputs(&line_after, " section .text\n");
+	st.used_pcm = 1;
 	annotate = 1;
 }
 
@@ -4697,7 +4702,7 @@ static int pc_immediate(const char *op, const char *args, const char *labs, cons
 	bputc(out, ')');
 	struct buf t = { 0 };
 	put_symbol(&t, name, strlen(name));
-	bprintf(out, "\n .mri 0\n .reloc .Lr68pi%d+2,R_68K_PC%d,%s+.Lr68pa%d\n .mri 1", npi, size == 'l' ? 32 : 16,
+	bprintf(out, "\n reloc .Lr68pi%d+2,R_68K_PC%d,%s+.Lr68pa%d", npi, size == 'l' ? 32 : 16,
 		t.s, npi);
 	free(t.s);
 	free(name);
@@ -5581,7 +5586,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			if (*labs)
 				bprintf(out, "%s\n", labs);
 			nsb++;
-			bprintf(out, "r68__sb%d dc.b $%02X,0%s\n .mri 0\n .reloc r68__sb%d+1,R_68K_PC8,%s-1\n .mri 1", nsb,
+			bprintf(out, "r68__sb%d dc.b $%02X,0%s\n reloc r68__sb%d+1,R_68K_PC8,%s-1", nsb,
 				0x60 + k, rest, nsb, t.s);
 			free(t.s);
 			annotate = 1;
@@ -5671,10 +5676,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		 * assemblers relocate the whole extension word (16 bits, $FFFE
 		 * for -2), gas only the low byte (move.b keeps a byte). #0, and
 		 * before the instruction the value relocated as the 16-bit word
-		 * after its first word: .reloc (only outside MRI mode) through
-		 * .Lr68w set to the value (gas keeps each use of a set symbol at
-		 * its value then; no prelude macro, whose use would count in the
-		 * source's \@ numbers). Not with a macro parameter (unknown). */
+		 * after its first word: MRI's reloc (no .mri 0 around .reloc,
+		 * see pcm_marks) through .Lr68w set to the value (gas keeps each
+		 * use of a set symbol at its value then; no prelude macro, whose
+		 * use would count in the source's \@ numbers). Not with a macro
+		 * parameter (unknown). */
 		int word_imm = word_byte_imm(base, size, l.args) && !is_macro(l.op);
 		pc_ext_offset = strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0 ||
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
@@ -5828,7 +5834,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					free(v);
 					bputs(&line_before, ".Lr68w set ");
 					bput(&line_before, e.s, e.n);
-					bputs(&line_before, "\n .mri 0\n .reloc .+2,R_68K_16,.Lr68w\n .mri 1\n");
+					bputs(&line_before, "\n reloc *+2,R_68K_16,.Lr68w\n");
 					free(e.s);
 					bputs(out, "#0");
 					annotate = 1;
@@ -6602,6 +6608,9 @@ int main(int argc, char **argv)
 		 * has none to give): allocated, writable, .remote.bss without
 		 * contents, as GCC's. */
 		fprintf(final, " .section .remote.data,\"aw\"\n .section .remote.bss,\"aw\",@nobits\n .text\n");
+	if (st.used_pcm)
+		/* pcm_marks's section, not allocated */
+		fputs(" .section .r68pcm,\"\"\n .text\n", final);
 	if (st.aliases.s != NULL) {
 		/* the sections' aliases the link-time expressions name
 		 * (label_alias): hidden globals at their start (nothing is in
