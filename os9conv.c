@@ -20,6 +20,7 @@
 #include <libiberty.h>
 
 #define RANLIB	"m68k-elfos9-ranlib"
+#define AR	"m68k-elfos9-ar"
 #define ROF2ELF	"rof2elf"
 
 const char *os9_who = "m68k-os9";
@@ -329,6 +330,25 @@ char *os9conv_as_elf(const char *input, int library)
 	args_add(&argv, input);
 	int status = os9_run(&argv, NULL, NULL);
 	args_free(&argv);
+	if (status == 0 && library && !os9_dry_run && !file_is_ar(temp)) {
+		/* one ROF given as a library (l68 -l=stamp.r: a library of one
+		 * member, as Microware's l68 takes it): rof2elf's object put
+		 * into an archive of its own */
+		char *obj = xmalloc(strlen(temp) + 3);
+		sprintf(obj, "%s.o", temp);
+		if (host_replace(temp, obj) != 0) {
+			status = 1;
+		} else {
+			args_add(&argv, AR);
+			args_add(&argv, "rc");
+			args_add(&argv, temp);
+			args_add(&argv, obj);
+			status = os9_run(&argv, NULL, NULL);
+			args_free(&argv);
+			remove(obj);
+		}
+		free(obj);
+	}
 	if (status == 0 && library) {
 		args_add(&argv, RANLIB);
 		args_add(&argv, temp);

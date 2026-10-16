@@ -149,6 +149,10 @@ Most instruction lines need no change. Where the same text means something else 
 
 - **`jsr label` and `lea label,a0`** to a code label: r68 makes them absolute long, `gas`
   PC-relative; written `(label).l`.
+- **Bare address operands** (`move.l a6,Addr`, `Addr equ $c0`) are absolute long in both
+  Microware assemblers, where `gas` takes a short address for a small value: written as long.
+  Also for an expression with a macro parameter (`btst #0,$E7E+\1`); a parameter alone stays as
+  it is (it may be a register).
 - **`(pcr)`**, r68's spelling of PC-relative: `(pc)`.
 - **`n(pc)` with a number** is a raw displacement in r68 and an absolute address in MRI: written
   `(*+2+n)(pc)` (`*+4` after a `movem` mask or a bit number). The same for an equate of a number,
@@ -171,6 +175,9 @@ Most instruction lines need no change. Where the same text means something else 
 - **Registers written with `%`** (`%d0`, `%PC`, `%fp0`), which Ultra C's `r68` takes: written
   without the `%`. With `-r`, registers are only those with `%`; a plain register name is a
   symbol, written with `__r68` after it.
+- **68020 register pairs** (`mulu.l #n,d3:d2`) and bit fields after a data register (`bftst
+  d0{29:3}`) are kept as such; after a bare address, the address is long and the bit field
+  follows it.
 - **`cinv` and `cpush`:** the cache operands (`bc`, `dc`, `ic`, `nc`) are kept as they are.
 
 ### Immediates
@@ -433,6 +440,9 @@ differ, the assemblers are followed.
   global labels made with `\@` show it.
 - **`@` and `_at_` in one source:** where a source has names with `@`, a global name with `_at_`
   of its own comes out with `@` too.
+- **A vsect after byte data of odd length in the code:** MRI mode aligns the code to 2 at the
+  `vsect`, which r68 doesn't, so the code gets a zero byte there. GCC's output can have this;
+  [gastor68](gastor68.md) avoids it by writing the vsects after the code.
 - **Unreferenced externals:** an external named only by an `equ` (`A equ Ext`), or by the twin of
   a label a conditional leaves out, stays in `gas`'s object as an undefined symbol no relocation
   uses, which would make a link take in a library member for it. `m68k-os9-r68` removes such

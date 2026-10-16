@@ -752,7 +752,8 @@ static int long_refs;
  * operand) */
 static int full_format;
 
-/* Whether S (N chars) is a register or register list (d0-d3/a0). */
+/* Whether S (N chars) is a register or register list (d0-d3/a0), or a
+ * 68020 register pair (mulu.l #n,d3:d2; cas2's d0:d1). */
 static int register_list(const char *s, size_t n)
 {
 	size_t i = 0;
@@ -762,7 +763,7 @@ static int register_list(const char *s, size_t n)
 			j++;
 		if (!is_reg(s + i, j - i))
 			return 0;
-		if (j < n && (s[j] == '-' || s[j] == '/'))
+		if (j < n && (s[j] == '-' || s[j] == '/' || s[j] == ':'))
 			j++;
 		i = j;
 	}
@@ -4239,6 +4240,27 @@ static int c32_immediate(struct buf *out, const char *labs, const char *base, ch
 
 static int names_external(const char *s, size_t n);
 
+/* Whether operand S (N chars) with macro parameters is an expression (an
+ * operator outside quotes: $E7E+\1, $E7E+'\1'), so an address where it
+ * isn't in parentheses, not a register as a parameter alone may be. */
+static int param_address(const char *s, size_t n)
+{
+	char q = 0;
+	if (memchr(s, '(', n) != NULL || memchr(s, '#', n) != NULL)
+		return 0;
+	for (size_t i = 0; i < n; i++) {
+		if (q) {
+			if (s[i] == q)
+				q = 0;
+		} else if (s[i] == '\'' || s[i] == '"') {
+			q = s[i];
+		} else if (i > 0 && strchr("+-*/&!<>", s[i]) != NULL) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 /* Operand E (EN chars) as an effective address of the simple kinds: a data or
  * address register, (An), (An)+, -(An), d(An); its mode and register, and for
  * d(An) the displacement (*DISP, *DN chars, else null). 1 if it is one. */
@@ -5724,7 +5746,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				size_t alen = lens[i];
 				if (alen > 2 && pieces[i][alen - 1] == '}' && memchr(pieces[i], '{', alen) != NULL)
 					alen = (size_t)((const char *)memchr(pieces[i], '{', alen) - pieces[i]);
-				int abs_here = (absolute ? i == 0 : addr_op && memchr(pieces[i], '\\', lens[i]) == NULL) &&
+				/* (a macro parameter alone may be a register; one in an
+				 * expression, $E7E+\1, is part of an address: absolute
+				 * long in both r68s, checked 2026-10-16) */
+				int abs_here = (absolute ? i == 0 : addr_op && (memchr(pieces[i], '\\', lens[i]) == NULL ||
+										param_address(pieces[i], lens[i]))) &&
 					pieces[i][0] != '#' && alen > 0 &&
 					(memchr(pieces[i], '(', alen) == NULL || paren_address(pieces[i], alen)) &&
 					!register_list(pieces[i], alen) && !(alen > 2 && pieces[i][alen - 2] == '.') &&
