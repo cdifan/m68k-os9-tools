@@ -13,6 +13,7 @@
 #include "hostsys.h"
 #include "os9conv.h"
 #include "os9link.h"
+#include "r68x_note.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -45,7 +46,7 @@ enum kind {
 
 enum id {
 	O_A, O_B, O_C, O_E, O_F, O_G, O_GU, O_I, O_J, O_L, O_M, O_MM, O_MT, O_N, O_NN,
-	O_OO, O_O, O_P, O_R, O_RR, O_S, O_SS, O_T, O_V, O_W, O_X, O_Z,
+	O_OO, O_O, O_P, O_R, O_RR, O_S, O_SS, O_T, O_V, O_W, O_X, O_Z, O_DIALECT,
 };
 
 #define C32	1	/* in C 3.2's l68 */
@@ -92,6 +93,7 @@ static const struct option options[] = {
 	{ "x", VALUE, "=<n>", "Align the execution offset to <n> (2, 4, 8, 16)", NULL, O_X, UCC },
 	{ "z", OPTVALUE, "[=<path>]", "Files and options from standard input or <path>", NULL, O_Z, C32 | UCC },
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
+	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
 };
 #define NOPTIONS (sizeof options / sizeof options[0])
 
@@ -121,6 +123,7 @@ static struct {
 	int ucc;		/* -t=: Ultra C's style */
 	long xalign;		/* -x= */
 	struct args files;	/* in order */
+	int c32;		/* -dialect=c32: library members in archive order */
 } st;
 
 /* ----- Usage ----- */
@@ -265,6 +268,11 @@ static void apply(const struct option *o, const char *value)
 	case O_W: break;
 	case O_X: st.xalign = alignment("x", value); break;
 	case O_Z: read_z(value); break;
+	case O_DIALECT:
+		if (strcmp(value, "c32") != 0 && strcmp(value, "ucc") != 0)
+			error("-dialect=%s: expected ucc or c32", value);
+		st.c32 = strcmp(value, "c32") == 0;
+		break;
 	}
 }
 
@@ -474,6 +482,295 @@ static char *equate_library(const char *archive)
 	return copy;
 }
 
+/* ----- Ultra C's member order (-dialect=ucc) ----- */
+
+/* Ultra C's l68 takes the library members a link needs in another order than
+ * the archive's, which C 3.2's l68 (and ld) keep (m68k-os9-l68.md, "Library
+ * member order"; measured 2026-10-16): the root objects' references in
+ * order, each linking its member; a member linked puts the members defining
+ * its unresolved references (in name order, as a ROF lists them) on a stack,
+ * those not linked or on it already; the top is linked next. Here the front
+ * end chooses the members so and gives ld them as objects, in that order. */
+
+struct member {
+	char *path;		/* extracted, or the input itself */
+	struct args defs;	/* its global definitions */
+	struct args refs;	/* its references, in name order, link-time expressions' terms included */
+	int state;		/* 0, 1 on the stack, 2 linked */
+	int library;		/* in an -l= library (else a root object's) */
+};
+
+static struct member *members;
+static int nmembers;
+
+static struct member *new_member(const char *path, int library)
+{
+	members = xrealloc(members, (nmembers + 1) * sizeof *members);
+	struct member *m = &members[nmembers++];
+	memset(m, 0, sizeof *m);
+	m->path = xstrdup(path);
+	m->library = library;
+	return m;
+}
+
+/* The members of ar archive PATH, each into a file of its own (the symbol
+ * table and long names left out), as new members. 0 if it isn't readable. */
+static int extract_members(const char *path)
+{
+	FILE *fp = fopen(path, "rb");
+	if (fp == NULL)
+		return 0;
+	char magic[8], h[60];
+	if (fread(magic, 1, 8, fp) != 8 || memcmp(magic, "!<arch>\n", 8) != 0) {
+		fclose(fp);
+		return 0;
+	}
+	while (fread(h, 1, 60, fp) == 60) {
+		char sz[11];
+		memcpy(sz, h + 48, 10);
+		sz[10] = '\0';
+		long size = strtol(sz, NULL, 10);
+		if (size < 0)
+			break;
+		char *data = xmalloc((size_t)size + 1);
+		if (fread(data, 1, (size_t)size, fp) != (size_t)size) {
+			free(data);
+			break;
+		}
+		if (size % 2)
+			fgetc(fp);
+		if (h[0] == '/' && (h[1] == ' ' || h[1] == '/' || strncmp(h, "/SYM64/", 7) == 0)) {
+			free(data);
+			continue;
+		}
+		char *out = os9_temp(".o");
+		FILE *o = fopen(out, "wb");
+		if (o == NULL || fwrite(data, 1, (size_t)size, o) != (size_t)size || fclose(o) != 0)
+			error("cannot write %s", out);
+		free(data);
+		new_member(out, 1);
+	}
+	fclose(fp);
+	return 1;
+}
+
+static int by_name(const void *a, const void *b)
+{
+	return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/* nm -g -p of PATH into a file (NULL if it fails). */
+static char *nm_list(const char *path)
+{
+	char *out = os9_temp(".nm");
+	struct args argv = { 0 };
+	args_add(&argv, NM);
+	args_add(&argv, "-g");
+	args_add(&argv, "-p");
+	args_add(&argv, path);
+	int dry = os9_dry_run, show = os9_show;
+	os9_dry_run = os9_show = 0;
+	int status = os9_run(&argv, out, os9_temp(".log"));
+	os9_dry_run = dry, os9_show = show;
+	args_free(&argv);
+	return status == 0 ? out : NULL;
+}
+
+/* A line of nm's list into M: a definition, or a reference (to a link-time
+ * expression's symbol: into EXPRS). */
+static void nm_line(struct member *m, const char *line, struct args *exprs)
+{
+	char a[64], b[64], name[256];
+	int k = sscanf(line, "%63s %63s %255s", a, b, name);
+	if (k == 2 && strcmp(a, "U") == 0) {
+		if (strncmp(b, R68X_PREFIX, strlen(R68X_PREFIX)) == 0)
+			args_add(exprs, b);
+		else
+			args_add(&m->refs, b);
+	} else if (k == 3 && strcmp(b, "U") != 0) {
+		args_add(&m->defs, name);
+	}
+}
+
+/* M's definitions and references, from nm (LIST: an archive's list, its
+ * lines from M's "member:" line on; else nm of M); the terms of the
+ * link-time expressions it refers to (its .r68x notes) as references too, as
+ * l68 has them in the ROF's expressions. */
+static void read_symbols(struct member *m, FILE *list)
+{
+	struct args exprs = { 0 }, argv = { 0 };
+	char line[512];
+	if (list != NULL) {
+		while (fgets(line, sizeof line, list) != NULL) {
+			size_t n = strcspn(line, "\r\n");
+			if (n == 0)
+				break;
+			if (line[n - 1] != ':')
+				nm_line(m, line, &exprs);
+		}
+	} else {
+		char *out = nm_list(m->path);
+		FILE *fp = out != NULL ? fopen(out, "r") : NULL;
+		while (fp != NULL && fgets(line, sizeof line, fp) != NULL)
+			nm_line(m, line, &exprs);
+		if (fp != NULL)
+			fclose(fp);
+	}
+	int dry = os9_dry_run, show = os9_show, status;
+	FILE *fp;
+	os9_dry_run = os9_show = 0;
+	if (exprs.n > 0) {
+		char *notes = os9_temp(".r68x");
+		args_add(&argv, OBJCOPY);
+		args_addf(&argv, "--dump-section=" R68X_SECTION "=%s", notes);
+		args_add(&argv, m->path);
+		args_add(&argv, os9_temp(".o"));
+		status = os9_run(&argv, NULL, os9_temp(".log"));
+		args_free(&argv);
+		fp = status == 0 ? fopen(notes, "r") : NULL;
+		char text[4096];
+		while (fp != NULL && fgets(text, sizeof text, fp) != NULL) {
+			text[strcspn(text, "\r\n")] = '\0';
+			char *eq = strchr(text, '=');
+			if (eq == NULL)
+				continue;
+			*eq = '\0';
+			int used = 0;
+			for (int i = 0; i < exprs.n && !used; i++)
+				used = strcmp(exprs.v[i], text) == 0;
+			struct r68x x;
+			if (!used || !r68x_parse(eq + 1, &x))
+				continue;
+			for (int i = 0; i < x.n; i++)
+				args_add(&m->refs, x.t[i].sym);
+			r68x_free(&x);
+		}
+		if (fp != NULL)
+			fclose(fp);
+	}
+	os9_dry_run = dry, os9_show = show;
+	args_free(&exprs);
+	/* in name order, each once */
+	if (m->refs.n == 0)
+		return;
+	qsort(m->refs.v, (size_t)m->refs.n, sizeof *m->refs.v, by_name);
+	int k = 0;
+	for (int i = 0; i < m->refs.n; i++) {
+		if (k > 0 && strcmp(m->refs.v[k - 1], m->refs.v[i]) == 0)
+			free(m->refs.v[i]);
+		else
+			m->refs.v[k++] = m->refs.v[i];
+	}
+	m->refs.n = k;
+	m->refs.v[k] = NULL;
+}
+
+static int defined(const char *name)
+{
+	for (int i = 0; i < nmembers; i++)
+		if (members[i].state == 2 || !members[i].library)
+			for (int j = 0; j < members[i].defs.n; j++)
+				if (strcmp(members[i].defs.v[j], name) == 0)
+					return 1;
+	return 0;
+}
+
+/* The first library member defining NAME, or NULL. */
+static struct member *definer(const char *name)
+{
+	for (int i = 0; i < nmembers; i++)
+		if (members[i].library)
+			for (int j = 0; j < members[i].defs.n; j++)
+				if (strcmp(members[i].defs.v[j], name) == 0)
+					return &members[i];
+	return NULL;
+}
+
+/* Links M and what it needs, as Ultra C's l68 (see above), adding their
+ * paths to ORDER. */
+static void link_member(struct member *m, struct args *order)
+{
+	struct member **stack = xmalloc((size_t)(nmembers + 1) * sizeof *stack);
+	int top = 0;
+	stack[top++] = m;
+	m->state = 1;
+	while (top > 0) {
+		struct member *t = stack[--top];
+		t->state = 2;
+		args_add(order, t->path);
+		for (int i = 0; i < t->refs.n; i++) {
+			if (defined(t->refs.v[i]))
+				continue;
+			struct member *d = definer(t->refs.v[i]);
+			if (d != NULL && d->state == 0) {
+				d->state = 1;
+				stack[top++] = d;
+			}
+		}
+	}
+	free(stack);
+}
+
+/* The members of the -l= libraries LIBS (ELF archives) the root inputs ROOTS
+ * (ELF objects and archives linked whole, in order) need, in Ultra C's
+ * order, into ORDER. */
+static void ucc_members(const struct args *roots, const struct args *libs, struct args *order)
+{
+	for (int i = 0; i < roots->n; i++) {
+		if (file_is_ar(roots->v[i])) {
+			int first = nmembers;
+			extract_members(roots->v[i]);
+			for (int j = first; j < nmembers; j++) {
+				members[j].library = 0;
+				read_symbols(&members[j], NULL);
+			}
+		} else {
+			read_symbols(new_member(roots->v[i], 0), NULL);
+		}
+	}
+	int nroots = nmembers;
+	for (int i = 0; i < libs->n; i++) {
+		int first = nmembers;
+		if (!extract_members(libs->v[i]))
+			error("%s: cannot read the archive", libs->v[i]);
+		/* one nm of the archive, its "member:" blocks in the members'
+		 * order; nm of each member where they don't match */
+		char *out = nm_list(libs->v[i]);
+		FILE *list = out != NULL ? fopen(out, "r") : NULL;
+		int blocks = 0;
+		char line[512];
+		while (list != NULL && fgets(line, sizeof line, list) != NULL) {
+			size_t n = strcspn(line, "\r\n");
+			blocks += n > 0 && line[n - 1] == ':' && strchr(line, ' ') == NULL;
+		}
+		if (list != NULL && blocks == nmembers - first) {
+			rewind(list);
+			for (int j = first; j < nmembers; j++) {
+				while (fgets(line, sizeof line, list) != NULL) {
+					size_t n = strcspn(line, "\r\n");
+					if (n > 0 && line[n - 1] == ':' && strchr(line, ' ') == NULL)
+						break;
+				}
+				read_symbols(&members[j], list);
+			}
+		} else {
+			for (int j = first; j < nmembers; j++)
+				read_symbols(&members[j], NULL);
+		}
+		if (list != NULL)
+			fclose(list);
+	}
+	for (int i = 0; i < nroots; i++)
+		for (int j = 0; j < members[i].refs.n; j++) {
+			const char *r = members[i].refs.v[j];
+			if (defined(r))
+				continue;
+			struct member *d = definer(r);
+			if (d != NULL && d->state == 0)
+				link_member(d, order);
+		}
+}
+
 /* ----- Linking ----- */
 
 /* The linker script, laid out as elf2mod expects (as m68k-os9-xcc's): code
@@ -627,14 +924,26 @@ int main(int argc, char **argv)
 			args_add(&l.link, "-Wl,--no-whole-archive");
 	}
 	/* -l= libraries after all files, in one pass in their order, as l68
-	 * searches them; then libgcc, for objects GCC compiled. */
+	 * searches them; then libgcc, for objects GCC compiled. With Ultra C's
+	 * order the members it needs, chosen here, as objects. */
+	struct args libs = { 0 }, order = { 0 };
 	for (int i = 0; i < st.libs.n; i++) {
 		char *lib0 = os9conv_as_elf(st.libs.v[i], 1);
 		char *lib = equate_library(lib0);
 		free(lib0);
-		add_input(&l.link, lib);
+		args_add(&libs, lib);
 		free(lib);
 	}
+	if (!st.c32 && libs.n > 0 && !os9_dry_run) {
+		ucc_members(&objects, &libs, &order);
+		for (int i = 0; i < order.n; i++)
+			add_input(&l.link, order.v[i]);
+	} else {
+		for (int i = 0; i < libs.n; i++)
+			add_input(&l.link, libs.v[i]);
+	}
+	args_free(&libs);
+	args_free(&order);
 	args_add(&l.link, "-lgcc");
 
 	char *elf = concat(output, ".elf", NULL);
