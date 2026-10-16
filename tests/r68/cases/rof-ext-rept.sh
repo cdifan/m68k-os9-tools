@@ -3,7 +3,7 @@
 # already defined": r68togas's mark after each was a label); and an external's references come
 # in ascending order of offset, those fields' too (before, after the others). Both sources' ROFs
 # identical to C 3.2's R68's but for the date (2026-10-16).
-# fixed: 2026-10-16 r68togas, elf2rof: Ext-* in rept, references in order
+# fixed: 67d214c 2026-10-16 r68togas, elf2rof: Ext-* in a rept, external references in order
 src rr <<'EOF'
  psect r16r,0,0,0,0,0
 Two macro
