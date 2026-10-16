@@ -1,6 +1,7 @@
 # m68k-os9-l68: which member is linked where two define a name. Ultra C's l68 (the default,
 # -dialect=ucc) takes the first in the library; C 3.2's L68 (-dialect=c32), searching once, the
 # first after the member referring to it (measured 2026-10-16 in vDos, both linkers).
+# fixed: c3ff053 2026-10-16 m68k-os9-l68: an object as a library of one member
 src root <<'EOF'
  psect root,$101,$8000,1,0,entry
 entry bsr x_one

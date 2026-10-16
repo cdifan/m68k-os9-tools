@@ -1,7 +1,7 @@
 # m68k-os9-l68: an object given as -l= (a library of one member, as a ROF file is to l68) with
 # Ultra C's member order (the default): linked when the link needs it, left out when not.
 # Before, "cannot read the archive": only ar archives were read for the member order.
-# fixed: 2026-10-16 m68k-os9-l68: an object as a library of one member
+# fixed: c3ff053 2026-10-16 m68k-os9-l68: an object as a library of one member
 src root <<'EOF'
  psect root,$101,$8000,1,0,entry
 entry bsr f_one
