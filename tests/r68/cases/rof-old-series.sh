@@ -2,7 +2,7 @@
 # (one long after the trap entry), as in the libraries of 1987-88; before, "unsupported ROF
 # series". Made here from a series-9 ROF (-obj=rof) by leaving those fields out; each converted,
 # its code and global symbol as from the series-9 one, and linked as a library.
-# fixed: FIXME
+# fixed: 2eb0dbc 2026-10-16 rof2elf: ROF series 8 and 6
 src ol <<'EOF'
  psect ol,0,0,5,0,0
 fun_o: moveq #7,d0
