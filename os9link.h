@@ -33,6 +33,33 @@ char *os9_temp(const char *suffix);
 void os9_set_tempdir(const char *dir);
 void os9_cleanup(void);
 
+/* Finding the programs to run (see "Finding the tools" in m68k-os9-xcc.md).
+ * os9_tools_init: this program's directory, and the prefix of the name it
+ * runs as: NAMES are its own short names ("xcc", "cc", ...), so that
+ * m68k-os9-xcc has the prefix "m68k-os9-" and xcc none. */
+void os9_tools_init(const char *argv0, const char *const names[]);
+
+/* -gnu-prefix=VALUE, which overrides M68K_OS9_GNU_PREFIX: a directory of
+ * the GNU tools under their short names, or the prefix of their names ("-"
+ * added unless it ends in one). */
+void os9_set_gnu_prefix(const char *value);
+/* Whether ARG is -gnu-prefix=...; then it is taken. */
+int os9_tools_option(const char *arg);
+
+/* The program to run for GNU tool TOOL ("gcc", "nm", ...): from the prefix
+ * set, else m68k-elfos9-TOOL in this program's directory, TOOL there when
+ * this program runs under its short name, else m68k-elfos9-TOOL on PATH. */
+const char *os9_gnu(const char *tool);
+
+/* The program to run for one of our tools without a prefix ("elf2mod",
+ * "rof2elf", ...): from this program's directory, else from PATH. */
+const char *os9_tool(const char *name);
+
+/* The program to run for another front end, by its short name ("r68",
+ * "l68", ...): m68k-os9-NAME in this program's directory, then on PATH;
+ * then NAME with this program's prefix in its directory (r68 for xcc). */
+const char *os9_front(const char *name);
+
 struct os9link {
 	const char *gcc;	/* the driver, e.g. m68k-elfos9-gcc */
 	const char *elf2mod;

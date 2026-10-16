@@ -19,9 +19,9 @@
 
 #include <libiberty.h>
 
-#define RANLIB	"m68k-elfos9-ranlib"
-#define AR	"m68k-elfos9-ar"
-#define ROF2ELF	"rof2elf"
+#define RANLIB	os9_gnu("ranlib")
+#define AR	os9_gnu("ar")
+#define ROF2ELF	os9_tool("rof2elf")
 
 const char *os9_who = "m68k-os9";
 int os9_quiet;

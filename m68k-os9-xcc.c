@@ -22,11 +22,10 @@
 
 #include <libiberty.h>
 
-#define GCC	"m68k-elfos9-gcc"
-#define NM	"m68k-elfos9-nm"
-#define ELF2ROF	"elf2rof"
-#define R68	"m68k-os9-r68"
-#define ELF2MOD	"elf2mod"
+#define GCC	os9_gnu("gcc")
+#define ELF2ROF	os9_tool("elf2rof")
+#define R68	os9_front("r68")
+#define ROF2ELF	os9_tool("rof2elf")
 
 
 /* ----- Options ----- */
@@ -121,6 +120,10 @@ static struct {
 	const char *libdir;	/* -w */
 	struct args libs;	/* -l */
 
+	/* This program's own options that l68 takes too, passed on to it
+	 * (-gnu-prefix=, -elf-...=, -obj=). */
+	struct args passed;
+
 	/* Files, in order. */
 	struct args files;
 
@@ -166,6 +169,8 @@ static void usage(void)
 	}
 	printf("Options of this program:\n");
 	usage_line("-mode=<mode>", "compat (C 3.2, the default here) or ucc (m68k-os9-ucc; not supported yet)");
+	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
+		"or the prefix of their names (default m68k-elfos9)");
 	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
@@ -178,6 +183,7 @@ static void usage(void)
 	printf("Environment:\n");
 	usage_line("CDEF", "Microware's header directory");
 	usage_line("CLIB", "Microware's library directory: cstart.r, clib.l ...");
+	usage_line("M68K_OS9_GNU_PREFIX", "as -gnu-prefix=");
 	usage_line("M68K_OS9_ELF", "-elf-.../-obj= settings as save=...,dir=...,cache=...,obj=...");
 	usage_line("GRPUSER", "module owner, for elf2mod: GROUP.USER, decimal (default 0.0)");
 }
@@ -345,7 +351,11 @@ static int own_option(const char *arg)
 			error("unknown -mode=%s (compat, c89 or ucc)", value);
 		return 1;
 	}
-	return os9conv_option(arg, OBJ_KINDS);
+	if (os9_tools_option(arg) || os9conv_option(arg, OBJ_KINDS)) {
+		args_add(&st.passed, arg);
+		return 1;
+	}
+	return 0;
 }
 
 /* Matches option ARG (with its '-'); the longest name that fits wins. */
@@ -414,7 +424,6 @@ static void parse(int argc, char **argv)
 
 #define suffix path_suffix
 #define stem path_stem
-#define as_elf os9conv_as_elf
 
 /* ----- Microware's libraries ----- */
 
@@ -533,8 +542,11 @@ static void compile(const char *source, const char *output, int assembler, int r
 }
 
 /* Assembles r68 source SOURCE into OUTPUT, an ELF object or (ROF) a ROF,
- * with m68k-os9-r68 for the CPU of -k/-tp (r68's 2 is the 68020 and the
- * CPU32). */
+ * with r68 for the CPU of -k/-tp (r68's 2 is the 68020 and the CPU32): our
+ * m68k-os9-r68, or Microware's r68 where that is the one found (see "Finding
+ * the tools" in m68k-os9-xcc.md). So only r68's own options; the object
+ * format goes to ours through M68K_OS9_ELF, and a ROF from Microware's where
+ * an ELF object is wanted is converted. */
 static void assemble(const char *source, const char *output, int rof)
 {
 	struct args argv = { 0 };
@@ -542,145 +554,93 @@ static void assemble(const char *source, const char *output, int rof)
 	args_add(&argv, source);
 	if (st.cpu != 0)
 		args_add(&argv, "-m2");
-	args_add(&argv, rof ? "-obj=rof" : "-obj=elf");
 	args_addf(&argv, "-o=%s", output);
 	if (os9_quiet)
 		args_add(&argv, "-q");
 	if (!os9_quiet && !os9_show)
 		printf("'%s'\n", source);
-	if (os9_run(&argv, NULL, NULL) != 0)
+	const char *env = getenv("M68K_OS9_ELF");
+	char *saved = env != NULL ? xstrdup(env) : NULL;
+	char *obj = concat(saved != NULL && *saved != '\0' ? saved : "", saved != NULL && *saved != '\0' ? "," : "",
+		rof ? "obj=rof" : "obj=elf", NULL);
+	host_setenv("M68K_OS9_ELF", obj);
+	int status = os9_run(&argv, NULL, NULL);
+	host_setenv("M68K_OS9_ELF", saved);
+	free(obj);
+	free(saved);
+	if (status != 0)
 		error("assembling %s failed", source);
 	args_free(&argv);
+	if (!rof && !os9_dry_run && !file_is_elf(output)) {
+		/* a ROF, from Microware's r68: into ELF in its place (the ROF
+		 * moved beside it: a rename into the temporary directory could
+		 * cross file systems) */
+		char *rof_copy = concat(output, ".rof", NULL);
+		if (host_replace(output, rof_copy) != 0)
+			error("cannot rename %s", output);
+		args_add(&argv, ROF2ELF);
+		args_add(&argv, "-o");
+		args_add(&argv, output);
+		args_add(&argv, rof_copy);
+		int converted = os9_run(&argv, NULL, NULL);
+		remove(rof_copy);
+		free(rof_copy);
+		if (converted != 0)
+			error("converting %s's ROF to ELF failed", source);
+		args_free(&argv);
+	}
 }
 
 /* ----- Linking ----- */
 
-/* The linker script, laid out as elf2mod expects (as test/l68cmp/mod.lds):
- * code above the data area, data a6-relative from -0x8000, and elf2mod's
- * jump table (--defsym __jmptbl_size=N). */
-static const char script[] =
-	"OUTPUT_FORMAT(\"elf32-m68k\")\n"
-	"OUTPUT_ARCH(m68k)\n"
-	"PROVIDE (__jmptbl_size = 0);\n"
-	"SECTIONS {\n"
-	"    . = 0x400000;\n"
-	"    .text : { *(.text .text.* .rodata .rodata.*) . = ALIGN(2); }\n"
-	"    /* l68's symbols for the module's start, name and end: elf2mod sets\n"
-	"       every reference to them, so these values are only placeholders. */\n"
-	"    PROVIDE (btext = ADDR(.text)); PROVIDE (_btext = ADDR(.text));\n"
-	"    PROVIDE (bname = ADDR(.text)); PROVIDE (_bname = ADDR(.text));\n"
-	"    PROVIDE (etext = ADDR(.text)); PROVIDE (_etext = ADDR(.text));\n"
-	"    . = -0x8000;\n"
-	"    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) . = ALIGN(2); }\n"
-	"    .data : { *(.data .data.*) . = ALIGN(2); _jmptbl = .; . += __jmptbl_size; _ejmptbl = .; }\n"
-	"    .remote.data : { *(.remote.data .remote.data.*) . = ALIGN(2); }\n"
-	"    .remote.bss (NOLOAD) : { *(.remote.bss .remote.bss.*) . = ALIGN(2); }\n"
-	"    end = .;\n"
-	"    PROVIDE (_enddata = .);\n"
-	"}\n";
-
-static char *write_script(void)
-{
-	char *path = os9_temp(".ld");
-	FILE *fp = fopen(path, "w");
-	if (fp == NULL || fputs(script, fp) < 0 || fclose(fp) != 0)
-		error("cannot write %s", path);
-	return path;
-}
-
-/* The stack size of the root psect's module header (__os9_stack), or 0. */
-static long root_stack(const char *root)
-{
-	char *out = os9_temp(".nm");
-	struct args argv = { 0 };
-	args_add(&argv, NM);
-	args_add(&argv, root);
-	int status = os9_run(&argv, out, NULL);
-	args_free(&argv);
-	if (status != 0)
-		return 0;
-	FILE *fp = fopen(out, "r");
-	if (fp == NULL)
-		return 0;
-	char line[256];
-	long stack = 0;
-	while (fgets(line, sizeof line, fp) != NULL) {
-		unsigned long value;
-		char type, name[128];
-		if (sscanf(line, "%lx %c %127s", &value, &type, name) == 3 && strcmp(name, "__os9_stack") == 0)
-			stack = (long)value;
-	}
-	fclose(fp);
-	return stack;
-}
-
-/* Adds input file PATH to the link. The driver would take a .r file for a
- * Ratfor source, so whatever isn't .o or .a goes to the linker directly. */
-static void add_input(struct args *link, const char *path)
-{
-	const char *ext = strrchr(lbasename(path), '.');
-	if (ext == NULL || (strcmp(ext, ".o") != 0 && strcmp(ext, ".a") != 0))
-		args_add(link, "-Xlinker");
-	args_add(link, path);
-}
-
+/* Links OBJECTS into module OUTPUT as C 3.2's xcc does: by running l68 with
+ * cstart.r (or -cs=), the objects, the libraries (-l=, then the default
+ * ones) and the module's settings; our m68k-os9-l68 normally (see "Finding
+ * the tools" in m68k-os9-xcc.md), with C 3.2's order of library members
+ * (-dialect=c32), the jump table allowed unless -j (l68's -a, which C 3.2's
+ * xcc always gives otherwise). */
 static void link_module(struct args *objects, const char *output)
 {
-	struct os9link l = { .gcc = GCC, .elf2mod = ELF2MOD, .who = os9_who };
-	char *root = as_elf(st.root != NULL ? st.root : libfile("cstart.r"), 0);
-
-	struct args libs = { 0 };
+	struct args libs = { 0 }, argv = { 0 };
 	for (int i = 0; i < st.libs.n; i++)
 		args_add(&libs, st.libs.v[i]);
 	if (!st.nolibs)
 		default_libraries(&libs);
 
-	args_add(&l.link, "-mos9call");
-	args_add(&l.link, "-nostdlib");
-	args_add(&l.link, "-Wl,-q");
-	args_add(&l.link, "-Wl,--no-check-sections");
-	args_add(&l.link, "-T");
-	args_add(&l.link, write_script());
-	add_input(&l.link, root);
-	for (int i = 0; i < objects->n; i++)
-		add_input(&l.link, objects->v[i]);
-	args_add(&l.link, "-Wl,--start-group");
-	for (int i = 0; i < libs.n; i++) {
-		char *lib = as_elf(libs.v[i], 1);
-		add_input(&l.link, lib);
-		free(lib);
+	args_add(&argv, os9_front("l68"));
+	if (st.root != NULL) {
+		args_add(&argv, st.root);
+	} else {
+		char *root = libfile("cstart.r");
+		args_add(&argv, root);
+		free(root);
 	}
-	args_add(&l.link, "-lgcc");
-	args_add(&l.link, "-Wl,--end-group");
-
-	char *elf = concat(output, ".elf", NULL);
-	char *name = st.name != NULL ? xstrdup(st.name) : os9_module_name(output);
-	l.elf = elf;
-	l.module = output;
-	l.name = name;
-	l.no_jmptbl = st.nojmptbl;
-	if (st.edition != NULL) {
-		args_add(&l.mod, "-e");
-		args_add(&l.mod, st.edition);
-	}
-	if (st.stack > 0) {
-		args_add(&l.mod, "-s");
-		args_addf(&l.mod, "%ld", root_stack(root) + st.stack);
-	}
+	args_append(&argv, objects);
+	for (int i = 0; i < libs.n; i++)
+		args_addf(&argv, "-l=%s", libs.v[i]);
+	args_addf(&argv, "-o=%s", output);
+	if (st.name != NULL)
+		args_addf(&argv, "-n=%s", st.name);
+	if (st.edition != NULL)
+		args_addf(&argv, "-e=%s", st.edition);
+	if (st.stack > 0)
+		args_addf(&argv, "-M=%ld", st.stack / 1024);
 	if (st.debug)
-		args_add(&l.mod, "-g");
+		args_add(&argv, "-g");
+	if (!st.nojmptbl)
+		args_add(&argv, "-a");
+	args_add(&argv, "-dialect=c32");
+	args_append(&argv, &st.passed);
 
 	if (!os9_quiet && !os9_show)
 		printf("linking %s\n", output);
-	if (os9_link(&l) != 0)
-		error("linking %s failed", output);
-
-	free(root);
-	free(elf);
-	free(name);
+	if (os9_run(&argv, NULL, NULL) != 0) {
+		/* l68 has said why */
+		os9_cleanup();
+		exit(1);
+	}
 	args_free(&libs);
-	args_free(&l.link);
-	args_free(&l.mod);
+	args_free(&argv);
 }
 
 /* ----- Main ----- */
@@ -691,6 +651,9 @@ int main(int argc, char **argv)
 	os9_who = strstr(base, "ucc") != NULL ? "m68k-os9-ucc" : "m68k-os9-xcc";
 	if (strstr(base, "ucc") != NULL)
 		error("Ultra C's own options (m68k-os9-ucc, -mode=ucc) aren't implemented yet");
+	/* xcc and ucc before cc, which ends both */
+	static const char *const own_names[] = { "xcc", "ucc", "cc", NULL };
+	os9_tools_init(argv[0], own_names);
 
 	os9conv_environment(OBJ_KINDS);
 	if (argc < 2) {
@@ -730,11 +693,9 @@ int main(int argc, char **argv)
 			 * ROF files .o. */
 			if (first == NULL)
 				first = stem(file, 0);
-			if (!st.asm_only && !st.rel_only) {
-				char *object = as_elf(file, 0);
-				args_add(&objects, object);
-				free(object);
-			}
+			/* as given: l68 converts a ROF */
+			if (!st.asm_only && !st.rel_only)
+				args_add(&objects, file);
 		} else if (ci_eq(sfx, ".l")) {
 			args_add(&st.libs, file);
 		} else if (ci_eq(sfx, ".a")) {

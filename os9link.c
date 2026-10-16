@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <libiberty.h>
 
@@ -104,6 +105,149 @@ void os9_cleanup(void)
 	for (int i = 0; i < temps.n; i++)
 		remove(temps.v[i]);
 	args_free(&temps);
+}
+
+/* ----- Finding the tools ----- */
+
+#define GNU_PREFIX	"m68k-elfos9-"
+#define FRONT_PREFIX	"m68k-os9-"
+
+static struct {
+	char *dir;		/* this program's directory, or null */
+	char *self;		/* the name it runs as, without .exe */
+	char *prefix;		/* of its name: "m68k-os9-", "" for xcc */
+	char *gnu;		/* -gnu-prefix= or M68K_OS9_GNU_PREFIX, or null */
+	struct args names, paths;	/* found: "kind:name", its program */
+} tools;
+
+void os9_tools_init(const char *argv0, const char *const names[])
+{
+	tools.dir = host_self_dir(argv0);
+	/* the name it runs as, without a directory and .exe */
+	char *base = xstrdup(lbasename(argv0 != NULL ? argv0 : ""));
+	size_t n = strlen(base);
+	if (n > 4 && strcasecmp(base + n - 4, ".exe") == 0)
+		base[n -= 4] = '\0';
+	tools.prefix = xstrdup(FRONT_PREFIX);
+	for (int i = 0; names != NULL && names[i] != NULL; i++) {
+		size_t k = strlen(names[i]);
+		if (n >= k && strcmp(base + n - k, names[i]) == 0) {
+			free(tools.prefix);
+			tools.prefix = xstrndup(base, n - k);
+			break;
+		}
+	}
+	tools.self = base;
+	const char *env = getenv("M68K_OS9_GNU_PREFIX");
+	if (env != NULL && *env != '\0' && tools.gnu == NULL)
+		tools.gnu = xstrdup(env);
+}
+
+void os9_set_gnu_prefix(const char *value)
+{
+	free(tools.gnu);
+	tools.gnu = *value != '\0' ? xstrdup(value) : NULL;
+	/* for the programs this one runs too (xcc runs r68 with r68's own
+	 * options only) */
+	host_setenv("M68K_OS9_GNU_PREFIX", tools.gnu);
+}
+
+int os9_tools_option(const char *arg)
+{
+	static const char opt[] = "-gnu-prefix=";
+	if (strncasecmp(arg, opt, sizeof opt - 1) != 0)
+		return 0;
+	os9_set_gnu_prefix(arg + sizeof opt - 1);
+	return 1;
+}
+
+/* KIND:NAME found before, or null. */
+static const char *found(const char *key)
+{
+	for (int i = 0; i < tools.names.n; i++)
+		if (strcmp(tools.names.v[i], key) == 0)
+			return tools.paths.v[i];
+	return NULL;
+}
+
+static const char *keep(const char *key, char *path)
+{
+	args_add(&tools.names, key);
+	args_add(&tools.paths, path);
+	free(path);
+	return tools.paths.v[tools.paths.n - 1];
+}
+
+/* NAME in this program's directory (allocated), or null. */
+static char *in_own_dir(const char *name)
+{
+	return tools.dir != NULL ? host_program_in(tools.dir, name) : NULL;
+}
+
+const char *os9_gnu(const char *tool)
+{
+	char *key = concat("gnu:", tool, NULL);
+	const char *path = found(key);
+	if (path != NULL) {
+		free(key);
+		return path;
+	}
+	char *p = NULL;
+	if (tools.gnu != NULL) {
+		size_t n = strlen(tools.gnu);
+		if (host_is_dir(tools.gnu))
+			p = concat(tools.gnu, host_is_sep(tools.gnu[n - 1]) ? "" : "/", tool, NULL);
+		else
+			p = concat(tools.gnu, tools.gnu[n - 1] == '-' ? "" : "-", tool, NULL);
+	} else {
+		char *full = concat(GNU_PREFIX, tool, NULL);
+		p = in_own_dir(full);
+		/* the short name only in a directory of short names, where it can't
+		 * be the host's own gcc or nm; never this program (m68k-os9-gcc
+		 * as gcc) */
+		if (p == NULL && tools.prefix != NULL && *tools.prefix == '\0' &&
+			strcasecmp(tool, tools.self) != 0)
+			p = in_own_dir(tool);
+		if (p == NULL)
+			p = xstrdup(full);
+		free(full);
+	}
+	path = keep(key, p);
+	free(key);
+	return path;
+}
+
+const char *os9_tool(const char *name)
+{
+	char *key = concat("tool:", name, NULL);
+	const char *path = found(key);
+	if (path == NULL) {
+		char *p = in_own_dir(name);
+		path = keep(key, p != NULL ? p : xstrdup(name));
+	}
+	free(key);
+	return path;
+}
+
+const char *os9_front(const char *name)
+{
+	char *key = concat("front:", name, NULL);
+	const char *path = found(key);
+	if (path == NULL) {
+		char *full = concat(FRONT_PREFIX, name, NULL);
+		char *p = in_own_dir(full);
+		if (p == NULL)
+			p = host_program_on_path(full);
+		if (p == NULL && tools.prefix != NULL && strcmp(tools.prefix, FRONT_PREFIX) != 0) {
+			char *own = concat(tools.prefix, name, NULL);
+			p = in_own_dir(own);
+			free(own);
+		}
+		path = keep(key, p != NULL ? p : xstrdup(full));
+		free(full);
+	}
+	free(key);
+	return path;
 }
 
 /* Copies file PATH to standard error. */
@@ -227,14 +371,7 @@ static int r68x_definitions(struct os9link *l, const char *log)
 	os9_run(&argv, NULL, os9_temp(".log"));
 	args_free(&argv);
 
-	/* objcopy beside the driver: m68k-elfos9-gcc, m68k-elfos9-objcopy */
-	size_t gn = strlen(l->gcc);
-	char *objcopy = xmalloc(gn + 8);
-	strcpy(objcopy, l->gcc);
-	if (gn >= 3 && strcmp(objcopy + gn - 3, "gcc") == 0)
-		strcpy(objcopy + gn - 3, "objcopy");
-	else
-		strcpy(objcopy, "objcopy");
+	const char *objcopy = os9_gnu("objcopy");
 	char *notes = os9_temp(".r68x");
 	args_add(&argv, objcopy);
 	args_addf(&argv, "--dump-section=" R68X_SECTION "=%s", notes);
@@ -242,7 +379,6 @@ static int r68x_definitions(struct os9link *l, const char *log)
 	args_add(&argv, os9_temp(".elf"));
 	int status = os9_run(&argv, NULL, os9_temp(".log"));
 	args_free(&argv);
-	free(objcopy);
 	FILE *fp = status == 0 ? fopen(notes, "r") : NULL;
 	if (fp == NULL)
 		return 0;
@@ -379,8 +515,8 @@ int os9_link(struct os9link *l)
 		return make_module(l, NULL);
 	}
 	if (l->no_jmptbl) {
-		fprintf(stderr, "%s: the code is too large for 16-bit calls and needs a jump table, "
-			"which -j forbids\n", l->who);
+		fprintf(stderr, "%s: the code is too large for 16-bit calls and needs a jump table "
+			"(l68's -a; xcc gives it unless -j)\n", l->who);
 		return 1;
 	}
 

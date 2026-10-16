@@ -9,6 +9,8 @@ options: it runs `m68k-elfos9-gcc` with newlib's OS-9 runtime (`-specs=os9.specs
 
 ## Usage
 
+    m68k-os9-gcc [GCC options] [-Wm,<elf2mod options>] <files>... [-o <prog>]
+
     m68k-os9-gcc -Os -o hello hello.c          # hello.elf, then the module hello
     m68k-os9-gcc -Os -o hello hello.c -Wm,-g   # also the symbol module hello.stb
 
@@ -36,6 +38,13 @@ assembler resolves the calls itself and fails; such a file has to be split.
 
 On OS-9, `malloc` has 16 KB plus what the shell's `#` modifier adds (`hello #64k`); the module's
 other defaults are in `os9.ld` in newlib's `libgloss/m68k`.
+
+## Finding the tools
+
+GCC and `elf2mod` are found as the other front ends find their tools (see "Finding the tools" in
+[m68k-os9-xcc.md](m68k-os9-xcc.md)): `M68K_OS9_GNU_PREFIX` names the GNU tools' directory or
+prefix (default `m68k-elfos9`). Copied as `gcc` into a directory of short names, it runs the real
+GCC there, never itself.
 
 ## Tests
 

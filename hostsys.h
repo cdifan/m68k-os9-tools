@@ -50,4 +50,24 @@ long host_pid(void);
 /* Whether character C separates path components. */
 int host_is_sep(int c);
 
+/* Whether PATH is an existing directory. */
+int host_is_dir(const char *path);
+
+/* The directory of this program's executable (allocated, '/' as the
+ * separator), from the system, else from ARGV0 when it has a directory; null
+ * if neither tells. */
+char *host_self_dir(const char *argv0);
+
+/* Program NAME in directory DIR (on Windows also NAME.exe): its path
+ * (allocated), or null if there's no such file. */
+char *host_program_in(const char *dir, const char *name);
+
+/* Program NAME found on PATH, as host_program_in: its path (allocated), or
+ * null. */
+char *host_program_on_path(const char *name);
+
+/* Sets environment variable NAME to VALUE for the programs run after it, or
+ * removes it (VALUE null). */
+void host_setenv(const char *name, const char *value);
+
 #endif

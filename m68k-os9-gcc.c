@@ -12,8 +12,8 @@
  * -Wm,OPTION,... passes options to elf2mod: -Wm,-g for a .stb symbol
  * module, -Wm,-e,EDITION, -Wm,-s,STACK, -Wm,-n,NAME and so on.
  *
- * Environment: OS9GCC_CC (default m68k-elfos9-gcc), ELF2MOD (default
- * elf2mod).
+ * Environment: M68K_OS9_GNU_PREFIX, the GNU tools' directory or name prefix
+ * (default m68k-elfos9; see "Finding the tools" in m68k-os9-xcc.md).
  *
  * In C rather than a shell script so that it runs on Windows too, on the
  * front ends' shared code (hostsys.c runs the programs through libiberty).
@@ -31,8 +31,6 @@
 
 #include <libiberty.h>
 
-#define GCC	"m68k-elfos9-gcc"
-#define ELF2MOD	"elf2mod"
 #define SPECS	"-specs=os9.specs"
 
 /* Options after which GCC doesn't link. */
@@ -50,12 +48,10 @@ static int no_link(const char *arg)
 int main(int argc, char **argv)
 {
 	os9_who = "m68k-os9-gcc";
-	const char *gcc = getenv("OS9GCC_CC");
-	const char *elf2mod = getenv("ELF2MOD");
-	if (gcc == NULL || *gcc == '\0')
-		gcc = GCC;
-	if (elf2mod == NULL || *elf2mod == '\0')
-		elf2mod = ELF2MOD;
+	static const char *const own_names[] = { "gcc", NULL };
+	os9_tools_init(argv[0], own_names);
+	const char *gcc = os9_gnu("gcc");
+	const char *elf2mod = os9_tool("elf2mod");
 
 	struct args gccargs = { 0 }, modargs = { 0 };
 	const char *out = NULL;

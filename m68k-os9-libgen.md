@@ -30,6 +30,7 @@ with `ar rcs lib.a a.o b.o`, through `m68k-os9-ar`.
 | `-p=<psect>` | only that psect's information | not supported (an error, also with `-c`, where `libgen` accepts it silently) |
 | `-z[=<path>]` | file names from standard input or `<path>` | the same; options in the list are taken too, as `libgen` takes them |
 | `-obj=elf\|rof\|ucc` | ours | the output format (below); also `M68K_OS9_ELF`'s `obj=` |
+| `-gnu-prefix=<p>`, `-elf-*` | ours | where the GNU tools are, and the ROF conversion's settings (see [m68k-os9-xcc.md](m68k-os9-xcc.md)) |
 
 Options are case-insensitive (`-C -O=`), as in `libgen`. `-obj=` and `-elf…` are read before
 `-o=` and `-e=`. `-?` prints the usage in `libgen`'s order, each option with what differs in

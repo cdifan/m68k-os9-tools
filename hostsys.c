@@ -186,6 +186,108 @@ char *host_tempdir(void)
 	return dir;
 }
 
+int host_is_dir(const char *path)
+{
+	struct stat st;
+	return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static int is_file(const char *path)
+{
+	struct stat st;
+	return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+char *host_self_dir(const char *argv0)
+{
+	char *self = NULL;
+#ifdef _WIN32
+	char buf[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, buf, sizeof buf);
+	if (n > 0 && n < sizeof buf)
+		self = xstrdup(buf);
+#else
+	char buf[4096];
+	ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+	if (n > 0) {
+		buf[n] = '\0';
+		self = xstrdup(buf);
+	}
+#endif
+	if (self == NULL && argv0 != NULL) {
+		int dir = 0;
+		for (const char *p = argv0; *p != '\0'; p++)
+			dir |= host_is_sep(*p);
+		if (dir)
+			self = host_abspath(argv0);
+	}
+	if (self == NULL)
+		return NULL;
+	for (char *p = self; *p != '\0'; p++)
+		if (*p == '\\')
+			*p = '/';
+	char *slash = strrchr(self, '/');
+	if (slash == NULL) {
+		free(self);
+		return NULL;
+	}
+	*slash = '\0';
+	return self;
+}
+
+char *host_program_in(const char *dir, const char *name)
+{
+	char *path = concat(dir, "/", name, NULL);
+	if (is_file(path))
+		return path;
+#ifdef _WIN32
+	char *exe = concat(path, ".exe", NULL);
+	free(path);
+	if (is_file(exe))
+		return exe;
+	free(exe);
+#else
+	free(path);
+#endif
+	return NULL;
+}
+
+char *host_program_on_path(const char *name)
+{
+	const char *path = getenv("PATH");
+	if (path == NULL)
+		return NULL;
+#ifdef _WIN32
+	const char sep = ';';
+#else
+	const char sep = ':';
+#endif
+	for (const char *p = path; ; ) {
+		const char *end = strchr(p, sep);
+		size_t n = end != NULL ? (size_t)(end - p) : strlen(p);
+		char *dir = n > 0 ? xstrndup(p, n) : xstrdup(".");
+		char *found = host_program_in(dir, name);
+		free(dir);
+		if (found != NULL)
+			return found;
+		if (end == NULL)
+			return NULL;
+		p = end + 1;
+	}
+}
+
+void host_setenv(const char *name, const char *value)
+{
+#ifdef _WIN32
+	_putenv_s(name, value != NULL ? value : "");
+#else
+	if (value != NULL)
+		setenv(name, value, 1);
+	else
+		unsetenv(name);
+#endif
+}
+
 long host_pid(void)
 {
 #ifdef _WIN32

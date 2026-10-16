@@ -81,6 +81,37 @@ an assembly syntax there would turn a whole build's objects into sources. So the
 are command-line options: `m68k-os9-r68 -obj=gas`, and `-a -obj=r68|gas` here (without `-a` an
 error).
 
+## Finding the tools
+
+All the front ends (`m68k-os9-xcc`, `-l68`, `-r68`, `-libgen`, `-gcc`) find the programs they run
+alike:
+
+- **Our own tools** without a prefix (`elf2mod`, `rof2elf`, `elf2rof`, `r68togas`, `gastor68`):
+  in the front end's own directory, else on `PATH`.
+- **The other front ends** (`xcc` runs `r68` and `l68`): `m68k-os9-NAME` in the front end's own
+  directory, then on `PATH`; then `NAME` with the front end's own prefix in its directory. The
+  prefix is what precedes the front end's own name in the name it runs as: none for `xcc`, `cc`
+  or `ucc`, so `xcc` runs `r68` and `l68` from its directory when there is no `m68k-os9-r68` or
+  `m68k-os9-l68`. The full names come first, so a directory may also hold Microware's `r68` or
+  `l68` under their own names without ours losing to them.
+- **The GNU tools** (`gcc`, `as`, `ar`, `ranlib`, `nm`, `objcopy`, `objdump`, `readelf`; `ld` and
+  the compiler's passes are found by GCC's driver):
+  - `-gnu-prefix=<p>` (`xcc`, `l68`, `r68`, `libgen`), or `M68K_OS9_GNU_PREFIX` (also
+    `m68k-os9-gcc`; the option wins): an existing directory holds them under their short names;
+    anything else is the prefix of their names, `-` added unless it ends in one
+    (`C:\gnu\bin\m68k-elfos9` gives `C:\gnu\bin\m68k-elfos9-nm`). A front end given the option
+    passes it on to the programs it runs through the environment variable.
+  - Without them (the default prefix, `m68k-elfos9`): `m68k-elfos9-NAME` in the front end's own
+    directory; then `NAME` there, but only when the front end runs under its short name (in a
+    directory of short names, where a short `gcc` or `nm` can't be the host's; never the front
+    end itself, so `m68k-os9-gcc` copied as `gcc` runs the real GCC); then `m68k-elfos9-NAME`
+    on `PATH`.
+
+**Microware's `r68` found as `r68`** works too: `xcc` gives `r68` only the options both take
+(`-o=`, `-q`, `-m2`) and the object format through `M68K_OS9_ELF`, which Microware's ignores; a
+ROF where an ELF object was asked for is converted with `rof2elf`. (C 3.2's DOS `r68` can't run
+on Windows directly; Ultra C's `r68` runs natively.)
+
 ## Objects
 
 Makefiles name their objects `.r` (`RELS/foo.r: foo.c`, then link `RELS/foo.r`), so `-r` writes the
@@ -95,6 +126,10 @@ whatever the suffix, the first bytes decide.
 ### Compiling
 
 - **`-std=gnu89`** takes K&R code.
+
+| `xcc` | C 3.2 | GCC |
+|---|---|---|
+| `-o=0`, `-o` alone | `c68` only, no optimizer | `-O0` |
 
 The last `-o` given counts. `-Os` gives the smallest code: on a large set of old C 3.2 programs
 (more than 54k lines in more than 180 files) it is smaller than C 3.2's own optimized output,
@@ -162,6 +197,11 @@ GCC code doesn't need `math.l`/`math881.l` (its floating point is libgcc's, or w
 
 ### Linking
 
+As C 3.2's `xcc` does, the driver runs the linker, `m68k-os9-l68`: with `cstart.r` or `-cs=`, the
+objects as given, the `-l=` libraries and then the default ones, `-o=`, `-n=`, `-e=`, `-M=` and
+`-g` from the options, `-a` (the jump table) unless `-j`, and `-dialect=c32` (C 3.2's order of
+library members); `-gnu-prefix=`, `-elf-*` and `-obj=` go along. `-bp` and `-h` show that command.
+
 The jump table serves calls between source files, which the linker resolves. Within one source
 file with more than 32 KB of code, the assembler resolves PC-relative calls itself and fails
 ("value of -65864 too large for field of 2 bytes"); such a file has to be split.
@@ -183,6 +223,14 @@ file with more than 32 KB of code, the assembler resolves PC-relative calls itse
 [rof2elf.md](rof2elf.md)); they are converted on demand like any other Microware library.
 
 ## Usage message
+
+`-?` (and no arguments) prints the usage of the current mode: every option the mode accepts, in
+Microware's order for that mode, each with what the driver does where that differs from
+Microware's, in square brackets (ignored, not supported, or how it's mapped); then the driver's
+own options, the files it takes by suffix, and the environment it reads (`CDEF`, `CLIB` in C 3.2
+mode; `MWOS` in Ultra C mode; `M68K_OS9_GNU_PREFIX`, `M68K_OS9_ELF`, `GRPUSER`). `-t?` lists the
+targets the mode accepts. The message is generated from the parser's own table of options, so
+the two can't differ.
 
 Options without an effect on the program (`-nv`, weights, phase stack sizes) are ignored.
 Options asking for something the driver can't produce (long offsets, adhesive modules, linker

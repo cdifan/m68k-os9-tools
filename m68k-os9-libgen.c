@@ -20,11 +20,11 @@
 
 #include <libiberty.h>
 
-#define AR	"m68k-elfos9-ar"
-#define NM	"m68k-elfos9-nm"
-#define READELF	"m68k-elfos9-readelf"
-#define ROF2ELF	"rof2elf"
-#define ELF2ROF	"elf2rof"
+#define AR	os9_gnu("ar")
+#define NM	os9_gnu("nm")
+#define READELF	os9_gnu("readelf")
+#define ROF2ELF	os9_tool("rof2elf")
+#define ELF2ROF	os9_tool("elf2rof")
 
 #define error os9_error
 
@@ -103,12 +103,15 @@ static void usage(void)
 	printf("Options of this program:\n");
 	usage_line("-obj=<kind>", "what -c writes: elf (an ar archive, default), rof (concatenated ROFs),\n"
 		"                      ucc (libgen's format)");
+	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
+		"                      or the prefix of their names (default m68k-elfos9)");
 	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
 	printf("Files: ELF and ROF objects, and libraries of any kind (ar, concatenated ROFs,\n");
 	printf("libgen's), taken member by member.\n");
 	printf("Environment:\n");
+	usage_line("M68K_OS9_GNU_PREFIX", "as -gnu-prefix=");
 	usage_line("M68K_OS9_ELF", "-elf-.../-obj= settings as save=...,dir=...,cache=...,obj=...");
 	usage_line("CLIB", "where sys.l is, for its equates when converting ROFs");
 }
@@ -164,6 +167,8 @@ static void option(const char *arg)
 		os9_cleanup();
 		exit(0);
 	}
+	if (os9_tools_option(arg))
+		return;
 	if (os9conv_option(arg, OBJ_KINDS))
 		return;
 	for (size_t i = 0; i < NOPTIONS; i++) {
@@ -935,6 +940,8 @@ static void list_ident(const char *file)
 int main(int argc, char **argv)
 {
 	os9_who = "m68k-os9-libgen";
+	static const char *const own_names[] = { "libgen", NULL };
+	os9_tools_init(argv[0], own_names);
 	os9conv_environment(OBJ_KINDS);
 	if (argc < 2) {
 		usage();

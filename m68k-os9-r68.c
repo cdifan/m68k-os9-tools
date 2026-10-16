@@ -21,13 +21,13 @@
 
 #include <libiberty.h>
 
-#define AS	"m68k-elfos9-as"
-#define READELF	"m68k-elfos9-readelf"
-#define R68TOGAS "r68togas"
-#define ELF2ROF	"elf2rof"
-#define NM	"m68k-elfos9-nm"
-#define OBJCOPY	"m68k-elfos9-objcopy"
-#define OBJDUMP	"m68k-elfos9-objdump"
+#define AS	os9_gnu("as")
+#define READELF	os9_gnu("readelf")
+#define R68TOGAS os9_tool("r68togas")
+#define ELF2ROF	os9_tool("elf2rof")
+#define NM	os9_gnu("nm")
+#define OBJCOPY	os9_gnu("objcopy")
+#define OBJDUMP	os9_gnu("objdump")
 
 #define error os9_error
 
@@ -123,10 +123,13 @@ static void usage(void)
 		"                      differ: ucc (Ultra C's r68, the default), c32 (C 3.2's R68)\n"
 		"                      or ucc95 (Ultra C's r68 of 1994-95: as ucc, the code padded\n"
 		"                      with zeros)");
+	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
+		"                      or the prefix of their names (default m68k-elfos9)");
 	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
 		"                      translated source, for m68k-os9-as; standard output\n"
 		"                      without -o)");
 	printf("Environment:\n");
+	usage_line("M68K_OS9_GNU_PREFIX", "as -gnu-prefix=");
 	usage_line("M68K_OS9_ELF", "obj=elf, rof or ucc as -obj= (gas only on the command line)");
 	usage_line("MWOS", "use <file> also looks in $MWOS/OS9/SRC/DEFS");
 }
@@ -226,6 +229,8 @@ static void option(const char *arg)
 	}
 	if (ci_prefix(text, "obj=") && ci_eq(text + 4, "r68"))
 		error("-obj=r68: the input is r68 already");
+	if (os9_tools_option(arg))
+		return;
 	if (os9conv_option(arg, OBJ_KINDS | (1u << OBJ_GAS)))
 		return;
 	for (size_t i = 0; i < NOPTIONS; i++) {
@@ -761,6 +766,8 @@ static void assemble(const char *source)
 int main(int argc, char **argv)
 {
 	os9_who = "m68k-os9-r68";
+	static const char *const own_names[] = { "r68", NULL };
+	os9_tools_init(argv[0], own_names);
 	os9conv_environment(OBJ_KINDS);
 	if (argc < 2) {
 		usage();

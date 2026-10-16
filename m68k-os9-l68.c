@@ -23,10 +23,10 @@
 
 #include <libiberty.h>
 
-#define GCC	"m68k-elfos9-gcc"
-#define NM	"m68k-elfos9-nm"
-#define OBJCOPY	"m68k-elfos9-objcopy"
-#define ELF2MOD	"elf2mod"
+#define GCC	os9_gnu("gcc")
+#define NM	os9_gnu("nm")
+#define OBJCOPY	os9_gnu("objcopy")
+#define ELF2MOD	os9_tool("elf2mod")
 
 #define error os9_error
 #define note os9_note
@@ -163,12 +163,15 @@ static void usage(void)
 		snprintf(left, sizeof left, "-%s%s", o->name, o->arg);
 		usage_line(left, o->help);
 	}
+	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
+		"                      or the prefix of their names (default m68k-elfos9)");
 	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
 	printf("Files: ROF objects and libraries (converted; see -elf-save=), ELF objects, ar archives;\n");
 	printf("a library given as a file is linked whole, one given with -l= is searched.\n");
 	printf("Environment:\n");
+	usage_line("M68K_OS9_GNU_PREFIX", "as -gnu-prefix=");
 	usage_line("M68K_OS9_ELF", "-elf-... settings as save=...,dir=...,cache=...");
 	usage_line("CLIB", "where sys.l is, for its equates (unless -l= names a sys.l)");
 	usage_line("GRPUSER", "module owner, as -gu=: GROUP.USER, decimal (default 0.0)");
@@ -290,6 +293,8 @@ static void option(const char *arg)
 		os9_cleanup();
 		exit(0);
 	}
+	if (os9_tools_option(arg))
+		return;
 	if (os9conv_option(arg, OBJ_KINDS))
 		return;
 	/* A bare -E is ignored, as by Ultra C's l68. */
@@ -842,6 +847,8 @@ static void add_input(struct args *link, const char *path)
 int main(int argc, char **argv)
 {
 	os9_who = "m68k-os9-l68";
+	static const char *const own_names[] = { "l68", NULL };
+	os9_tools_init(argv[0], own_names);
 	os9conv_environment(OBJ_KINDS);
 	if (argc < 2) {
 		usage();
