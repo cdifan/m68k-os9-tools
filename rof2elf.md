@@ -88,6 +88,9 @@ Object File Format", and in *Using Ultra C/C++*, chapter 6. rof2elf reads:
 - edition 9, from Microware C 3.2's assembler;
 - edition 9.1 (series 0xF9), from Ultra C's `r68` for the 68000, whose counts of symbols and
   references are 32 bits;
+- the older series of libraries of 1987-88: 8, without the debug size after the remote initialized
+  data, and 6, with one long after the trap entry (taken for the remote uninitialized data, which
+  must be zero).
 
 Other editions (9.2, which adds header fields, and 15) are refused.
 

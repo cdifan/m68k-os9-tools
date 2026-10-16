@@ -290,7 +290,11 @@ parse_rof (In *in, Rof *r)
      "Relocatable Object File Format" in Using Ultra C/C++).  9.2 adds
      header fields and edition 15 is a different format.  */
   series = get16 (in);
-  if (series != 9 && series != 0xF9)
+  /* The libraries of 1987-88 have the older series 8 (no debug size
+     after the remote initialized data) and 6 (one long after the trap
+     entry, taken for the remote uninitialized data; every one seen is
+     zero, a nonzero one is refused); the rest as 9 (2026-10-16).  */
+  if (series != 9 && series != 0xF9 && series != 8 && series != 6)
     {
       char fmt[64];
       sprintf (fmt, "%%s: unsupported ROF series 0x%04X", series);
@@ -307,8 +311,10 @@ parse_rof (In *in, Rof *r)
   r->entry = get32 (in);
   r->trapent = get32 (in);
   r->rstatics = get32 (in);
-  r->ridata = get32 (in);
-  r->debug = get32 (in);
+  if (series == 6 && r->rstatics != 0)
+    die ("%s: a ROF of series 6 with an unknown nonzero header field", in->file);
+  r->ridata = series == 6 ? 0 : get32 (in);
+  r->debug = series == 6 || series == 8 ? 0 : get32 (in);
   r->name = getname (in);
 
   r->ndefs = getcount_of (in, wide, 7);	/* name, type, value */
