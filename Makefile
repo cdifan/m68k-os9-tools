@@ -29,11 +29,11 @@ EXE_ELF2ROF=elf2rof
 TRANSLATORS=r68togas gastor68
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
 # libiberty runs the programs
-FRONTENDS=m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen m68k-os9-r68
+FRONTENDS=m68k-os9-gcc m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen m68k-os9-r68
 FE_SRCS=os9conv.c os9link.c hostsys.c r68x_note.c
 FE_HDRS=os9conv.h os9link.h hostsys.h r68x_note.h
 LIBIBERTY_CFLAGS=-I/usr/include/libiberty
-# m68k-os9-gcc, with these binutils of m68k-elfos9 as m68k-os9- too, so that
+# These binutils of m68k-elfos9 as m68k-os9- too, so that
 # build systems find a complete toolchain (./configure --host=m68k-os9)
 OS9_TOOLS=ar as ld nm objcopy objdump ranlib readelf size strip
 
@@ -53,7 +53,6 @@ install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 	$(INSTALL) -s $(EXE_ROF2ELF) $(DESTDIR)/bin/$(EXE_ROF2ELF)
 	$(INSTALL) -s $(EXE_ELF2ROF) $(DESTDIR)/bin/$(EXE_ELF2ROF)
 	for t in $(TRANSLATORS) $(FRONTENDS); do $(INSTALL) -s $$t $(DESTDIR)/bin/$$t; done
-	$(INSTALL) m68k-os9-gcc $(DESTDIR)/bin/m68k-os9-gcc
 	for t in $(OS9_TOOLS); do ln -sf m68k-elfos9-$$t $(DESTDIR)/bin/m68k-os9-$$t; done
 
 clean:
