@@ -2,7 +2,7 @@
 # and a negated reference to the psect's code ($74), as Ext-* (rof-mw-forms); before, a single
 # PC-relative reference. This source's ROF is identical to C 3.2's R68's but for the date
 # (2026-10-16; Ultra C's r68 writes the same references).
-# fixed: 2026-10-16 r68togas: dc.w Ext-Label as Ext-*
+# fixed: f721072 2026-10-16 r68togas: dc.w Ext-Label as Ext-*
 src rl <<'EOF'
  psect r16b,0,0,0,0,0
  nop
