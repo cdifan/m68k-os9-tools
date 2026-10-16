@@ -5669,9 +5669,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		 * (andi.b #Ext,d0, andi #Ext,ccr; and.b #Ext,(a0), which are
 		 * them) and a bit number (btst #Ext,<ea>): both Microware
 		 * assemblers relocate the whole extension word (16 bits, $FFFE
-		 * for -2), gas only the low byte (move.b keeps a byte). #0 and
-		 * the prelude's r68rw before the instruction. Not with a macro
-		 * parameter (unknown). */
+		 * for -2), gas only the low byte (move.b keeps a byte). #0, and
+		 * before the instruction the value relocated as the 16-bit word
+		 * after its first word: .reloc (only outside MRI mode) through
+		 * .Lr68w set to the value (gas keeps each use of a set symbol at
+		 * its value then; no prelude macro, whose use would count in the
+		 * source's \@ numbers). Not with a macro parameter (unknown). */
 		int word_imm = word_byte_imm(base, size, l.args) && !is_macro(l.op);
 		pc_ext_offset = strcmp(base, "movem") == 0 || strcmp(base, "fmovem") == 0 ||
 			((strcmp(base, "btst") == 0 || strcmp(base, "bchg") == 0 || strcmp(base, "bclr") == 0 ||
@@ -5823,9 +5826,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					struct buf e = { 0 };
 					expression(&e, v, strlen(v));
 					free(v);
-					bputs(&line_before, " r68rw ");
-					put_angle(&line_before, e.s, e.n);
-					bputc(&line_before, '\n');
+					bputs(&line_before, ".Lr68w set ");
+					bput(&line_before, e.s, e.n);
+					bputs(&line_before, "\n .mri 0\n .reloc .+2,R_68K_16,.Lr68w\n .mri 1\n");
 					free(e.s);
 					bputs(out, "#0");
 					annotate = 1;
@@ -6370,10 +6373,6 @@ int main(int argc, char **argv)
 	/* r68immb OPCODE,VALUE: an instruction word and a byte immediate of an
 	 * external (-d c32) */
 	fputs("r68immb macro\n dc.w \\1\n dc.b 0,\\2\n endm\n", out);
-	/* r68rw VALUE: VALUE relocated as the 16-bit word after the next
-	 * instruction word (a byte immediate of an external, word_byte_imm);
-	 * .reloc only outside MRI mode, the value through a symbol */
-	fputs("r68rw macro\n.Lr68w\\@ set \\1\n .mri 0\n .reloc .+2,R_68K_16,.Lr68w\\@\n .mri 1\n endm\n", out);
 	/* r68com NAME,SIZE: a common block */
 	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
 	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
