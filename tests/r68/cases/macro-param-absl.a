@@ -2,7 +2,7 @@
 * long, as outside macros and as both Microware assemblers write it (checked with C 3.2's R68,
 * 2026-10-16); before, gas's short form (a parameter alone may be a register, so operands with
 * one weren't taken as addresses).
-* fixed: FIXME
+* fixed: 6de3e25 2026-10-16 r68togas, l68: 68020 register pairs; macro parameters in absolute addresses; -l=FILE.r
 * expect text: 083900000000 0eef 083900000000 0eef 083900000000 0eef 083900000000 0eef
  psect macro_param_absl,0,0,0,0,0
 Mq macro

@@ -1,7 +1,7 @@
 # m68k-os9-l68: one ROF given as a library (-l=part.r), a library of one member, as Microware's
 # l68 takes it (C 3.2's L68, 2026-10-16); before, its conversion ran ranlib on rof2elf's object
 # ("file format not recognized", "cannot convert").
-# fixed: FIXME
+# fixed: 6de3e25 2026-10-16 r68togas, l68: 68020 register pairs; macro parameters in absolute addresses; -l=FILE.r
 src lm <<'EOF'
 Prgrm equ 1
  psect lm,(Prgrm<<8)+1,$8000,1,0,e

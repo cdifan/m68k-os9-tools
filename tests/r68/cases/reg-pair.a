@@ -1,6 +1,6 @@
 * A 68020 register pair (mulu.l #n,Dh:Dl, divu.l Dn,Dr:Dq, as gastor68 writes GCC's): registers,
 * not a bare address (before: "(d3:d2).l", which gas refused, "syntax error").
-* fixed: FIXME
+* fixed: 6de3e25 2026-10-16 r68togas, l68: 68020 register pairs; macro parameters in absolute addresses; -l=FILE.r
 * options: -m2
 * expect text: 4c3c2403cccccccd 4c402401
  psect reg_pair,0,0,0,0,0
