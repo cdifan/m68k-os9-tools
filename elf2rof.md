@@ -51,6 +51,11 @@ Ultra C both read.
 - **Relocations:** `R_68K_32`, `R_68K_16`, `R_68K_8` and their PC-relative forms, and the PLT
   forms, which are PC-relative in a static link (as GNU `ld` treats them). The addend goes into the
   object's bytes, as ROF has no addend field.
+- **A 4-byte PC-relative reference to an external symbol** becomes, as Microware's assemblers
+  write it, an external reference plus a negated reference to the psect's own code (`l68` doesn't
+  compute 4-byte relative references); so does a 2-byte one that r68togas noted as a data word
+  that is an external less its place or a code label (`dc.w Ext-*`, `dc.w Ext-Label`), where an
+  instruction's (`lea Ext(pc)`) stays PC-relative.
 - **A link-time expression** (a relocation to `r68x_<hash>`, defined in the object's section
   `.r68x`; see [r68togas.md](r68togas.md) and [m68k-os9-l68.md](m68k-os9-l68.md)) becomes one
   reference per term at that place, as Microware's assemblers write such a field: each external

@@ -4476,8 +4476,40 @@ static int names_external_depth(const char *s, size_t n, int depth)
 	return ext;
 }
 
+/* Whether S (N chars) subtracts a code label of the source (Ext-Label). */
+static int less_code_label(const char *s, size_t n)
+{
+	char prev = 0;
+	for (size_t i = 0; i < n;) {
+		if (s[i] == '\'') {
+			for (i++; i < n && s[i] != '\''; i++)
+				;
+			i++;
+			prev = 'x';
+		} else if (s[i] == '$' || s[i] == '%' || isdigit((unsigned char)s[i])) {
+			for (i++; i < n && isalnum((unsigned char)s[i]); i++)
+				;
+			prev = 'x';
+		} else if (symstart((unsigned char)s[i])) {
+			size_t j = i;
+			while (j < n && symchar((unsigned char)s[j]))
+				j++;
+			if (prev == '-' && label_section(s + i, j - i) == 't')
+				return 1;
+			i = j;
+			prev = 'x';
+		} else {
+			if (s[i] != ' ' && s[i] != '\t')
+				prev = s[i];
+			i++;
+		}
+	}
+	return 0;
+}
+
 /* The elements of dc.w/dc.l ARGS (BYTES each) that are an external less
- * their own place (dc.w Ext-*): each noted in .r68pcm (the prelude's
+ * their own place or a code label (dc.w Ext-*, dc.w Ext-Label): each
+ * noted in .r68pcm (the prelude's
  * r68pcm), relocated to the element, after the line (a label there on a
  * ds.b 0, which gas doesn't align), for elf2rof to write as both Microware
  * assemblers do: the external and a negated reference to the psect's code,
@@ -4492,7 +4524,7 @@ static void pcm_marks(const char *args, int bytes)
 	for (int k = 0; k < n; k++) {
 		if (lens[k] == 0 || memchr(pieces[k], '\'', lens[k]) != NULL || memchr(pieces[k], '"', lens[k]) != NULL)
 			return;	/* a string: the elements' sizes aren't known */
-		any |= has_location(pieces[k], lens[k]) && names_external(pieces[k], lens[k]);
+		any |= (has_location(pieces[k], lens[k]) || less_code_label(pieces[k], lens[k])) && names_external(pieces[k], lens[k]);
 	}
 	if (!any)
 		return;
@@ -4500,7 +4532,7 @@ static void pcm_marks(const char *args, int bytes)
 	const char *uniq = st.in_macro ? "\\@" : "";
 	bprintf(&line_after, ".Lr68pcm%d%s ds.b 0\n", nlab, uniq);
 	for (int k = 0; k < n; k++)
-		if (has_location(pieces[k], lens[k]) && names_external(pieces[k], lens[k]))
+		if ((has_location(pieces[k], lens[k]) || less_code_label(pieces[k], lens[k])) && names_external(pieces[k], lens[k]))
 			bprintf(&line_after, " r68pcm .Lr68pcm%d%s-%d\n", nlab, uniq, (n - k) * bytes);
 	annotate = 1;
 }
