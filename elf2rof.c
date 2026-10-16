@@ -863,6 +863,29 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
     qsort (defs, ndefs, sizeof (Def), cmp_def);
   if (nexts)
     qsort (exts, nexts, sizeof (Ext), cmp_ext);
+  /* An external's references in one area in ascending order of offset,
+     as Microware's assemblers write them (gas lists some relocations
+     later, such as dc.w Ext-*'s); stable, areas' interleaving kept.  */
+  for (j = 0; j < (uint32_t) nexts; j++)
+    {
+      Ref *rf = exts[j].refs;
+      int a, b;
+      for (a = 1; a < exts[j].nrefs; a++)
+	for (b = a; b > 0; b--)
+	  {
+	    int c, k = -1;
+	    for (c = b - 1; c >= 0 && k < 0; c--)
+	      if ((rf[c].type & (R_LOC_CODE | R_LOC_RDATA))
+		  == (rf[b].type & (R_LOC_CODE | R_LOC_RDATA)))
+		k = c;
+	    if (k < 0 || rf[k].offset <= rf[b].offset)
+	      break;
+	    Ref t = rf[k];
+	    rf[k] = rf[b];
+	    rf[b] = t;
+	    b = k + 1;
+	  }
+    }
   if (nlocs)
     qsort (locs, nlocs, sizeof (Ref), cmp_loc);
   if (ndefs > 0xFFFF || nexts > 0xFFFF || nlocs > 0xFFFF)
