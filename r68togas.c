@@ -4509,10 +4509,11 @@ static int less_code_label(const char *s, size_t n)
 
 /* The elements of dc.w/dc.l ARGS (BYTES each) that are an external less
  * their own place or a code label (dc.w Ext-*, dc.w Ext-Label): each
- * noted in .r68pcm (the prelude's r68pcm), relocated to the element,
- * after the line (.Lr68pcm set there: gas keeps each use of a set symbol
- * at its value then, so a rept or a macro may repeat it, where a label
- * would be defined again), for elf2rof to write as both Microware
+ * noted in .r68pcm, a long relocated to the element, after the line
+ * (.Lr68pcm set there: gas keeps each use of a set symbol at its value
+ * then, so a rept or a macro may repeat it, where a label would be
+ * defined again; no macro of the prelude, whose use would count in the
+ * source's \@ numbers), for elf2rof to write as both Microware
  * assemblers do: the external and a negated reference to the psect's code,
  * where gas makes a PC-relative relocation like an instruction's. */
 static void pcm_marks(const char *args, int bytes)
@@ -4528,10 +4529,11 @@ static void pcm_marks(const char *args, int bytes)
 	}
 	if (!any)
 		return;
-	bputs(&line_after, ".Lr68pcm set *\n");
+	bputs(&line_after, ".Lr68pcm set *\n .mri 0\n .pushsection .r68pcm,\"\"\n");
 	for (int k = 0; k < n; k++)
 		if ((has_location(pieces[k], lens[k]) || less_code_label(pieces[k], lens[k])) && names_external(pieces[k], lens[k]))
-			bprintf(&line_after, " r68pcm .Lr68pcm-%d\n", (n - k) * bytes);
+			bprintf(&line_after, " .long .Lr68pcm-%d\n", (n - k) * bytes);
+	bputs(&line_after, " .popsection\n .mri 1\n");
 	annotate = 1;
 }
 
@@ -6372,9 +6374,6 @@ int main(int argc, char **argv)
 	 * instruction word (a byte immediate of an external, word_byte_imm);
 	 * .reloc only outside MRI mode, the value through a symbol */
 	fputs("r68rw macro\n.Lr68w\\@ set \\1\n .mri 0\n .reloc .+2,R_68K_16,.Lr68w\\@\n .mri 1\n endm\n", out);
-	/* r68pcm PLACE: PLACE noted in .r68pcm (pcm_marks), a long relocated
-	 * to it */
-	fputs("r68pcm macro\n .mri 0\n .pushsection .r68pcm,\"\"\n .long \\1\n .popsection\n .mri 1\n endm\n", out);
 	/* r68com NAME,SIZE: a common block */
 	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
 	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
