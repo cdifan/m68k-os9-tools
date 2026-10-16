@@ -1,7 +1,7 @@
 # dc.w Ext-* and Ext-Label (rof-mw-forms, rof-ext-label) leave a macro's \@ numbers as they are: a
 # label L\@ of the first expansion after them is L0, as without them (before, r68togas's note of
 # each such line used a macro of its own, which gas counted: L2 here).
-# fixed: 2026-10-16 r68togas: .r68pcm notes without a macro
+# fixed: 0b37b97 2026-10-16 r68togas: .r68pcm notes without a macro
 src an <<'EOF'
  psect an,0,0,0,0,0
 L macro
