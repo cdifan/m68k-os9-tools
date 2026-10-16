@@ -935,6 +935,22 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 			 * its name in r68 (tested 2026-10-13). */
 			const char *d = pieces[0], *base = pieces[1];
 			size_t dn = lens[0], bn = lens[1];
+			/* ((d).w,PC,Xn): the size of a displacement in
+			 * parentheses, 16 bits (both r68s; checked 2026-10-16) */
+			char dsz = 'l';
+			int whole = dn > 4 && d[0] == '(' && d[dn - 3] == ')' && d[dn - 2] == '.' &&
+				strchr("wlWL", d[dn - 1]) != NULL;
+			for (size_t i = 0, depth = 0; whole && i < dn - 3; i++) {
+				if (d[i] == '(')
+					depth++;
+				else if (d[i] == ')' && --depth == 0)
+					whole = 0;	/* (a)+(b).w: not one */
+			}
+			if (whole) {
+				dsz = (char)tolower((unsigned char)d[dn - 1]);
+				d++;
+				dn -= 4;
+			}
 			skip_percent(&base, &bn);
 			int pcb = (bn == 2 || bn == 3) && strncasecmp(base, "pcr", bn) == 0;
 			bputc(b, '(');
@@ -950,7 +966,7 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				twin_mode = 0;
 				bputc(b, ')');
 			}
-			bputs(b, ".l");
+			bprintf(b, ".%c", dsz);
 			for (int i = 1; i < k; i++) {
 				bputc(b, ',');
 				const char *r = pieces[i];
@@ -1018,6 +1034,14 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				expression(b, s, open);
 				twin_mode = 0;
 				bputs(b, long_refs ? ").l" : ").b");
+			} else if (open > 0 && k >= 2 && full_format) {
+				/* d(An,Xn): the brief form in both r68s, also on a
+				 * 68020 (a value out of 8 bits is an error); gas would
+				 * make a value it doesn't know yet (a label or equate
+				 * further on) the full form (checked 2026-10-16) */
+				bputc(b, '(');
+				expression(b, s, open);
+				bputs(b, ").b");
 			} else if (open > 0) {
 				expression(b, s, open);
 			}

@@ -1,0 +1,17 @@
+* d(An,Xn) on a 68020 with a value known only further on (a difference of labels, an equate):
+* the brief form in both r68s, as for a value known before (a value out of 8 bits is an error
+* in both; Ultra C's r68 and C 3.2's R68020, checked 2026-10-16); gas made it the full format
+* with a 16-bit displacement.
+* options: -m2
+* expect text: 4e71 2a702014 2a7020ec 10311014 1031100a 4e71 4e71 51fc
+Val_b equ 10
+ psect index_brief_later,0,0,0,0,0
+Lab_a nop
+ movea.l Lab_b-Lab_a(a0,d2.w),a5
+ movea.l Lab_a-Lab_b(a0,d2.w),a5
+ move.b Val_a(a1,d1.w),d0
+ move.b Val_b(a1,d1.w),d0
+ nop
+Lab_b nop
+Val_a equ 20
+ ends

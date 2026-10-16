@@ -204,6 +204,14 @@ Most instruction lines need no change. Where the same text means something else 
 
 ### PC-relative forms on the 68020
 
+- **`label(pc)` and `d(pc,Xn)`:** for a 68020 `gas` makes a reference whose distance it doesn't
+  know in its first pass the 68020's full form; both Microware assemblers keep `d16(pc)` and the
+  brief `d8(pc,Xn)`. Written `(label).w(pc)` and `(d).b(pc,Xn)`, and `(d).b(An,Xn)` for a value
+  known only further on.
+- **Index modes with the displacement inside** (`(-268,a5,d1.l*4)`, `(8,a0)`, `(lab,pc,d0.w)`):
+  Ultra C's `r68` (`-m2` and up) always writes the full extension word with a 32-bit displacement;
+  written `(d.l,An,Xn)`. A number with `.w` stays 16 bits, also inside another pair of
+  parentheses (`((d).w,PC,Xn)`).
 - **`-(expr)(An)`** (`lea -(End-Start)(a4),a4`) is a negated displacement, not a predecrement.
 
 ### Branches

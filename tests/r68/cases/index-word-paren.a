@@ -1,0 +1,14 @@
+* ((d).w,PC,Xn) and ((d).w,An,Xn) on a 68020: the full format with a 16-bit displacement in
+* both r68s (Ultra C's r68 and C 3.2's R68020, checked 2026-10-16); the translation refused it
+* ("found '.', expected: ')'"). Without the size: the 32-bit displacement, as before.
+* options: -m2
+* expect text: 143b21200014 14302120000a 143b21300000 0008 4e71 0102 4e71 51fc
+Val_a equ 10
+ psect index_word_paren,0,0,0,0,0
+ move.b ((Tbl_a).w,pc,d2.w),d2
+ move.b ((Val_a).w,a0,d2.w),d2
+ move.b (Tbl_a,pc,d2.w),d2
+ nop
+Tbl_a dc.b 1,2
+ nop
+ ends
