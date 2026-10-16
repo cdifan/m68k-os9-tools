@@ -515,22 +515,35 @@ static enum sect section_of(const char *name)
 static int mode_ucc;		/* -mode=ucc */
 static enum sect cur = S_CODE;	/* the section of the lines being read */
 static enum sect open_vsect = S_NONE;	/* the vsect being written, if any */
-static struct buf out;
+static struct buf out;		/* the lines being written: the code's or the vsects' */
+static struct buf other;	/* the other of the two */
+static int in_vsects;		/* out has the vsects' lines */
 static struct buf comms;	/* .local + .comm, for the end */
 
-/* Switches the output to section S: a vsect for data, closed for the
- * code or another vsect kind. */
+/* Switches the output to section S. The vsects are written apart and go
+ * after the code, at the end of the psect: in the code a vsect after an odd
+ * dc.b (GCC's string, then a static's data) would make the translation for
+ * gas (MRI mode) align the code there, which r68 doesn't. A vsect for data,
+ * closed for another vsect kind; open while the code is written. */
 static void switch_to(enum sect s)
 {
 	if (s == S_SKIP)
 		return;
 	int remote = s == S_RDATA || s == S_RBSS;
 	int want = s == S_CODE ? S_NONE : remote ? S_RDATA : S_DATA;
+	if ((want != S_NONE) != in_vsects) {
+		struct buf t = out;
+		out = other;
+		other = t;
+		in_vsects = !in_vsects;
+	}
+	if (want == S_NONE)
+		return;
 	if (open_vsect != S_NONE && open_vsect != (enum sect)want) {
 		bputs(&out, " ends\n");
 		open_vsect = S_NONE;
 	}
-	if (want != S_NONE && open_vsect == S_NONE) {
+	if (open_vsect == S_NONE) {
 		bputs(&out, remote ? " vsect remote\n" : " vsect\n");
 		open_vsect = (enum sect)want;
 	}
@@ -1113,6 +1126,10 @@ int main(int argc, char **argv)
 		bput(&out, comms.s, comms.n);
 	}
 	switch_to(S_CODE);
+	if (open_vsect != S_NONE) {
+		bputs(&other, " ends\n");
+		bput(&out, other.s, other.n);
+	}
 	bputs(&out, " ends\n");
 	if (errors)
 		return 1;
