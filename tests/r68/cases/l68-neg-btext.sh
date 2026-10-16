@@ -3,7 +3,7 @@
 # as Microware's L68 links it (seen in a ROM image of 1995); before, $00400000: ld keeps -sym of a
 # section-relative symbol relative to its section, so the link-time expression's terms that are
 # negated or multiplied are ABSOLUTE() now. -Ext of an equate and Fun-btext as before.
-# fixed: 2026-10-16 r68x_note: negated terms of link-time expressions as absolute values
+# fixed: 364e1e2 2026-10-16 r68x_note: negated terms of link-time expressions as absolute values
 src na <<'EOF'
  psect na,$101,$8000,1,0,e
 e rts
