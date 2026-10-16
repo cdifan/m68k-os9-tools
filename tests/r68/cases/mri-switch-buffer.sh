@@ -5,7 +5,7 @@
 # between the two, the lines after it were taken in the wrong mode ("bad format for ifc" in a
 # large source). Here: no more .mri lines than the same source without those lines has, the notes
 # and the relocations made.
-# fixed: 2026-10-16 r68togas: no .mri switches in the translated lines
+# fixed: 3f87c58 2026-10-16 r68togas: no .mri switches in the translated lines
 src mb <<'EOF'
  psect mb,0,0,0,0,0
 Err macro
