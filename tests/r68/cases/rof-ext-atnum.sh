@@ -3,7 +3,7 @@
 # expansion after them is L0, as without them (before, r68togas wrote each through a macro of its
 # own, which gas counted: L2 after the dc.w lines, L5 with the immediates). Each immediate keeps
 # its own value through the symbol they share, in a rept too.
-# fixed: 2026-10-16 r68togas: byte immediates without a macro
+# fixed: dcd4879 2026-10-16 r68togas: byte immediates of externals without a macro
 src an <<'EOF'
  psect an,0,0,0,0,0
 L macro
