@@ -731,6 +731,12 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
 	int nroots = nmembers;
 	for (int i = 0; i < libs->n; i++) {
 		int first = nmembers;
+		/* an object (a ROF of one psect, converted) is a library of one
+		 * member */
+		if (!file_is_ar(libs->v[i])) {
+			read_symbols(new_member(libs->v[i], 1), NULL);
+			continue;
+		}
 		if (!extract_members(libs->v[i]))
 			error("%s: cannot read the archive", libs->v[i]);
 		/* one nm of the archive, its "member:" blocks in the members'
