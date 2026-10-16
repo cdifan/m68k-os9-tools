@@ -2,6 +2,7 @@
 * the brief form in both r68s, as for a value known before (a value out of 8 bits is an error
 * in both; Ultra C's r68 and C 3.2's R68020, checked 2026-10-16); gas made it the full format
 * with a 16-bit displacement.
+* fixed: 9e26bf4 2026-10-16 r68togas: 68020 index operands: ((d).w,PC,Xn) and brief d(An,Xn)
 * options: -m2
 * expect text: 4e71 2a702014 2a7020ec 10311014 1031100a 4e71 4e71 51fc
 Val_b equ 10

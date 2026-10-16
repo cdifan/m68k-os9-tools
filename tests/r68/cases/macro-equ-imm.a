@@ -3,6 +3,7 @@
 * with 128 is $80, move.b #^mLo $00FE); the translation didn't (gas expands the macros):
 * "operands mismatch" for the moveqs, $FFFE for the complement. An external of the same kind
 * (moveq #Ext) relocated as before.
+* fixed: e33fcc8 2026-10-16 r68togas: moveq and move.b immediates of names defined in macro expansions
 * expect text: 7680 7081 74c8 177c00fe0001 123c0080 7800 4e71
  psect macro_equ_imm,0,0,0,0,0
 Bit macro

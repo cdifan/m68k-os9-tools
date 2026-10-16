@@ -4,6 +4,7 @@
 # the top linked next. Ultra C's l68 gives m_a m_d m_e m_c m_b here (measured 2026-10-16);
 # before, ld's search of the archive, which -dialect=c32 keeps (C 3.2's L68 searches once and
 # refuses this link: m_c and m_d come before m_a, which needs them).
+# fixed: 97e8452 2026-10-16 m68k-os9-l68: library members in Ultra C's l68's order (-dialect=)
 src root <<'EOF'
  psect root,$101,$8000,1,0,entry
 entry bsr a_one
