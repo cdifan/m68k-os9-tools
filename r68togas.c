@@ -3165,6 +3165,76 @@ static int known_value(const char *s, size_t n)
 	return 1;
 }
 
+/* The names of expression S (N chars) not equated so far that a macro's
+ * expansion defines (m\1 equ 1<<. called as Bit Sign: mSign; the pre-scan's
+ * names without a section of their own), each followed by a space, into
+ * NAMES; 0 where there are none, or a name of another kind (an external), the
+ * location counter or a parameter. */
+static int macro_equ_names(struct buf *names, const char *s, size_t n)
+{
+	int k = 0;
+	if (memchr(s, '\\', n) != NULL || has_location(s, n))
+		return 0;
+	for (size_t i = 0; i < n;) {
+		if (s[i] == '$' || s[i] == '%' || isdigit((unsigned char)s[i])) {
+			i++;
+			while (i < n && isalnum((unsigned char)s[i]))
+				i++;
+		} else if (s[i] == '\'') {
+			for (i++; i < n && s[i] != '\''; i++)
+				;
+			i++;
+		} else if (symstart((unsigned char)s[i])) {
+			size_t j = i;
+			while (j < n && symchar((unsigned char)s[j]))
+				j++;
+			int known = 0;
+			for (int q = 0; q < st.nequates && !known; q++)
+				known = strlen(st.equates[q]) == j - i && strncmp(st.equates[q], s + i, j - i) == 0;
+			if (!known) {
+				if (!source_label(s + i, j - i) || label_section(s + i, j - i) ||
+				    name_in(st.vlabs, st.nvlabs, s + i, j - i))
+					return 0;
+				bput(names, s + i, j - i);
+				bputc(names, ' ');
+				k++;
+			}
+			i = j;
+		} else {
+			i++;
+		}
+	}
+	return k;
+}
+
+/* A moveq (MOVEQ) or move.b immediate S (N chars) with names a macro's
+ * expansion defines (macro_equ_names): r68 knows their values and takes the
+ * byte (moveq #mSign with 128 is $80, move.b #^mBit $00EF); the translation
+ * can't, since gas expands the macros. .Lr68q set before the line, as the
+ * known values' form where gas has the names by then, else as the value
+ * (an external of the same name: relocated as before). */
+static int macro_equ_imm(const char *s, size_t n, int moveq)
+{
+	struct buf names = { 0 }, e = { 0 };
+	if (macro_equ_names(&names, s, n) == 0) {
+		free(names.s);
+		return 0;
+	}
+	expression(&e, s, n);
+	bputs(&line_before, ".Lr68d set 1\n");
+	for (char *p = names.s, *q; (q = strchr(p, ' ')) != NULL; p = q + 1)
+		bprintf(&line_before, " ifndef %.*s\n.Lr68d set 0\n endc\n", (int)(q - p), p);
+	bputs(&line_before, " ifne .Lr68d\n");
+	if (moveq)
+		bprintf(&line_before, ".Lr68q set ((%s)&$ff)-(((%s)&$80)<<1)\n", e.s, e.s);
+	else
+		bprintf(&line_before, ".Lr68q set (%s)&$ff\n", e.s);
+	bprintf(&line_before, " else\n.Lr68q set %s\n endc\n", e.s);
+	free(names.s);
+	free(e.s);
+	return 1;
+}
+
 /* Text S (N chars) for r68error's <...> argument and .error's "...": no
  * angle brackets or double quotes. */
 static void error_text(struct buf *b, const char *s, size_t n)
@@ -5824,6 +5894,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 					bputs(out, "#-$100+(");
 					expression(out, pieces[i] + 1, lens[i] - 1);
 					bputc(out, ')');
+					annotate = 1;
+				} else if ((strcmp(base, "moveq") == 0 || byte_imm) && i == 0 && pieces[i][0] == '#' &&
+					   macro_equ_imm(pieces[i] + 1, lens[i] - 1, strcmp(base, "moveq") == 0)) {
+					bputs(out, "#.Lr68q");
 					annotate = 1;
 				} else if (word_imm && i == 0) {
 					/* equates of externals by their values: gas's .reloc

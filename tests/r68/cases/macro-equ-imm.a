@@ -1,0 +1,27 @@
+* Names a macro's expansion defines by equ (Bit Hi: mHi equ 1<<.), in a moveq or move.b
+* immediate: both Microware assemblers know their values there and take the byte (moveq #mHi
+* with 128 is $80, move.b #^mLo $00FE); the translation didn't (gas expands the macros):
+* "operands mismatch" for the moveqs, $FFFE for the complement. An external of the same kind
+* (moveq #Ext) relocated as before.
+* expect text: 7680 7081 74c8 177c00fe0001 123c0080 7800 4e71
+ psect macro_equ_imm,0,0,0,0,0
+Bit macro
+m\1 equ 1<<.
+b\1 do.b 1
+ endm
+Num macro
+q\1 equ \2
+ endm
+ org 7
+ Bit Hi
+ org 0
+ Bit Lo
+ Num Big,200
+ moveq #mHi,d3
+ moveq #(mHi+mLo),d0
+ moveq #qBig,d2
+ move.b #^mLo,1(a3)
+ move.b #mHi,d1
+ moveq #Ext,d4
+ nop
+ ends
