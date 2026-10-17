@@ -1089,6 +1089,12 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	      rec[k].dbg = syms[symi].offset + (uint32_t) addend;
 	    }
 	}
+      /* rof2elf's records (kind 5, for elf2mod's order of the pointers)
+	 aren't these: left out */
+      for (q = 0, ri = 0; q < nrec; q++)
+	if (rec[q].kind != 5)
+	  rec[ri++] = rec[q];
+      nrec = ri;
     }
   if (nrec > 0)
     {

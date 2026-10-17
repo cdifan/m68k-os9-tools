@@ -654,19 +654,23 @@ enum
 {
   S_NULL, S_TEXT, S_DATA, S_BSS, S_RDATA, S_RBSS, S_RELTEXT, S_RELDATA,
   S_RELRDATA, S_SYMTAB, S_STRTAB, S_SHSTRTAB, S_R68X,
-  /* the debug information's, only where the ROF has some */
-  S_DEBUG, S_RELDEBUG, S_NUM
+  /* the debug information's, only where the ROF has some or the order
+     records follow */
+  S_DEBUG, S_RELDEBUG,
+  /* the order records (kind 5), only where the ROF needs them */
+  S_ORD, S_RELORD, S_NUM
 };
 
 static const char *const secnames[S_NUM] = {
   "", ".text", ".data", ".bss", ".remote.data", ".remote.bss",
   ".rela.text", ".rela.data", ".rela.remote.data", ".symtab", ".strtab",
-  ".shstrtab", R68X_SECTION, ".r68dbg", ".rela.r68dbg"
+  ".shstrtab", R68X_SECTION, ".r68dbg", ".rela.r68dbg", ".r68ord",
+  ".rela.r68ord"
 };
 
 typedef struct
 {
-  Buf syms, strs, rel[4], text, data, rdata, dbg;
+  Buf syms, strs, rel[5], text, data, rdata, dbg, ord;
   int nsyms, nlocal;
   int *extsym;			/* ELF symbol of each external name */
   Buf notes;			/* .r68x: link-time expressions */
@@ -796,10 +800,23 @@ cmp_ref (const void *a, const void *b)
 static void
 add_rela (Elf *e, int sec, uint32_t offset, int sym, int type, int32_t addend)
 {
-  Buf *b = &e->rel[sec == S_TEXT ? 0 : sec == S_DATA ? 1 : sec == S_RDATA ? 2 : 3];
+  Buf *b = &e->rel[sec == S_TEXT ? 0 : sec == S_DATA ? 1 : sec == S_RDATA ? 2
+		    : sec == S_ORD ? 4 : 3];
   add32 (b, offset);
   add32 (b, ((uint32_t) sym << 8) | type);
   add32 (b, (uint32_t) addend);
+}
+
+/* An order record into ORD (kind 5: a vsect's initialized data ends at END
+   in section SEC), its position relocated.  */
+static void
+add_order (Elf *e, Buf *ord, int sec, uint32_t end)
+{
+  add8 (ord, 0);
+  add8 (ord, 5);
+  add_rela (e, S_ORD, ord->len, sec + 1, R_68K_32, (int32_t) end);
+  add32 (ord, 0);
+  add32 (ord, 0);
 }
 
 /* Convert one ROF to an ELF relocatable in OUT.  */
@@ -882,6 +899,48 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   e.extsym = xmalloc (r->nexts * sizeof (int));
   for (i = 0; i < r->nexts; i++)
     e.extsym[i] = add_sym (&e, r->exts[i], 0, 0, INFO (STB_GLOBAL, 0), 0);
+
+  /* Where the vsects' initialized data end, in the order of the source,
+     for the order in which l68 lists the pointers (elf2mod; measured
+     2026-10-17): the local references in the vsects, which the ROF has
+     last, from the last made, so taken backwards; a record (kind 5, as
+     r68togas's kind 4, which elf2rof leaves to r68togas's) wherever they
+     change between plain and remote data. Only where that order isn't
+     the address order: a remote vsect's before a plain one's.  */
+  {
+    int last = -1, rdata = 0, need = 0;
+    uint32_t end = 0;
+    Buf ord = { 0 };
+    for (i = r->nrefs - 1; i >= 0; i--)
+      {
+	const Ref *x = &r->refs[i];
+	int s = loc_section (x->type);
+	uint32_t e1 = x->offset + ((x->type & R_SIZE) == R_BYTE ? 1
+				   : (x->type & R_SIZE) == R_WORD ? 2 : 4);
+	if (x->ext >= 0 || (s != S_DATA && s != S_RDATA))
+	  continue;
+	need |= s == S_DATA && rdata;
+	rdata |= s == S_RDATA;
+	if (s != last && last >= 0)
+	  {
+	    add_order (&e, &ord, last, end);
+	    end = 0;
+	  }
+	last = s;
+	if (e1 > end)
+	  end = e1;
+      }
+    if (need)
+      {
+	add_order (&e, &ord, last, end);
+	e.ord = ord;
+      }
+    else
+      {
+	free (ord.buf);
+	e.rel[4].len = 0;
+      }
+  }
 
   /* References, grouped by location.  */
   qsort (r->refs, r->nrefs, sizeof (Ref), cmp_ref);
@@ -1063,6 +1122,8 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   secbuf[S_R68X] = &e.notes;
   secbuf[S_DEBUG] = &e.dbg;
   secbuf[S_RELDEBUG] = &e.rel[3];
+  secbuf[S_ORD] = &e.ord;
+  secbuf[S_RELORD] = &e.rel[4];
   secsize[S_BSS] = r->statics;
   secsize[S_RBSS] = r->rstatics;
 
@@ -1071,7 +1132,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
     uint32_t nameoff[S_NUM], offset[S_NUM];
     size_t ehdr, shoff;
     unsigned char *h;
-    int nsec = r->debug ? S_NUM : S_DEBUG;
+    int nsec = e.ord.len ? S_NUM : r->debug ? S_ORD : S_DEBUG;
 
     add8 (&shstr, 0);
     for (i = 1; i < S_NUM; i++)
@@ -1127,10 +1188,12 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	    entsize = 16;
 	    break;
 	  case S_STRTAB: case S_SHSTRTAB: type = 3; align = 1; break;
-	  case S_R68X: case S_DEBUG: align = 1; break;	/* not loaded */
-	  case S_RELDEBUG:
+	  case S_R68X: case S_DEBUG: case S_ORD:	/* not loaded */
+	    align = 1;
+	    break;
+	  case S_RELDEBUG: case S_RELORD:
 	    type = 4; link = S_SYMTAB; flags = 0x40;	/* INFO_LINK */
-	    info = S_DEBUG; align = 4; entsize = 12;
+	    info = i == S_RELDEBUG ? S_DEBUG : S_ORD; align = 4; entsize = 12;
 	    break;
 	  }
 	put32 (s, nameoff[i]);
@@ -1152,7 +1215,8 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   free (e.data.buf);
   free (e.rdata.buf);
   free (e.dbg.buf);
-  for (i = 0; i < 4; i++)
+  free (e.ord.buf);
+  for (i = 0; i < 5; i++)
     free (e.rel[i].buf);
   free (e.extsym);
   free (e.notes.buf);

@@ -98,6 +98,16 @@ The initialized data's pointer tables (`M$IRefs`: the pointers to the code, then
 list the pointers in address order, or, with `--ld-map`, as both Microware linkers do:
 
 - first the jump table's entries, in reverse order;
+- then object by object, in reverse link order. Within an object:
+  its local pointers vsect by vsect in the source's order, each vsect's in address order (a remote
+  vsect's pointers before those of a plain vsect after it); then its pointers to other objects'
+  global symbols, by symbol name in descending order, and for one name by address, descending.
+
+The objects and their link order come from the map's `LOAD` lines (an archive member's place is its
+archive's), then from where the map first names them; a pointer's object is the one whose `.data` or
+`.remote.data` input section holds it. The vsects' order comes from the reference order records
+(section `.r68ord`) that `r68togas` and `rof2elf` write; an object without them (GCC's) is in
+address order. `m68k-os9-l68` passes the map.
 
 ## Far calls: the jump table
 

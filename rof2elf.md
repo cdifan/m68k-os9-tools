@@ -53,6 +53,10 @@ resolves them: link with those libraries.
 
 - **Debug information** (C 3.2's `c68 -g`): its references are in `.rela.r68dbg`. A link's `.dbg`
   file is made of it (see [elf2mod.md](elf2mod.md)), and `elf2rof` writes it back.
+- **The local references' order:** both Microware linkers list a module's pointers vsect by vsect,
+  so a remote vsect's can come before a plain one's. `.r68ord` records where each vsect's
+  initialized data ends, in the source's order (which the ROF's references give, listed in reverse
+  order of making), for `elf2mod`'s pointer tables; left out where that order is the address order.
 - **Absolute symbols** also come from kind 7, the name of a macro defined with a colon (`NAME:
   macro`, value 0), which both Microware assemblers export.
 - **Relocations:** `R_68K_8`, `R_68K_16`, `R_68K_32`, or `R_68K_PC8`, `R_68K_PC16`, `R_68K_PC32`

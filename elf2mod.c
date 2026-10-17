@@ -151,6 +151,7 @@ typedef struct idref {
 	uint32_t addr;
 	int text;
 	int obj; // the object it came from, in link order (--ld-map)
+	int vs; // its vsect's place in the .r68ord records (INT_MAX: none)
 } IdRef;
 
 int cmp_idref(const void *a, const void *b) {
@@ -159,11 +160,13 @@ int cmp_idref(const void *a, const void *b) {
 }
 
 // Both Microware linkers list the pointers object by object, the last
-// object linked first, each object's in address order (measured
-// 2026-10-15).
+// object linked first (measured 2026-10-15), each object's vsect by vsect
+// in the order its source has them, each vsect's in address order (a remote
+// vsect before a plain one: its pointers first; measured 2026-10-17).
 int cmp_idref_obj(const void *a, const void *b) {
 	const IdRef *p = a, *q = b;
 	if(p->obj != q->obj) return p->obj > q->obj ? -1 : 1;
+	if(p->vs != q->vs) return p->vs < q->vs ? -1 : 1;
 	return cmp_idref(a, b);
 }
 
@@ -971,7 +974,11 @@ int main(int argc, char *argv[]) {
 	}
 
 	// The pointers in l68's order (by object, the last first), from ld's
-	// map; in address order without one.
+	// map; in address order without one. Within an object, by vsect, from
+	// the .r68ord records r68togas and rof2elf write: each marks where a
+	// vsect's initialized data ends (kinds 4 and 5), in the order of the source
+	// (of the ROF's references); a pointer belongs to the first vsect
+	// ending after it in its input section. Without records, address order.
 	if(opt_ldmap) {
 		InputSec *isecs;
 		long nisecs = read_ldmap(opt_ldmap, &isecs);
@@ -979,16 +986,37 @@ int main(int argc, char *argv[]) {
 			printf("cannot read the map %s\n", opt_ldmap);
 			return 1;
 		}
+		asection *ord = bfd_get_section_by_name(abfd, ".r68ord");
+		bfd_byte *ob = NULL;
+		size_t nord = 0;
+		if(ord && bfd_section_size(ord) >= 10) {
+			if(!bfd_malloc_and_get_section(abfd, ord, &ob)) {
+				bfd_perror("could not read .r68ord");
+				return 1;
+			}
+			nord = bfd_section_size(ord) / 10;
+		}
 		for(size_t i = 0; i < ndrefs; i++) {
 			drefs[i].obj = INT_MAX; // in no object's data (the jump table): first
+			drefs[i].vs = INT_MAX;
 			for(long k = 0; k < nisecs; k++) {
 				uint32_t st = DOFF((bfd_vma)isecs[k].start);
 				if(drefs[i].addr >= st && drefs[i].addr - st < isecs[k].size) {
 					drefs[i].obj = isecs[k].obj;
+					for(size_t r = 0; r < nord; r++) {
+						uint32_t end = DOFF(bfd_get_32(abfd, ob + r * 10 + 2));
+						int kind = bfd_get_16(abfd, ob + r * 10);
+						if((kind == 4 || kind == 5) && end > drefs[i].addr
+						   && end > st && end - st <= isecs[k].size) {
+							drefs[i].vs = (int)r;
+							break;
+						}
+					}
 					break;
 				}
 			}
 		}
+		free(ob);
 		free(isecs);
 		qsort(drefs, ndrefs, sizeof(IdRef), cmp_idref_obj);
 	}
