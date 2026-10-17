@@ -5,7 +5,7 @@
 # (-t=): $CAFEBEEF, 3, the CRC, a zero long, the areas. The areas as C 3.2's l68 writes them for
 # these sources, from ELF objects and from ROFs (through rof2elf). No .dbg without -g or without
 # debug information. Before, r68 refused the lines (and rof2elf dropped a ROF's debug area).
-# fixed: 2026-10-17 elf2mod, rof2elf: the .dbg of l68 -g
+# fixed: 55093e0 2026-10-17 debug.b/.w/.l, the ROF debug area and l68 -g's .dbg
 src dbg <<'EOF'
  psect dbg_p,$101,$8000,1,0,c1
  vsect remote

@@ -6,7 +6,7 @@
 # lines there) then those made in vsects (data, debug lines there), each from the last made; here
 # the remote vsect is first, so its references come last. All as C 3.2's R68 writes this source
 # (measured 2026-10-17, the whole ROF the same but for the date). Before, r68 refused the lines.
-# fixed: 2026-10-17 r68togas, elf2rof: debug.b/.w/.l, references in the order made
+# fixed: 55093e0 2026-10-17 debug.b/.w/.l, the ROF debug area and l68 -g's .dbg
 src dbg <<'EOF'
  psect dbg_p,$101,$8000,1,0,c1
  vsect remote
