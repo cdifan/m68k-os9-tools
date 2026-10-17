@@ -4,7 +4,7 @@
 # object for that); and the notes change nothing in a link.
 # Before, m68k-os9-r68 removed the notes from ELF objects: elf2rof wrote the words PC-relative
 # (the field's distance from the label, 0002, 0006), with fewer references.
-# fixed: 2026-10-17 m68k-os9-r68: .r68pcm notes kept in ELF objects
+# fixed: 70f3c36 2026-10-17 m68k-os9-r68: .r68pcm notes kept in ELF objects
 src tab <<'EOF'
  psect tab_p,0,0,0,0,0
  nop
