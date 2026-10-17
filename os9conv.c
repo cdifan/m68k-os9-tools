@@ -307,6 +307,24 @@ static char *converted_path(const char *input, int library)
 	return target;
 }
 
+/* The modification time of the rof2elf that converts, or -1 if it isn't
+ * found: a conversion older than it is made again (its output changes with
+ * it). */
+static time_t converter_mtime(void)
+{
+	static int done;
+	static time_t made = (time_t)-1;
+	if (!done) {
+		const char *tool = ROF2ELF;
+		char *path = strpbrk(tool, "/\\") != NULL ? xstrdup(tool) : host_program_on_path(tool);
+		if (path != NULL)
+			made = host_mtime(path);
+		free(path);
+		done = 1;
+	}
+	return made;
+}
+
 char *os9conv_as_elf(const char *input, int library)
 {
 	if (host_mtime(input) == (time_t)-1)
@@ -316,7 +334,8 @@ char *os9conv_as_elf(const char *input, int library)
 
 	char *target = converted_path(input, library);
 	time_t made = host_mtime(target);
-	if (made != (time_t)-1 && made >= host_mtime(input))
+	time_t tool = converter_mtime();
+	if (made != (time_t)-1 && made >= host_mtime(input) && (tool == (time_t)-1 || made >= tool))
 		return target;
 
 	/* Convert into a temporary file beside the target, then rename it, so
