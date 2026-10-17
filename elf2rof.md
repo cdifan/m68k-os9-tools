@@ -69,6 +69,9 @@ Ultra C both read.
   references), and a section's alias (`r68l_<psect>_<section>`, a label plus equates:
   `Block+Field(a6)`) a local reference to that section, the label's offset in the bytes. The
   aliases themselves are no definitions.
+- **Absolute references:** the data can only hold 32-bit ones. An absolute reference from code to
+  code (`move.l #label,d1`, `dc.w Init`) is a local reference to code, which `l68` resolves to the
+  label's offset in the module, as both Microware assemblers write it.
 - **The module header:** the `__os9_*` symbols of a root psect (from rof2elf, or defined by hand in
   assembly) give its header: `__os9_typelang`, `__os9_attrev`, `__os9_edition` and `__os9_stack`
   (absolute), `__os9_entry` and `__os9_trapent` (code). Without them the psect is a subroutine

@@ -793,14 +793,10 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 		  store (o, p, size, v - (int32_t) lo, 1, y->name, lo);
 		  continue;
 		}
-	      /* A 16-bit one is a module offset (r68's dc.w Init,Read,...
-		 in a driver's entry table), as l68 resolves it.  */
-	      if (la == A_CODE && y->area == A_CODE && size != 2)
-		die ("%s: %s+0x%x: absolute reference to code from code "
-		     "(not position-independent)", o->file, s->name,
-		     (unsigned) roff);
 	      /* A local reference; the target's offset goes into the
-		 bytes.  */
+		 bytes.  One from code to code is a module offset, as l68
+		 resolves it (dc.w Init,Read,... in a driver's entry table;
+		 move.l #label,d1: both Microware assemblers write it).  */
 	      store (o, p, size, v, 0, y->name, lo);
 	      r.type = areakind[y->area] | loc
 		       | (size == 1 ? R_BYTE : size == 2 ? R_WORD : R_LONG);
