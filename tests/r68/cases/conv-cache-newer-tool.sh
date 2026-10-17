@@ -1,7 +1,7 @@
 # The ELF conversion of a ROF is made again when rof2elf is newer than it (its output changes
 # with rof2elf), not only when the ROF is; a conversion newer than both is used as it is. Before,
 # only the ROF's date counted: a newer rof2elf's changes never reached ROFs converted before.
-# fixed: 2026-10-17 os9conv: a conversion older than rof2elf made again
+# fixed: 819c09f 2026-10-17 os9conv: a conversion older than rof2elf made again
 src cc <<'EOF'
  psect cc,$101,$8000,1,0,entry
 entry rts
