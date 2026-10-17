@@ -4,7 +4,7 @@
 # this source with Ultra C's r68 and l68; a C 3.2 C program declaring remote pointers first with
 # C 3.2's l68). Before, each object's in address order. From r68's ELF (its .r68ord records) and
 # from a ROF (rof2elf's records).
-# fixed: 2026-10-17 elf2mod, rof2elf: pointers vsect by vsect in an object
+# fixed: d9121e4 2026-10-17 elf2mod, rof2elf: pointers vsect by vsect in an object
 src irm <<'EOF'
  psect irm,$101,$8000,1,0,entry
  vsect remote
