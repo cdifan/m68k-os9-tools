@@ -1,7 +1,7 @@
 # elf2rof without -n names the psect after the object's file symbol if that has no extension (our
 # assembler writes the psect's name there), else after the file (GCC's file symbol is the source's
 # name). Before, always after the file.
-# fixed: 2026-10-17 elf2rof: the default name from the file symbol
+# fixed: f5218d2 2026-10-17 elf2rof: the default psect name from the file symbol
 src nm <<'EOF'
  psect nm_p,0,0,1,0,0
  rts
