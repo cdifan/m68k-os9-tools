@@ -407,8 +407,21 @@ linking, as with `l68`.
 - **`com`** (common blocks, `NAME: com.s n`): an ELF common symbol, as `rof2elf` makes a ROF's;
   refused in a remote vsect. **`dz`** is `dcb.b <n>,0`. **`iflt`/`ifle`** and the other
   conditionals work as they are; a conditional left open at the end of the source is closed.
+- **`debug.b`, `debug.w`, `debug.l`** (C 3.2's `c68 -g` writes them for the source debugger): the
+  operands go into a section `.r68dbg`, which `elf2rof` writes as the ROF's debug area and a link
+  puts into the `.dbg` file; words and longs at even offsets, `*` the location of the line.
 - **Ultra C's compiler output:** `=` before a name only marks it as a label; `spanreg` names
   `-bt`'s register; FPU instructions are taken for any CPU.
+
+### Reference order
+
+Both Microware assemblers write an external's references in the order they were made, and the
+local references in two lists, those made in the psect and then those made in vsects, each in
+reverse order of making. ELF keeps no such order, so the translation writes records into a section
+`.r68ord` (not allocated): where each vsect starts in the code and where its initialized data
+ends, and where each debug line is. `elf2rof` orders a ROF's references by them, and `elf2mod` a module's
+pointer tables (see [elf2mod.md](elf2mod.md)). In macro bodies and `rept` blocks no records are
+made; a debug line there is taken as made at the psect's start.
 
 ## Microware compatibility
 

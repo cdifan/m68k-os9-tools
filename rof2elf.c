@@ -36,7 +36,8 @@
  *   initialized data        -> .data         (a6-relative; the linker script
  *   uninitialized data      -> .bss           places data at -0x8000)
  *   remote init/uninit data -> .remote.data / .remote.bss
- *   debug information       -> dropped
+ *   debug information       -> .r68dbg (not allocated; C 3.2's c68 -g),
+ *                              its references in .rela.r68dbg
  *   equ definitions         -> absolute symbols
  *   common definitions      -> ELF common symbols
  *   references              -> RELA relocations, R_68K_{8,16,32} or
@@ -652,18 +653,20 @@ parse_libgen (const unsigned char *data, size_t size, const char *file,
 enum
 {
   S_NULL, S_TEXT, S_DATA, S_BSS, S_RDATA, S_RBSS, S_RELTEXT, S_RELDATA,
-  S_RELRDATA, S_SYMTAB, S_STRTAB, S_SHSTRTAB, S_R68X, S_NUM
+  S_RELRDATA, S_SYMTAB, S_STRTAB, S_SHSTRTAB, S_R68X,
+  /* the debug information's, only where the ROF has some */
+  S_DEBUG, S_RELDEBUG, S_NUM
 };
 
 static const char *const secnames[S_NUM] = {
   "", ".text", ".data", ".bss", ".remote.data", ".remote.bss",
   ".rela.text", ".rela.data", ".rela.remote.data", ".symtab", ".strtab",
-  ".shstrtab", R68X_SECTION
+  ".shstrtab", R68X_SECTION, ".r68dbg", ".rela.r68dbg"
 };
 
 typedef struct
 {
-  Buf syms, strs, rel[3], text, data, rdata;
+  Buf syms, strs, rel[4], text, data, rdata, dbg;
   int nsyms, nlocal;
   int *extsym;			/* ELF symbol of each external name */
   Buf notes;			/* .r68x: link-time expressions */
@@ -776,7 +779,7 @@ loc_section (unsigned type)
     case R_LOC_CODE: return S_TEXT;
     case R_LOC_DATA: return S_DATA;
     case R_LOC_RDATA: return S_RDATA;
-    default: return -1;		/* debug */
+    default: return S_DEBUG;
     }
 }
 
@@ -793,7 +796,7 @@ cmp_ref (const void *a, const void *b)
 static void
 add_rela (Elf *e, int sec, uint32_t offset, int sym, int type, int32_t addend)
 {
-  Buf *b = &e->rel[sec == S_TEXT ? 0 : sec == S_DATA ? 1 : 2];
+  Buf *b = &e->rel[sec == S_TEXT ? 0 : sec == S_DATA ? 1 : sec == S_RDATA ? 2 : 3];
   add32 (b, offset);
   add32 (b, ((uint32_t) sym << 8) | type);
   add32 (b, (uint32_t) addend);
@@ -814,6 +817,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   buf_add (&e.text, r->codep, r->code);
   buf_add (&e.data, r->datap, r->idata);
   buf_add (&e.rdata, r->rdatap, r->ridata);
+  buf_add (&e.dbg, r->rdatap + r->ridata, r->debug);
 
   /* Symbols: null, file, section symbols, then globals.  */
   add_sym (&e, NULL, 0, 0, 0, 0);
@@ -894,16 +898,14 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
       for (k = i; k < r->nrefs && loc_section (r->refs[k].type) == sec
 		  && r->refs[k].offset == off; k++)
 	;
-      if (sec < 0)
-	continue;		/* references in debug info */
-
       size = (r->refs[i].type & R_SIZE) == R_BYTE ? 1
 	     : (r->refs[i].type & R_SIZE) == R_WORD ? 2 : 4;
       for (n = i; n < k; n++)
 	if ((r->refs[n].type & R_SIZE) != (r->refs[i].type & R_SIZE))
 	  goto unsupported;
 
-      b = sec == S_TEXT ? &e.text : sec == S_DATA ? &e.data : &e.rdata;
+      b = sec == S_TEXT ? &e.text : sec == S_DATA ? &e.data
+	  : sec == S_RDATA ? &e.rdata : &e.dbg;
       if (off + size > b->len)
 	goto unsupported;
       p = b->buf + off;
@@ -1059,6 +1061,8 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   secbuf[S_SYMTAB] = &e.syms;
   secbuf[S_STRTAB] = &e.strs;
   secbuf[S_R68X] = &e.notes;
+  secbuf[S_DEBUG] = &e.dbg;
+  secbuf[S_RELDEBUG] = &e.rel[3];
   secsize[S_BSS] = r->statics;
   secsize[S_RBSS] = r->rstatics;
 
@@ -1067,6 +1071,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
     uint32_t nameoff[S_NUM], offset[S_NUM];
     size_t ehdr, shoff;
     unsigned char *h;
+    int nsec = r->debug ? S_NUM : S_DEBUG;
 
     add8 (&shstr, 0);
     for (i = 1; i < S_NUM; i++)
@@ -1075,7 +1080,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 
     out->len = 0;
     ehdr = buf_space (out, 52);
-    for (i = 1; i < S_NUM; i++)
+    for (i = 1; i < nsec; i++)
       {
 	while (out->len % 4)
 	  add8 (out, 0);
@@ -1089,7 +1094,7 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
       }
     while (out->len % 4)
       add8 (out, 0);
-    shoff = buf_space (out, S_NUM * 40);
+    shoff = buf_space (out, nsec * 40);
 
     h = out->buf + ehdr;
     memcpy (h, "\177ELF\1\2\1", 7);	/* 32-bit, big-endian, version 1 */
@@ -1099,10 +1104,10 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
     put32 (h + 32, shoff);
     put16 (h + 40, 52);
     put16 (h + 46, 40);
-    put16 (h + 48, S_NUM);
+    put16 (h + 48, nsec);
     put16 (h + 50, S_SHSTRTAB);
 
-    for (i = 1; i < S_NUM; i++)
+    for (i = 1; i < nsec; i++)
       {
 	unsigned char *s = out->buf + shoff + i * 40;
 	uint32_t type = 1, flags = 0, link = 0, info = 0, align = 2,
@@ -1122,7 +1127,11 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
 	    entsize = 16;
 	    break;
 	  case S_STRTAB: case S_SHSTRTAB: type = 3; align = 1; break;
-	  case S_R68X: align = 1; break;	/* not loaded */
+	  case S_R68X: case S_DEBUG: align = 1; break;	/* not loaded */
+	  case S_RELDEBUG:
+	    type = 4; link = S_SYMTAB; flags = 0x40;	/* INFO_LINK */
+	    info = S_DEBUG; align = 4; entsize = 12;
+	    break;
 	  }
 	put32 (s, nameoff[i]);
 	put32 (s + 4, type);
@@ -1142,7 +1151,8 @@ rof_to_elf (const char *file, Rof *r, Buf *out)
   free (e.text.buf);
   free (e.data.buf);
   free (e.rdata.buf);
-  for (i = 0; i < 3; i++)
+  free (e.dbg.buf);
+  for (i = 0; i < 4; i++)
     free (e.rel[i].buf);
   free (e.extsym);
   free (e.notes.buf);

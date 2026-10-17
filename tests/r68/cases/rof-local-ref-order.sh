@@ -2,7 +2,8 @@
 # those in the remote initialized data, then those in the initialized data, each group by
 # descending offset (both measured 2026-10-17 with this source; C 3.2's R68 writes this ROF as
 # -dialect=c32 does now, but for the date). Before, one list by descending offset, the groups
-# mixed where their offsets overlap.
+# mixed where their offsets overlap. (The general rule, in the order the references were made,
+# where the remote vsect comes first too: rof-debug-area.)
 # fixed: f158cf2 2026-10-17 elf2rof: local references grouped by location
 src lo <<'EOF'
  psect lo_p,0,0,1,0,0

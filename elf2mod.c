@@ -1235,6 +1235,67 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 		fclose(sf);
+
+		// The debug information (this fork, -g): where a psect has some
+		// (C 3.2's c68 -g; r68togas's and rof2elf's .r68dbg, which the
+		// link puts together in link order), OUTFILE.dbg next to the
+		// symbol module, as l68 -g writes it (measured 2026-10-17): C 3.2's
+		// $BEEFCAFE, a zero word, the program module's CRC as a long, the
+		// psects' debug areas; Ultra C's $CAFEBEEF, 3, the CRC, a zero
+		// long, the areas. A reference to a code label holds its module
+		// offset, to data its a6-relative offset (its VMA, as the link
+		// put it).
+		asection *dbg = bfd_get_section_by_name(abfd, ".r68dbg");
+		if(dbg && bfd_section_size(dbg) > 0) {
+			bfd_size_type gsize = bfd_section_size(dbg);
+			unsigned char *g = malloc(gsize);
+			if(!g || !bfd_get_section_contents(abfd, dbg, g, 0, gsize)) {
+				bfd_perror("could not read .r68dbg");
+				return 1;
+			}
+			long grelsz = bfd_get_reloc_upper_bound(abfd, dbg);
+			arelent **grels = grelsz > 0 ? malloc(grelsz) : NULL;
+			long ngrels = grels ? bfd_canonicalize_reloc(abfd, dbg, grels, syms) : 0;
+			for(long i = 0; i < ngrels; i++) {
+				arelent *rel = grels[i];
+				asection *ssec = rel->sym_ptr_ptr[0]->section;
+				int size = rel->howto->type == 1 ? 4 : rel->howto->type == 2 ? 2 : rel->howto->type == 3 ? 1 : 0;
+				if(bfd_is_und_section(ssec)) {
+					printf("undefined symbol %s (.r68dbg+%08lx)\n", rel->sym_ptr_ptr[0]->name, rel->address);
+					return 1;
+				}
+				if(ssec != text)
+					continue; // data, equates: as the link resolved them
+				if(!size || rel->address + size > gsize) {
+					printf("%s at .r68dbg+%08lx: not supported\n", rel->howto->name, rel->address);
+					return 1;
+				}
+				int64_t off = (int64_t)(bfd_asymbol_value(rel->sym_ptr_ptr[0]) + rel->addend) - (int64_t)tvma + (int64_t)itext;
+				for(int k = 0; k < size; k++)
+					g[rel->address + k] = (unsigned char)((uint64_t)off >> (8 * (size - 1 - k)));
+			}
+			free(grels);
+			unsigned char gh[14];
+			size_t ghn = opt_stb == 2 ? 14 : 10;
+			memset(gh, 0, sizeof gh);
+			if(opt_stb == 2) {
+				gh[0] = 0xCA; gh[1] = 0xFE; gh[2] = 0xBE; gh[3] = 0xEF; gh[5] = 3;
+			} else {
+				gh[0] = 0xBE; gh[1] = 0xEF; gh[2] = 0xCA; gh[3] = 0xFE;
+			}
+			gh[6] = crc >> 24; gh[7] = crc >> 16; gh[8] = crc >> 8; gh[9] = crc;
+			char *gfile = malloc(strlen(sfile) + 1);
+			strcpy(gfile, sfile);
+			strcpy(gfile + strlen(gfile) - 4, ".dbg");
+			FILE *gf = fopen(gfile, "w+b");
+			if(!gf || fwrite(gh, 1, ghn, gf) != ghn || fwrite(g, 1, gsize, gf) != gsize) {
+				perror("could not write the debug information");
+				return 1;
+			}
+			fclose(gf);
+			free(gfile);
+			free(g);
+		}
 	}
 
 	// write

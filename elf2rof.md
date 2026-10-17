@@ -49,10 +49,15 @@ Ultra C both read.
 | PC-relative relocations within the code | resolved, no reference |
 | relocations to absolute symbols | resolved, no reference |
 | `__os9_*` symbols | the module header |
+| `.r68dbg` | the debug area |
+| `.r68ord` | the references' order |
 | DWARF, other sections | dropped |
 
 - **Common definitions** have type 0x0100 and the size as their value; they are referred to by
   name, and `l68` merges them.
+- **`.r68dbg`** holds the `debug.b/.w/.l` lines (through r68togas or rof2elf); the debug area
+  follows the remote data, its size in the header. **`.r68ord`** (r68togas's) isn't written
+  itself; it gives the references' order (see "Reference order").
 
 - **Relocations:** `R_68K_32`, `R_68K_16`, `R_68K_8` and their PC-relative forms, and the PLT
   forms, which are PC-relative in a static link (as GNU `ld` treats them). The addend goes into the
@@ -78,8 +83,25 @@ Ultra C both read.
   psect; `l68` needs one root psect among the files it links. A psect of type/language 0 (a
   library's) takes its attributes, revision, edition and stack from the local symbols
   `__os9l_attrev`, `__os9l_edition` and `__os9l_stack`, which r68togas and rof2elf write.
+- **The debug area** (C 3.2's `c68 -g`) holds bytes, words and longs, references to code, data and
+  externals in it 16 or 32 bits; it isn't padded to an even size, as Microware's assemblers don't
+  pad it. A ROF of series 8 has no debug area (refused).
 - **Not supported:** GOT relocations, weak undefined symbols, section groups (COMDAT), and
   constructors and destructors (`.init_array`, `.ctors`, ...), for which `l68` has no mechanism.
+
+### Reference order
+
+Like Microware's assemblers, elf2rof sorts definitions and external references by name, and ends
+every ROF with 16 zero bytes, which `rdump` and `l68` skip. Both Microware assemblers write an
+external's references in the order they were made, and the local references in two lists: those
+made in the psect (its code, `debug` lines there), then those made in vsects (their data, `debug`
+lines there), each in reverse order of making. An object from r68togas has the records of section
+`.r68ord` for that order. Without them (GCC's objects, rof2elf's), an external's references in one
+area are written in ascending order of offset, and the local references those in the code, then in
+the remote data, then in the data, each in descending order of offset (the same order where the
+code comes first and the remote vsects after the others). The order matters: `l68` takes library
+members in the order of the external references, and builds the module's pointer tables from the
+local references in reverse.
 
 ## Large programs
 

@@ -176,6 +176,15 @@ program module's, as both `l68`s write them.
 
 The two `l68`s write this a little differently, and `--stb=STYLE` follows either:
 
+## The source debugger's file
+
+Where psects have debug information (C 3.2's `c68 -g` writes `debug.b/.w/.l` lines, which r68togas
+and rof2elf put into a section `.r68dbg`, put together in link order), `-g` also writes
+`<outfile>.dbg` next to the symbol module, as `l68 -g` does:
+
+- `c32`: `$BEEFCAFE`, a zero word, the program module's CRC as a long, the psects' debug areas;
+- `ucc`: `$CAFEBEEF`, the word 3, the CRC, a zero long, the areas.
+
 ## The owner
 
 The module's owner (group.user) is `--owner`, else the `GRPUSER` environment variable, as with

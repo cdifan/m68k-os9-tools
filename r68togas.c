@@ -1374,6 +1374,12 @@ struct state {
 	int rept_fold, rept_state;	/* a rept of one dc line folded: its count; 1: the dc
 					   next, 2: the endr */
 	struct buf twins;	/* their __r68pc twins made (epilogue lines) */
+	int used_debug;		/* a debug.b/.w/.l line: .r68dbg (debug_line) */
+	int ndebug;		/* debug lines (.Lr68dp<n>, .Lr68ds<n>) */
+	int nvsects;		/* vsect statements (.Lr68vs<n>, .Lr68ve<n>) */
+	int vs_init;		/* the vsect's initialized data has had a dc or debug line */
+	int reps;		/* open rept blocks */
+	struct buf ord;		/* the .r68ord records (order_record) */
 };
 
 static struct state st;
@@ -2066,10 +2072,21 @@ static void op_parts(const char *op, char *base, size_t size, char *suffix)
 	*suffix = op[i] == '.' && op[i + 1] ? tolower((unsigned char)op[i + 1]) : 0;
 }
 
+static char *location_as(const char *s, size_t n, const char *repl);
+
 /* Expression S (N chars) with each * meaning the location (not a
  * multiplication) replaced by (*-OFFSET): in r68 a dc list's * is the
  * statement's start, in as the element's; null if it has none. */
 static char *location_from(const char *s, size_t n, long offset)
+{
+	char repl[32];
+	snprintf(repl, sizeof repl, "(*-%ld)", offset);
+	return location_as(s, n, repl);
+}
+
+/* Expression S (N chars) with each * meaning the location replaced by
+ * REPL; null if it has none. */
+static char *location_as(const char *s, size_t n, const char *repl)
 {
 	struct buf b = { 0 };
 	char prev = 0;
@@ -2086,7 +2103,7 @@ static char *location_from(const char *s, size_t n, long offset)
 			continue;
 		}
 		if (c == '*' && (prev == 0 || prev == '(' || strchr("+-*/&!|^<>~", prev))) {
-			bprintf(&b, "(*-%ld)", offset);
+			bputs(&b, repl);
 			any = 1;
 			prev = 'x';
 			continue;
@@ -4655,6 +4672,125 @@ static void pcm_marks(const char *args, int bytes)
 	annotate = 1;
 }
 
+/* A record of .r68ord, written at the end (where every label is known; each
+ * only if its label is assembled): KIND, then where it is (label POS) and
+ * the debug line's start (.Lr68ds<DBG>, 0 for none). elf2rof orders the
+ * ROF's references by them as both Microware assemblers do (measured
+ * 2026-10-17): the external ones in the order they were made, the local
+ * ones those made in the psect (its code, debug lines there) then those
+ * made in vsects (their data, debug lines there), each list from the last
+ * made. Kinds: 1 a debug line in the code (POS there), 2 one in a vsect
+ * (POS in its initialized data), 3 a vsect's start (POS in the code), 4 a
+ * vsect's end (POS in its initialized data, where it has some). */
+static void order_record(int kind, const char *pos, int dbg)
+{
+	bprintf(&st.ord, " ifdef %s\n dc.w %d\n dc.l %s,", pos, kind, pos);
+	if (dbg)
+		bprintf(&st.ord, ".Lr68ds%d\n", dbg);
+	else
+		bputs(&st.ord, "0\n");
+	bputs(&st.ord, " endc\n");
+}
+
+/* debug.b/.w/.l ARGS (C 3.2's c68 -g writes them; both Microware assemblers
+ * take them): the operands into the ROF's debug area, which follows the
+ * remote data, its size in the header, its words and longs at even offsets
+ * but its end not padded (measured 2026-10-17); * is the location where the
+ * line is. Written into section
+ * .r68dbg, which elf2rof takes for the debug area: strings with ascii,
+ * other bytes with fill (in MRI mode, gas aligns the next statement after
+ * an odd dc.b, a section switch too), words and longs with dc. In a vsect
+ * the line is in its initialized data (switched to, as a dc there would
+ * be). Each line is noted in .r68ord (order_record), but in a macro body or
+ * a rept, where a label would be defined twice. */
+static void debug_line(struct buf *out, const char *labs, const char *args, char size, const char *rest)
+{
+	int labels = !st.in_macro && st.reps == 0;
+	int n = ++st.ndebug;
+	char loc[32];
+	st.used_debug = 1;
+	if (*labs)
+		bprintf(out, "%s\n", labs);
+	if (st.in_vsect) {
+		const char *sect = data_section(1);
+		if (!same_section(sect))
+			bprintf(out, " r68sect %s\n", sect);
+		st.section = sect;
+		st.vs_init = 1;
+	}
+	if (labels) {
+		/* labels alone, which MRI mode doesn't align at */
+		snprintf(loc, sizeof loc, ".Lr68dp%d", n);
+		bprintf(out, "%s\n section .r68dbg\n.Lr68ds%d\n", loc, n);
+		order_record(st.in_vsect ? 2 : 1, loc, n);
+	} else {
+		snprintf(loc, sizeof loc, ".Lr68dpos");
+		bprintf(out, "%s set *\n section .r68dbg\n", loc);
+	}
+	int max = 1;
+	for (const char *c = args; *c; c++)
+		max += *c == ',';
+	const char **pieces = xmalloc(max * sizeof *pieces);
+	size_t *lens = xmalloc(max * sizeof *lens);
+	int k = split_commas(args, strlen(args), pieces, lens, max);
+	/* words and longs at an even offset in the area, after a zero byte
+	 * where it's odd (as both assemblers write it; its end isn't padded);
+	 * by its start's label, .r68dbg's alignment staying 1 (for the link's
+	 * .dbg, whose psects' parts the link would align too) */
+	if (size != 'b')
+		bputs(out, " fill (*-.Lr68dbg0)&1,1,0\n");
+	for (int i = 0; i < k; i++) {
+		if (size == 'b' && lens[i] > 0 && (pieces[i][0] == '"' || pieces[i][0] == '\'') &&
+		    whole_quoted(pieces[i], lens[i])) {
+			/* a string: its characters as string_operand reads them, the
+			 * ones gas's scrubber might take otherwise in octal */
+			char q = pieces[i][0];
+			struct buf s = { 0 };
+			for (size_t c = 1; c < lens[i]; c++) {
+				unsigned char ch = (unsigned char)pieces[i][c];
+				if (ch == (unsigned char)q) {
+					if (c + 1 < lens[i] && pieces[i][c + 1] == q)
+						c++;
+					else
+						break;
+				} else if (ch == '\\' && q == '"' && c + 1 < lens[i]) {
+					ch = (unsigned char)pieces[i][++c];
+				}
+				if (isalnum(ch) || (ch != 0 && strchr(" :/_-.,=()[]+*", ch)))
+					bputc(&s, (char)ch);
+				else
+					bprintf(&s, "\\%03o", ch);
+			}
+			if (s.n > 0)
+				bprintf(out, " ascii \"%s\"\n", s.s);
+			free(s.s);
+			continue;
+		}
+		char *at = location_as(pieces[i], lens[i], "r68__dloc");
+		struct buf e = { 0 };
+		expr_chars = size != 'b';
+		expression(&e, at ? at : pieces[i], at ? strlen(at) : lens[i]);
+		expr_chars = 0;
+		free(at);
+		/* the location's placeholder as the line's label */
+		bputs(out, size == 'b' ? " fill 1,1," : size == 'w' ? " dc.w " : " dc.l ");
+		for (const char *p = e.s ? e.s : "0"; *p;) {
+			if (strncmp(p, "r68__dloc", 9) == 0) {
+				bputs(out, loc);
+				p += 9;
+			} else {
+				bputc(out, *p++);
+			}
+		}
+		bputc(out, '\n');
+		free(e.s);
+	}
+	free(pieces);
+	free(lens);
+	bprintf(out, " section %s%s", st.in_vsect ? data_section(1) : ".text", rest);
+	annotate = 1;
+}
+
 /* Whether instruction BASE (SIZE) with operands ARGS has a byte immediate of
  * an external that the Microware assemblers relocate as the whole extension
  * word (see word_imm): ori, andi, subi, addi, eori, cmpi .b or to ccr; or,
@@ -4878,6 +5014,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			op_parts(l.op, base, sizeof base, &size);
 			break;
 		}
+	/* rept blocks open (no labels of debug_line and order_record there) */
+	if (strcmp(base, "rept") == 0)
+		st.reps++;
+	else if (strcmp(base, "endr") == 0 && st.reps > 0)
+		st.reps--;
 	/* No link-time expression where the field must be a number (r68
 	 * refuses an external there too): fields of the instruction word that
 	 * aren't a byte (quick values, shift counts), sizes and counts,
@@ -5006,12 +5147,33 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		st.in_vsect = 1;
 		st.remote = ci_eq(l.args, "remote");
 		st.used_remote |= st.remote;
+		st.vs_init = 0;
+		if (!st.in_macro && st.reps == 0) {
+			/* where it is in the code, for the order of the references
+			 * (order_record): a label alone, which MRI mode doesn't
+			 * align at */
+			char v[32];
+			snprintf(v, sizeof v, ".Lr68vs%d", ++st.nvsects);
+			bprintf(&line_before, "%s\n", v);
+			order_record(3, v, 0);
+		}
 		/* r68__vs: where a macro's dc and ds go (see there) */
 		bprintf(out, "r68__vs set %d\t;%s", st.remote ? 2 : 1, text);
 		goto done;
 	}
 	if (strcmp(base, "ends") == 0 || strcmp(base, "endsect") == 0) {
 		if (st.in_vsect) {
+			if (!st.in_macro && st.reps == 0 && st.vs_init && st.nvsects > 0) {
+				/* where its initialized data ends (order_record) */
+				const char *sect = data_section(1);
+				char v[32];
+				snprintf(v, sizeof v, ".Lr68ve%d", st.nvsects);
+				if (!same_section(sect))
+					bprintf(&line_before, " r68sect %s\n", sect);
+				bprintf(&line_before, "%s\n", v);
+				st.section = sect;
+				order_record(4, v, 0);
+			}
 			st.in_vsect = 0;
 			st.remote = 0;
 			bputs(&line_before, "r68__vs set 0\n");
@@ -5037,6 +5199,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				st.ends_cond = 1;
 			bprintf(out, "*%s", text);
 		}
+		goto done;
+	}
+	if (strcmp(base, "debug") == 0 && (size == 'b' || size == 'w' || size == 'l')) {
+		debug_line(out, labs, l.args ? l.args : "", size, rest);
 		goto done;
 	}
 	/* spanreg: Ultra C's scratch register for r68's branch sizing. */
@@ -5356,6 +5522,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		const char *sect = data_section(strcmp(base, "ds") != 0);
 		int same = same_section(sect);
 		st.section = sect;
+		if (strcmp(base, "ds") != 0)
+			st.vs_init = 1;
 		if (strcmp(base, "dc") == 0) {
 			struct buf list = { 0 };
 			dc_size = sz == 'b' ? 1 : sz == 'l' ? 4 : 2;
@@ -6619,6 +6787,8 @@ int main(int argc, char **argv)
 			fprintf(out, " section .remote.data\n balign %d,0\n section .remote.bss\n balign %d\n", to, to);
 		fputs(" section .text\n", out);
 	}
+	if (st.ord.n > 0)
+		fprintf(out, "* the order of the references (order_record)\n section .r68ord\n%s section .text\n", st.ord.s);
 	fputs(st.macro_syms.s ? st.macro_syms.s : "", out);
 	fputs(st.globals.s ? st.globals.s : "", out);
 	if (st.twins.s)
@@ -6734,6 +6904,12 @@ int main(int argc, char **argv)
 	if (st.used_pcm)
 		/* pcm_marks's section, not allocated */
 		fputs(" .section .r68pcm,\"\"\n .text\n", final);
+	if (st.used_debug)
+		/* debug_line's section, not allocated, a label at its start */
+		fputs(" .section .r68dbg,\"\"\n.Lr68dbg0:\n .text\n", final);
+	if (st.ord.n > 0)
+		/* order_record's section, not allocated */
+		fputs(" .section .r68ord,\"\"\n .text\n", final);
 	if (st.aliases.s != NULL) {
 		/* the sections' aliases the link-time expressions name
 		 * (label_alias): hidden globals at their start (nothing is in

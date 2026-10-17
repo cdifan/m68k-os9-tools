@@ -106,16 +106,22 @@
 /* The areas of a psect.  */
 enum
 {
-  A_CODE, A_DATA, A_BSS, A_RDATA, A_RBSS, A_NUM, A_NONE = -1
+  A_CODE, A_DATA, A_BSS, A_RDATA, A_RBSS, A_DEBUG, A_NUM, A_NONE = -1
 };
 
 static const char *const areanames[A_NUM] = {
   "code", "initialized data", "uninitialized data",
-  "remote initialized data", "remote uninitialized data"
+  "remote initialized data", "remote uninitialized data",
+  "debug information"
 };
 static const unsigned areakind[A_NUM] = {
-  T_CODE, T_DATA, T_BSS, T_RDATA, T_RBSS
+  T_CODE, T_DATA, T_BSS, T_RDATA, T_RBSS, 0
 };
+
+/* Where a reference is located: in the debug area, both location bits (as
+   Microware's assemblers write it, measured 2026-10-17).  */
+#define R_LOC_DEBUG	(R_LOC_CODE | R_LOC_RDATA)
+#define R_LOC_MASK	(R_LOC_CODE | R_LOC_RDATA)
 
 static const char *progname = "elf2rof";
 
@@ -309,12 +315,152 @@ cmp_def (const void *a, const void *b)
   return strcmp (((const Def *) a)->name, ((const Def *) b)->name);
 }
 
+/* A record of r68togas's .r68ord (order_record there): where a debug line
+   or a vsect is, for the order of the references.  */
+typedef struct
+{
+  int kind;			/* 1 a debug line in the code, 2 one in a vsect,
+				   3 a vsect's start, 4 a vsect's end */
+  int area;			/* POS's area */
+  uint32_t pos;			/* in the code (1, 3), in the vsect's initialized
+				   data (2, 4) */
+  int has_dbg;
+  uint32_t dbg;			/* the debug line's start in the debug area */
+} Rec;
+
+/* A reference's place in the order the source made it (compared as a
+   tuple), and whether it was made in a vsect.  */
+typedef struct
+{
+  int64_t k[5];
+  int vsect;
+} Key;
+
+#define KEY_LAST ((int64_t) 1 << 40)
+
+/* The vsect start before record I, or -1.  */
+static int
+vsect_of (const Rec *rec, int i)
+{
+  while (--i >= 0)
+    if (rec[i].kind == 3)
+      return i;
+  return -1;
+}
+
+/* R's place by REC (N records), as Microware's assemblers make the
+   references (measured 2026-10-17): in the code in ascending order, a
+   debug line's where it is in the code, a vsect's where it is in the code
+   (its references then in the order of its data, a debug line's where it
+   is there).  */
+static void
+ref_key (const Rec *rec, int n, const Ref *r, Key *key)
+{
+  unsigned loc = r->type & R_LOC_MASK;
+  int i, d = -1, v;
+  memset (key, 0, sizeof *key);
+  if (loc == R_LOC_CODE)
+    {
+      /* after a debug line or vsect at the same place */
+      key->k[0] = r->offset;
+      key->k[1] = KEY_LAST;
+      return;
+    }
+  if (loc == R_LOC_DEBUG)
+    {
+      for (i = 0; i < n; i++)
+	if ((rec[i].kind == 1 || rec[i].kind == 2) && rec[i].has_dbg
+	    && rec[i].dbg <= r->offset)
+	  d = i;
+      if (d < 0)
+	{
+	  /* a line without a record (in a macro or a rept): at the start */
+	  key->k[1] = -1;
+	  key->k[2] = r->offset;
+	}
+      else if (rec[d].kind == 1)
+	{
+	  key->k[0] = rec[d].pos;
+	  key->k[1] = d;
+	  key->k[2] = r->offset;
+	}
+      else
+	{
+	  v = vsect_of (rec, d);
+	  key->vsect = 1;
+	  key->k[0] = v >= 0 ? rec[v].pos : 0;
+	  key->k[1] = v;
+	  key->k[2] = rec[d].pos;
+	  key->k[3] = d;
+	  key->k[4] = r->offset;
+	}
+      return;
+    }
+  /* in a vsect's data: the vsect whose end there is the first after it */
+  key->vsect = 1;
+  for (i = 0; i < n; i++)
+    if (rec[i].kind == 4 && rec[i].area == (loc == R_LOC_RDATA ? A_RDATA : A_DATA)
+	&& rec[i].pos > r->offset)
+      break;
+  v = i < n ? vsect_of (rec, i) : -1;
+  key->k[0] = i < n ? (v >= 0 ? rec[v].pos : 0) : KEY_LAST;
+  key->k[1] = i < n ? v : KEY_LAST;
+  key->k[2] = r->offset;
+  key->k[3] = KEY_LAST;
+}
+
+static int
+cmp_key (const Key *a, const Key *b)
+{
+  int i;
+  for (i = 0; i < 5; i++)
+    if (a->k[i] != b->k[i])
+      return a->k[i] < b->k[i] ? -1 : 1;
+  return 0;
+}
+
+/* A reference with its place and its index among those made.  */
+typedef struct
+{
+  Ref r;
+  Key k;
+  int i;
+} KeyedRef;
+
+/* Local references as Microware's assemblers write them: those made in the
+   psect, then those made in vsects, each from the last made.  */
+static int
+cmp_keyed_loc (const void *a, const void *b)
+{
+  const KeyedRef *x = a, *y = b;
+  int c;
+  if (x->k.vsect != y->k.vsect)
+    return x->k.vsect - y->k.vsect;
+  c = cmp_key (&x->k, &y->k);
+  if (c)
+    return -c;
+  return y->i - x->i;
+}
+
+/* An external's references in the order made.  */
+static int
+cmp_keyed_ext (const void *a, const void *b)
+{
+  const KeyedRef *x = a, *y = b;
+  int c = cmp_key (&x->k, &y->k);
+  return c ? c : x->i - y->i;
+}
+
 /* Which area a section goes to.  */
 static int
 section_area (Obj *o, Sec *s)
 {
   if (s->type == SHT_GROUP)
     die ("%s: section groups (COMDAT) are not supported", o->file);
+  /* r68togas's debug.b/.w/.l lines (C 3.2's c68 -g): the ROF's debug
+     area */
+  if (!strcmp (s->name, ".r68dbg"))
+    return A_DEBUG;
   if (!(s->flags & SHF_ALLOC))
     return A_NONE;
   if (!strcmp (s->name, ".init_array") || !strcmp (s->name, ".fini_array")
@@ -486,7 +632,8 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
       asize[s->area] = (asize[s->area] + align - 1) & ~(align - 1);
       s->base = asize[s->area];
       asize[s->area] += s->size;
-      if (s->area == A_CODE || s->area == A_DATA || s->area == A_RDATA)
+      if (s->area == A_CODE || s->area == A_DATA || s->area == A_RDATA
+	  || s->area == A_DEBUG)
 	{
 	  if (area[s->area].len < s->base)
 	    buf_space (&area[s->area], s->base - area[s->area].len);
@@ -549,9 +696,12 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
       name = j < nsyms ? syms[j].name : psect_name (o->file);
     }
 
-  /* Every area has an even size.  */
+  /* Every area has an even size, but the debug area (not padded by
+     Microware's assemblers).  */
   for (i = 0; i < A_NUM; i++)
     {
+      if (i == A_DEBUG)
+	continue;
       asize[i] = (asize[i] + 1) & ~1u;
       if (i == A_CODE || i == A_DATA || i == A_RDATA)
 	if (area[i].len < asize[i])
@@ -618,7 +768,8 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	  int la = s->area, size, rel;
 	  uint32_t lo = s->base + roff;
 	  unsigned loc = la == A_CODE ? R_LOC_CODE
-			 : la == A_RDATA ? R_LOC_RDATA : R_LOC_DATA;
+			 : la == A_RDATA ? R_LOC_RDATA
+			 : la == A_DEBUG ? R_LOC_DEBUG : R_LOC_DATA;
 	  unsigned char *p;
 	  Sym *y;
 	  Ref r;
@@ -643,9 +794,15 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	    die ("%s: %s: relocation outside the section", o->file, s->name);
 	  if (symi >= nsyms && symi != 0)
 	    die ("%s: %s: bad symbol in relocation", o->file, s->name);
-	  if (la != A_CODE && (size != 4 || rel))
+	  if (la == A_DEBUG && rel)
+	    die ("%s: %s+0x%x: a PC-relative reference in the debug "
+		 "information", o->file, s->name, (unsigned) roff);
+	  if (la != A_CODE && la != A_DEBUG && (size != 4 || rel))
 	    die ("%s: %s+0x%x: only 32-bit absolute references are possible "
 		 "in data", o->file, s->name, (unsigned) roff);
+	  if (symi && syms[symi].area == A_DEBUG)
+	    die ("%s: %s+0x%x: a reference to the debug information", o->file,
+		 s->name, (unsigned) roff);
 	  p = area[la].buf + lo;
 	  y = symi ? &syms[symi] : NULL;
 	  r.offset = lo;
@@ -889,10 +1046,88 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
     qsort (defs, ndefs, sizeof (Def), cmp_def);
   if (nexts)
     qsort (exts, nexts, sizeof (Ext), cmp_ext);
+
+  /* r68togas's .r68ord (order_record there): records of where its debug
+     lines and vsects are, by which the references are put in the order
+     Microware's assemblers write them; without it, as below.  */
+  Rec *rec = NULL;
+  int nrec = 0;
+  for (i = 1; i < nsecs; i++)
+    {
+      Sec *rs = &secs[i];
+      int ri = -1, q;
+      if (strcmp (rs->name, ".r68ord"))
+	continue;
+      const unsigned char *b = at (o, rs->offset, rs->size);
+      nrec = rs->size / 10;
+      rec = xmalloc (nrec * sizeof (Rec));
+      for (q = 0; q < nrec; q++)
+	{
+	  rec[q].kind = get16 (b + q * 10);
+	  rec[q].area = A_NONE;
+	}
+      for (q = 1; q < (int) nsecs; q++)
+	if (secs[q].type == SHT_RELA && secs[q].info == i)
+	  ri = q;
+      for (q = 0; ri >= 0 && q < (int) (secs[ri].size / 12); q++)
+	{
+	  const unsigned char *e = at (o, secs[ri].offset + q * 12, 12);
+	  uint32_t roff = get32 (e), symi = get32 (e + 4) >> 8;
+	  int32_t addend = (int32_t) get32 (e + 8);
+	  int k = roff / 10;
+	  if (symi == 0 || symi >= nsyms || syms[symi].area == A_NONE
+	      || k >= nrec || (roff % 10 != 2 && roff % 10 != 6))
+	    die ("%s: bad .r68ord record", o->file);
+	  if (roff % 10 == 2)
+	    {
+	      rec[k].area = syms[symi].area;
+	      rec[k].pos = syms[symi].offset + (uint32_t) addend;
+	    }
+	  else
+	    {
+	      rec[k].has_dbg = 1;
+	      rec[k].dbg = syms[symi].offset + (uint32_t) addend;
+	    }
+	}
+    }
+  if (nrec > 0)
+    {
+      int q, m;
+      for (q = 0; q < nexts; q++)
+	{
+	  KeyedRef *kr = xmalloc (exts[q].nrefs * sizeof (KeyedRef));
+	  for (m = 0; m < exts[q].nrefs; m++)
+	    {
+	      kr[m].r = exts[q].refs[m];
+	      kr[m].i = m;
+	      ref_key (rec, nrec, &kr[m].r, &kr[m].k);
+	    }
+	  qsort (kr, exts[q].nrefs, sizeof (KeyedRef), cmp_keyed_ext);
+	  for (m = 0; m < exts[q].nrefs; m++)
+	    exts[q].refs[m] = kr[m].r;
+	  free (kr);
+	}
+      if (nlocs)
+	{
+	  KeyedRef *kr = xmalloc (nlocs * sizeof (KeyedRef));
+	  for (m = 0; m < nlocs; m++)
+	    {
+	      kr[m].r = locs[m];
+	      kr[m].i = m;
+	      ref_key (rec, nrec, &kr[m].r, &kr[m].k);
+	    }
+	  qsort (kr, nlocs, sizeof (KeyedRef), cmp_keyed_loc);
+	  for (m = 0; m < nlocs; m++)
+	    locs[m] = kr[m].r;
+	  free (kr);
+	}
+      free (rec);
+    }
+
   /* An external's references in one area in ascending order of offset,
      as Microware's assemblers write them (gas lists some relocations
      later, such as dc.w Ext-*'s); stable, areas' interleaving kept.  */
-  for (j = 0; j < (uint32_t) nexts; j++)
+  for (j = 0; nrec == 0 && j < (uint32_t) nexts; j++)
     {
       Ref *rf = exts[j].refs;
       int a, b;
@@ -912,7 +1147,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	    b = k + 1;
 	  }
     }
-  if (nlocs)
+  if (nlocs && nrec == 0)
     qsort (locs, nlocs, sizeof (Ref), cmp_loc);
   if (ndefs > 0xFFFF || nexts > 0xFFFF || nlocs > 0xFFFF)
     die ("%s: too many symbols or references for ROF edition 9", o->file);
@@ -943,7 +1178,10 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   /* the debug information's size; series 8 has no such field (the R68
      of 1987; rof2elf reads both) */
   if (rof_series != 8)
-    add32 (out, 0);
+    add32 (out, asize[A_DEBUG]);
+  else if (asize[A_DEBUG])
+    die ("%s: debug information, which a ROF of series 8 can't take",
+	 o->file);
   add_name (out, name);
   add16 (out, ndefs);
   for (i = 0; i < (uint32_t) ndefs; i++)
@@ -955,6 +1193,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   buf_add (out, area[A_CODE].buf, asize[A_CODE]);
   buf_add (out, area[A_DATA].buf, asize[A_DATA]);
   buf_add (out, area[A_RDATA].buf, asize[A_RDATA]);
+  buf_add (out, area[A_DEBUG].buf, asize[A_DEBUG]);
   add16 (out, nexts);
   for (i = 0; i < (uint32_t) nexts; i++)
     {
