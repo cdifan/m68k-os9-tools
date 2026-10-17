@@ -491,18 +491,21 @@ static char *equate_library(const char *archive)
 
 /* Ultra C's l68 takes the library members a link needs in another order than
  * the archive's, which C 3.2's l68 (and ld) keep (m68k-os9-l68.md, "Library
- * member order"; measured 2026-10-16): the root objects' references in
- * order, each linking its member; a member linked puts the members defining
- * its unresolved references (in name order, as a ROF lists them) on a stack,
- * those not linked or on it already; the top is linked next. Here the front
- * end chooses the members so and gives ld them as objects, in that order. */
+ * member order"; measured 2026-10-16 and 2026-10-17): the libraries one by
+ * one, in their order; in each, the names still unresolved in order (the root
+ * objects', then those of the members linked from earlier libraries), each
+ * linking the member defining it; a member linked puts the members of the same
+ * library defining its unresolved references (in name order, as a ROF lists
+ * them) on a stack, those not linked or on it already; the top is linked next.
+ * A name only an earlier library defines stays unresolved. Here the front end
+ * chooses the members so and gives ld them as objects, in that order. */
 
 struct member {
 	char *path;		/* extracted, or the input itself */
 	struct args defs;	/* its global definitions */
 	struct args refs;	/* its references, in name order, link-time expressions' terms included */
 	int state;		/* 0, 1 on the stack, 2 linked */
-	int library;		/* in an -l= library (else a root object's) */
+	int library;		/* its -l= library's number from 1 (0: a root object's) */
 };
 
 static struct member *members;
@@ -519,8 +522,9 @@ static struct member *new_member(const char *path, int library)
 }
 
 /* The members of ar archive PATH, each into a file of its own (the symbol
- * table and long names left out), as new members. 0 if it isn't readable. */
-static int extract_members(const char *path)
+ * table and long names left out), as new members of LIBRARY. 0 if it isn't
+ * readable. */
+static int extract_members(const char *path, int library)
 {
 	FILE *fp = fopen(path, "rb");
 	if (fp == NULL)
@@ -553,7 +557,7 @@ static int extract_members(const char *path)
 		if (o == NULL || fwrite(data, 1, (size_t)size, o) != (size_t)size || fclose(o) != 0)
 			error("cannot write %s", out);
 		free(data);
-		new_member(out, 1);
+		new_member(out, library);
 	}
 	fclose(fp);
 	return 1;
@@ -680,11 +684,11 @@ static int defined(const char *name)
 	return 0;
 }
 
-/* The first library member defining NAME, or NULL. */
-static struct member *definer(const char *name)
+/* The first member of library LIBRARY defining NAME, or NULL. */
+static struct member *definer(const char *name, int library)
 {
 	for (int i = 0; i < nmembers; i++)
-		if (members[i].library)
+		if (members[i].library == library)
 			for (int j = 0; j < members[i].defs.n; j++)
 				if (strcmp(members[i].defs.v[j], name) == 0)
 					return &members[i];
@@ -706,7 +710,7 @@ static void link_member(struct member *m, struct args *order)
 		for (int i = 0; i < t->refs.n; i++) {
 			if (defined(t->refs.v[i]))
 				continue;
-			struct member *d = definer(t->refs.v[i]);
+			struct member *d = definer(t->refs.v[i], t->library);
 			if (d != NULL && d->state == 0) {
 				d->state = 1;
 				stack[top++] = d;
@@ -724,11 +728,9 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
 	for (int i = 0; i < roots->n; i++) {
 		if (file_is_ar(roots->v[i])) {
 			int first = nmembers;
-			extract_members(roots->v[i]);
-			for (int j = first; j < nmembers; j++) {
-				members[j].library = 0;
+			extract_members(roots->v[i], 0);
+			for (int j = first; j < nmembers; j++)
 				read_symbols(&members[j], NULL);
-			}
 		} else {
 			read_symbols(new_member(roots->v[i], 0), NULL);
 		}
@@ -739,10 +741,10 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
 		/* an object (a ROF of one psect, converted) is a library of one
 		 * member */
 		if (!file_is_ar(libs->v[i])) {
-			read_symbols(new_member(libs->v[i], 1), NULL);
+			read_symbols(new_member(libs->v[i], i + 1), NULL);
 			continue;
 		}
-		if (!extract_members(libs->v[i]))
+		if (!extract_members(libs->v[i], i + 1))
 			error("%s: cannot read the archive", libs->v[i]);
 		/* one nm of the archive, its "member:" blocks in the members'
 		 * order; nm of each member where they don't match */
@@ -771,15 +773,29 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
 		if (list != NULL)
 			fclose(list);
 	}
+	/* the names to resolve, in order: the root objects', then those of the
+	 * members linked, library by library */
+	struct args names = { 0 };
 	for (int i = 0; i < nroots; i++)
-		for (int j = 0; j < members[i].refs.n; j++) {
-			const char *r = members[i].refs.v[j];
-			if (defined(r))
+		for (int j = 0; j < members[i].refs.n; j++)
+			args_add(&names, members[i].refs.v[j]);
+	for (int lib = 1; lib <= libs->n; lib++) {
+		int linked = order->n, n = names.n;
+		for (int k = 0; k < n; k++) {
+			if (defined(names.v[k]))
 				continue;
-			struct member *d = definer(r);
+			struct member *d = definer(names.v[k], lib);
 			if (d != NULL && d->state == 0)
 				link_member(d, order);
 		}
+		for (int k = linked; k < order->n; k++)
+			for (int i = nroots; i < nmembers; i++)
+				if (strcmp(members[i].path, order->v[k]) == 0)
+					for (int j = 0; j < members[i].refs.n; j++)
+						if (!defined(members[i].refs.v[j]))
+							args_add(&names, members[i].refs.v[j]);
+	}
+	args_free(&names);
 }
 
 /* ----- Linking ----- */
