@@ -3,7 +3,7 @@
 # descending offset (both measured 2026-10-17 with this source; C 3.2's R68 writes this ROF as
 # -dialect=c32 does now, but for the date). Before, one list by descending offset, the groups
 # mixed where their offsets overlap.
-# fixed: 2026-10-17 elf2rof: local references grouped by location
+# fixed: f158cf2 2026-10-17 elf2rof: local references grouped by location
 src lo <<'EOF'
  psect lo_p,0,0,1,0,0
  vsect
