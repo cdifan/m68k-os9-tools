@@ -54,6 +54,8 @@ install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 	$(INSTALL) -s $(EXE_ELF2ROF) $(DESTDIR)/bin/$(EXE_ELF2ROF)
 	for t in $(TRANSLATORS) $(FRONTENDS); do $(INSTALL) -s $$t $(DESTDIR)/bin/$$t; done
 	for t in $(OS9_TOOLS); do ln -sf m68k-elfos9-$$t $(DESTDIR)/bin/m68k-os9-$$t; done
+	# m68k-os9-xcc in Ultra C mode
+	ln -sf m68k-os9-xcc $(DESTDIR)/bin/m68k-os9-ucc
 
 clean:
 	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
