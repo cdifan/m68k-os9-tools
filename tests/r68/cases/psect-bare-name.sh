@@ -1,6 +1,6 @@
 # A psect without name or operands: named "program" in the ROF, as both Microware assemblers name
 # it (C 3.2's R68 and Ultra C's r68, measured 2026-10-17); before, the source file's base name.
-# fixed: 2026-10-17 r68togas: a bare psect named program
+# fixed: fd5b93b 2026-10-17 r68togas: a bare psect named program
 src bare <<'EOF'
  psect
  rts

@@ -31,7 +31,7 @@
 
 #define error os9_error
 
-#define OBJ_KINDS ((1u << OBJ_ELF) | (1u << OBJ_ROF) | (1u << OBJ_UCC))
+#define OBJ_KINDS ((1u << OBJ_ELF) | (1u << OBJ_ROF) | (1u << OBJ_UCC) | (1u << OBJ_ROF8))
 
 /* ----- Options ----- */
 
@@ -125,9 +125,9 @@ static void usage(void)
 		"                      with zeros)");
 	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
 		"                      or the prefix of their names (default m68k-elfos9)");
-	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), gas (the\n"
-		"                      translated source, for m68k-os9-as; standard output\n"
-		"                      without -o)");
+	usage_line("-obj=<kind>", "what -o writes: elf (default), rof or ucc (a ROF), rof8 (a ROF\n"
+		"                      of series 8, as the R68 of 1987), gas (the translated\n"
+		"                      source, for m68k-os9-as; standard output without -o)");
 	printf("Environment:\n");
 	usage_line("M68K_OS9_GNU_PREFIX", "as -gnu-prefix=");
 	usage_line("M68K_OS9_ELF", "obj=elf, rof or ucc as -obj= (gas only on the command line)");
@@ -692,7 +692,7 @@ static void assemble(const char *source)
 
 	/* 2. gas: the object, ELF; a temporary one for a ROF, or for
 	 * only checking (no -o). */
-	int rof = os9conv.obj == OBJ_ROF || os9conv.obj == OBJ_UCC;
+	int rof = os9conv.obj == OBJ_ROF || os9conv.obj == OBJ_UCC || os9conv.obj == OBJ_ROF8;
 	char *object = out != NULL && !rof ? (char *)out : os9_temp(".o");
 	args_add(&argv, AS);
 	cpu_options(&argv);
@@ -720,6 +720,11 @@ static void assemble(const char *source)
 		char *stem = path_stem(source, 0);
 		char *name = psect_name(object, stem);
 		args_add(&argv, ELF2ROF);
+		if (os9conv.obj == OBJ_ROF8) {
+			/* series 8, as the R68 of 1987 */
+			args_add(&argv, "-s");
+			args_add(&argv, "8");
+		}
 		args_add(&argv, "-n");
 		args_add(&argv, name);
 		args_add(&argv, "-o");

@@ -160,9 +160,9 @@ void os9conv_set_save(const char *value)
 
 void os9conv_set_obj(const char *value, unsigned allowed, const char *option)
 {
-	static const char *const names[] = { "elf", "rof", "ucc", "gas" };
+	static const char *const names[] = { "elf", "rof", "ucc", "gas", "rof8" };
 	char list[64] = "";
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < 5; i++) {
 		if (!(allowed & (1u << i)))
 			continue;
 		if (ci_eq(value, names[i])) {
@@ -201,7 +201,7 @@ void os9conv_environment(unsigned allowed)
 		else if (ci_eq(item, "obj"))
 			/* Object formats only: an assembly syntax would turn every
 			 * object of a build into a source. */
-			os9conv_set_obj(value, allowed & ((1u << OBJ_ELF) | (1u << OBJ_ROF) | (1u << OBJ_UCC)),
+			os9conv_set_obj(value, allowed & ((1u << OBJ_ELF) | (1u << OBJ_ROF) | (1u << OBJ_UCC) | (1u << OBJ_ROF8)),
 				"M68K_OS9_ELF obj=");
 		else
 			os9_error("M68K_OS9_ELF: unknown setting %s", item);

@@ -119,6 +119,9 @@ static const unsigned areakind[A_NUM] = {
 
 static const char *progname = "elf2rof";
 
+/* The ROF series written (-s): 9, or 8 as the R68 of 1987.  */
+static int rof_series = 9;
+
 /* With -k, where to go on an error in an archive member.  */
 static jmp_buf *skip_member;
 
@@ -899,7 +902,7 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   add16 (out, typelang);
   add16 (out, attrev);
   add16 (out, 0);		/* assembly valid */
-  add16 (out, 9);		/* series: ROF edition 9 */
+  add16 (out, rof_series);	/* series: ROF edition 9 (or 8, -s) */
   {
     unsigned char d[6] = { tm->tm_year, tm->tm_mon + 1, tm->tm_mday,
 			   tm->tm_hour, tm->tm_min, tm->tm_sec };
@@ -914,7 +917,10 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
   add32 (out, trapent);
   add32 (out, asize[A_RBSS]);
   add32 (out, asize[A_RDATA]);
-  add32 (out, 0);		/* debug information */
+  /* the debug information's size; series 8 has no such field (the R68
+     of 1987; rof2elf reads both) */
+  if (rof_series != 8)
+    add32 (out, 0);
   add_name (out, name);
   add16 (out, ndefs);
   for (i = 0; i < (uint32_t) ndefs; i++)
@@ -1009,14 +1015,16 @@ static void
 usage (void)
 {
   fprintf (stderr,
-	   "usage: elf2rof [-k] [-n NAME] [-o OUTPUT] INPUT\n"
+	   "usage: elf2rof [-k] [-s SERIES] [-n NAME] [-o OUTPUT] INPUT\n"
 	   "  INPUT   an m68k ELF relocatable (.o) or an ar archive of them (.a)\n"
 	   "  -o      the output: a ROF (default INPUT.r) or, from an archive, a\n"
 	   "          library of ROFs (default INPUT.l)\n"
 	   "  -n      the psect name (default: INPUT's base name; for an\n"
 	   "          archive, each member's)\n"
 	   "  -k      skip archive members that can't be converted, with a\n"
-	   "          warning\n");
+	   "          warning\n"
+	   "  -s      the ROF series: 9 (default), or 8, as the R68 of 1987\n"
+	   "          wrote (no debug size field in the header)\n");
   exit (2);
 }
 
@@ -1038,6 +1046,12 @@ main (int argc, char **argv)
 	name = argv[++i];
       else if (!strcmp (argv[i], "-k"))
 	keep_going = 1;
+      else if (!strcmp (argv[i], "-s") && i + 1 < argc)
+	{
+	  rof_series = atoi (argv[++i]);
+	  if (rof_series != 8 && rof_series != 9)
+	    usage ();
+	}
       else if (argv[i][0] == '-' || input)
 	usage ();
       else

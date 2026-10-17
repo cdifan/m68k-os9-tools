@@ -41,7 +41,7 @@ char *os9_module_name(const char *output);
 
 /* Where converted files go, and what -obj= asks for. */
 enum os9_save { SAVE_BESIDE, SAVE_SUBDIR, SAVE_CACHE };
-enum os9_obj { OBJ_ELF, OBJ_ROF, OBJ_UCC, OBJ_GAS };
+enum os9_obj { OBJ_ELF, OBJ_ROF, OBJ_UCC, OBJ_GAS, OBJ_ROF8 };	/* ROF8: series 8, m68k-os9-r68 only */
 
 extern struct os9conv {
 	enum os9_save save;

@@ -12,6 +12,8 @@ OS-9/68000 ROF objects (`.r`) and libraries (`.l`), so that code from the
 - An `ar` archive becomes a library of concatenated ROFs (`libgcc.a` → `libgcc.l`), one psect per
   member, named the same way from each member.
 - `-k` skips archive members that can't be converted, with a warning, instead of stopping.
+- `-s 8` writes ROF series 8, as C 3.2's `r68` of 1987 did: the header has no debug size field.
+  The default is series 9 (C 3.2's later `r68` and Ultra C's). `rof2elf` reads both.
 
 For example, GCC code linked with Microware's `cstart.r` and C library (from your own
 installation; Microware's files are not included here):
