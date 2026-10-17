@@ -274,13 +274,25 @@ cmp_ext (const void *a, const void *b)
   return strcmp (((const Ext *) a)->name, ((const Ext *) b)->name);
 }
 
-/* Local references in descending order of offset, as Microware's assembler
-   writes them (l68 builds the initialized data references in the reverse
-   order).  */
+/* The group of a local reference by where it is: in the code, the remote
+   initialized data, the initialized data.  */
+static int
+loc_group (const Ref *r)
+{
+  return r->type & R_LOC_CODE ? 0 : r->type & R_LOC_RDATA ? 1 : 2;
+}
+
+/* Local references as Microware's assemblers write them: those in the code,
+   then those in the remote and the other initialized data, each group in
+   descending order of offset (l68 builds the initialized data references in
+   the reverse order).  */
 static int
 cmp_loc (const void *a, const void *b)
 {
   const Ref *x = a, *y = b;
+  int gx = loc_group (x), gy = loc_group (y);
+  if (gx != gy)
+    return gx - gy;
   return x->offset < y->offset ? 1 : x->offset > y->offset ? -1 : 0;
 }
 
