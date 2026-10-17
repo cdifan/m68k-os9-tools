@@ -5,7 +5,7 @@
 # library defines stays unresolved. As Ultra C's l68 links these (measured 2026-10-17, libgen
 # libraries and concatenated ROFs alike; its 1995 l68 links a program's libraries so too).
 # Before, the stack rule over all libraries at once, the first definer in any library.
-# fixed: 2026-10-17 m68k-os9-l68: library members library by library (-dialect=ucc)
+# fixed: 2c659d5 2026-10-17 m68k-os9-l68: library members library by library (-dialect=ucc)
 src root <<'EOF'
  psect root,$101,$8000,1,0,entry
 entry bsr a_one
