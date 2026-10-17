@@ -3,6 +3,7 @@
 # r68's own options only (-obj= goes to ours through M68K_OS9_ELF), converts the ROF it writes,
 # and links through l68 (-dialect=c32; -a for the jump table unless -j). The GNU tools through
 # -gnu-prefix=, with PATH holding none of our tools.
+# fixed: 18afa06 2026-10-16 Front ends: finding the tools; xcc links through l68
 r68=$(command -v m68k-os9-r68)
 gnu=$(dirname "$(command -v ${B}gcc)")
 mkdir mixed

@@ -5628,6 +5628,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	}
 	/* An instruction (or a macro call): its operands. */
 	{
+		/* A macro named like an instruction (cpusha, a 68040 one): the
+		 * macro, as in r68; none of the instructions' cases below. */
+		if (is_macro(l.op))
+			base[0] = '\0';
 		/* The caches of cinv and cpush (bc, dc, ic, nc) aren't symbols. */
 		/* movec's control registers too (itt0 isn't a symbol there). */
 		if (strncmp(base, "cinv", 4) == 0 || strncmp(base, "cpush", 5) == 0 || strcmp(base, "movec") == 0 ||

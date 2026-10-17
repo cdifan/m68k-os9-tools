@@ -3,6 +3,7 @@
 # M68K_OS9_GNU_PREFIX, m68k-elfos9-as beside the front end, the short name beside it only when
 # it runs under its short name; and m68k-os9-gcc run as gcc doesn't take itself for GCC.
 # Stand-ins log their name and run the real tool.
+# fixed: 18afa06 2026-10-16 Front ends: finding the tools; xcc links through l68
 r68=$(command -v m68k-os9-r68)
 gcc_real=$(command -v ${B}gcc)
 stub() {	# PATH: a stand-in for as that logs its name to $PWD/log and runs the real as
