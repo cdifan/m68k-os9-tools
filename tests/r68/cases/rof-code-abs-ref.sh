@@ -4,7 +4,7 @@
 # write it and both Microware linkers resolve it (measured 2026-10-17: C 3.2's R68 writes this ROF
 # as -dialect=c32 does now, but for the date; the modules' code is the same as ours). Before,
 # elf2rof refused the long one ("not position-independent"); the ELF link already did as l68.
-# fixed: 2026-10-17 elf2rof: absolute long references from code to code
+# fixed: d8ff3c8 2026-10-17 elf2rof: absolute long references from code to code
 src ac <<'EOF'
  psect ac_p,$101,$8000,1,0,c1
  nop
