@@ -6691,8 +6691,10 @@ int main(int argc, char **argv)
 		}
 		if (st.npsects > 1)
 			fprintf(out, " endc\n");
-		if (k >= 1 && j == st.npsects - 1)
-			psect_name = xstrndup(pieces[0], lens[0]);
+		/* without a name (a bare psect), "program", as both Microware
+		 * assemblers name it in the ROF (measured 2026-10-17) */
+		if (j == st.npsects - 1)
+			psect_name = k >= 1 && lens[0] > 0 ? xstrndup(pieces[0], lens[0]) : xstrdup("program");
 	}
 	fprintf(final, "# 1 \"r68.prelude\"\n");
 	if (psect_name != NULL)

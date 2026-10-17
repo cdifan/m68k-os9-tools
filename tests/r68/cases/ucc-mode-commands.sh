@@ -5,6 +5,7 @@
 # takes), the MWOS tree's headers; l68 with acstart.r, the default
 # libraries of the CPU's directories, -x=/-b=, -c for -a, -ol='s options, .l files whole; the
 # module named after the one input file, else "output". A fake MWOS tree of empty files.
+# fixed: 4378188 2026-10-17 m68k-os9-xcc: Ultra C mode (m68k-os9-ucc)
 mkdir -p mw/SRC/DEFS mw/OS9/SRC/DEFS mw/OS9/68000/LIB mw/OS9/68020/LIB bin
 for f in acstart.r cstart.r clib.l os_lib.l sys.l csl.l os_csl.l sys_clib.l; do : > mw/OS9/68000/LIB/$f; done
 for f in clib.l os_lib.l; do : > mw/OS9/68020/LIB/$f; done
