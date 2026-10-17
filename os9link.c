@@ -100,10 +100,25 @@ char *os9_temp(const char *suffix)
 	return path;
 }
 
+char *os9_temp_dir(void)
+{
+	char *path = os9_temp(".d");
+	if (host_mkdirs(path) != 0)
+		return NULL;
+	return path;
+}
+
+void os9_temp_add(const char *path)
+{
+	args_add(&temps, path);
+}
+
 void os9_cleanup(void)
 {
-	for (int i = 0; i < temps.n; i++)
-		remove(temps.v[i]);
+	/* the latest first: a directory's files before the directory */
+	for (int i = temps.n - 1; i >= 0; i--)
+		if (remove(temps.v[i]) != 0)
+			host_rmdir(temps.v[i]);
 	args_free(&temps);
 }
 

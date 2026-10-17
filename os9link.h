@@ -32,6 +32,10 @@ int os9_run(const struct args *argv, const char *out, const char *err);
 char *os9_temp(const char *suffix);
 void os9_set_tempdir(const char *dir);
 void os9_cleanup(void);
+/* A temporary directory, created (allocated; null if it can't be), and a
+ * file put in one, both removed by os9_cleanup. */
+char *os9_temp_dir(void);
+void os9_temp_add(const char *path);
 
 /* Finding the programs to run (see "Finding the tools" in m68k-os9-xcc.md).
  * os9_tools_init: this program's directory, and the prefix of the name it

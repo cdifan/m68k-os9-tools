@@ -186,6 +186,15 @@ char *host_tempdir(void)
 	return dir;
 }
 
+int host_rmdir(const char *path)
+{
+#ifdef _WIN32
+	return _rmdir(path);
+#else
+	return rmdir(path);
+#endif
+}
+
 int host_is_dir(const char *path)
 {
 	struct stat st;

@@ -29,6 +29,9 @@ int host_replace(const char *from, const char *to);
  * or -1. */
 int host_mkdirs(const char *path);
 
+/* Removes empty directory PATH. Returns 0, or -1. */
+int host_rmdir(const char *path);
+
 /* Tests whether files can be created in directory PATH (it must exist). */
 int host_writable_dir(const char *path);
 

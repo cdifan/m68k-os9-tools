@@ -208,16 +208,64 @@ file with more than 32 KB of code, the assembler resolves PC-relative calls itse
 
 ## Ultra C mode
 
+Ultra C's own options, as `m68k-os9-ucc` or with `-mode=ucc`/`c89`. What each does was measured
+with Ultra C's `xcc -h -b`, which shows the phases' command lines without running them.
+
 | Option | Meaning in Ultra C | Here |
 |---|---|---|
+| `-a[=warn\|err]` | ANSI source mode (default: extended ANSI) | `-std=c89 -pedantic[-errors]`, and `l68 -c` (as Ultra C's xcc) |
+| `-bc` | K&R source mode | `-std=gnu89`, K&R's `cstart.r` and libraries (`sys_clib.l` ... `math.l`), and the names `OSK` and `mc68000` |
 | `-b`, `-h` | show phases, don't run them | as `-bp` and `-h` in C 3.2 mode |
+| `-c`, `-n`, `-x=`, `-m=<phase>=<n>` | constant pointers, data layout, skipped phases, phase stacks | ignored |
 | `-co` | C code as comments in assembler | `-fverbose-asm` |
+| `-cq` | C++ comments in C | accepted (`-std=gnu89` takes them, also with `-a`) |
 | `-cs=`, `-d`, `-f=`, `-g`, `-l=`, `-u`, `-v=`, `-z` | as in C 3.2 mode | as in C 3.2 mode; `-g` gives Ultra C's `.stb` |
+| `-fd=` | output in the data directory | `l68 -O=` |
 | `-cw` | warnings | `-Wall` (else `-w`) |
+| `-e=<phase>[=<dir>]` | stop after a phase | `as`: objects (`.r`, as `-r`); `be`, `ao`: assembler (`.a`, GNU syntax); others (I-code): an error |
+| `-i` | C shared library module | `csl.l` and `os_csl.l` instead of `clib.l` and `os_lib.l` |
+| `-j`, `-y`, `-cx`, `-q…`, `-edgx` | I-code libraries, cross references, C++ | an error |
+| `-k` | no default libraries | none, and no `acstart.r` either (as Ultra C's xcc) |
+| `-mt[=…]` | multi-threading | an error unless `none` |
 | `-mw=<dir>` | MWOS tree | instead of `MWOS` |
 | `-o[=<n>]` | optimization 0-7 (default 7; `-o` alone 0) | `0`: `-O0`, `1`-`3`: `-O1`, `4`-`7`: `-O2` |
+| `-p` | preprocess | `-E`, to standard output (Ultra C's goes to standard error); `-p<mode>`, `-p=<dir>`: an error |
+| `-r` | no stack checking | no `-mos9stkchk` (else `_stkcheck`, which Ultra C's `acstart.r` has too) |
+| `-s=<n>`, `-t=<n>` | space and time weights (default 1, 1) | `-Os` where space outweighs time; `_SPACE_FACTOR`, `_TIME_FACTOR` |
 | `-sl=<dir>`, `-w=<dir>` | library directories | as below |
 | `-td=<dir>` | temporary files | as C 3.2's `-t=` |
+| `-to=osk`, `-tp=68k\|68020\|cpu32`, `-t?` | targets | `-m68000`, `-m68020`, `-mcpu=cpu32` (`-msoft-float`) |
+| `-ol=<opt>` | an option for the linker | `l68 -<opt>` (`-ol=a` for the jump table) |
+| `-<phase>=<opt>` | an option for another phase | an error |
+
+**Compiling:** GCC with `-mpcrel -ma6rel -mos9call=ucc -mbuiltin=os9call -mos9newline`, Ultra C's
+predefined names (`_UCC`, `_MAJOR_REV=2`, `_MINOR_REV=5`, `_SPACE_FACTOR`, `_TIME_FACTOR`, `_OSK`,
+`_MPF68000`/`_MPF68020`/`_MPFCPU32`, `_MPF68K`, `_FPF881`, `_BIG_END`), headers from the `-v=`
+directories, then `MWOS/SRC/DEFS` and `MWOS/OS9/SRC/DEFS`.
+
+- **`-mos9call=ucc`:** Ultra C's convention, in which a variadic call's unnamed arguments go on
+  the stack (see GCC's manual).
+- **ANSI mode renames four calls:** Ultra C's compiler calls `printf`, `scanf`, `fopen` and
+  `freopen` as `__ansi_printf`, `__ansi_scanf`, `__ansi_fopen` and `__ansi_freopen` (in the
+  default mode and with `-a`, not with `-bc`), which the library has besides the plain ones: the
+  plain `printf` and `scanf` take the first argument after the format from d1, C 3.2's placement,
+  the `__ansi_` ones from the stack. GCC gets `-Dprintf=__ansi_printf` and so on.
+- **`va_start`** is a builtin of Ultra C's compiler: a `stdarg.h` in a temporary directory,
+  searched first, includes GCC's instead (with `_VA_LIST`, Ultra C's name for the type, defined as
+  `va_list`). Under `-mos9call=ucc` GCC's `va_list` is a plain pointer to the stack arguments, as
+  Ultra C's.
+
+`.a` sources go to `r68` as Ultra C's xcc runs it: the predefined names as `-a=`, `-bt`, `-m0` or
+`-m2`, the header directories as `-u=`.
+
+**Linking:** as Ultra C's xcc, through `l68`: `l68 -t=os9_68k acstart.r -o=<out> [-c] -f=orowoe
+-x=<n> -b=<n> [-g] -l=<-l= libraries> -l=clib.l -l=os_lib.l -l=sys.l [-ol= options] <objects>`,
+`-x=`/`-b=` 2 (16 for the 68020, 4 for the CPU32); `.l` files on the line go to `l68` as files
+(linked whole). Libraries and `acstart.r` are looked up in `-w=`'s directory, else
+`MWOS/OS9/68020/LIB` (68020), `MWOS/OS9/CPU32/LIB` (CPU32) and `MWOS/OS9/68000/LIB`, then the
+`-sl=` directories, regardless of case; not found, they go to `l68` as named. No `-a`: as with
+Ultra C's xcc, a program needing a jump table needs `-ol=a`. The module is named after the one
+input file, or `output` with more than one, as Ultra C's xcc names it.
 
 **Ultra C's libraries** are in `libgen`'s format, which `rof2elf` reads (see
 [rof2elf.md](rof2elf.md)); they are converted on demand like any other Microware library.
