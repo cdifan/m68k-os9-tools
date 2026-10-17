@@ -1,7 +1,7 @@
 # -obj=rof8: a ROF of series 8, as the R68 of 1987 wrote it: series 8 in the header and no debug
 # size field (4 bytes) before the name; otherwise as series 9 (-obj=rof). rof2elf reads it back to
 # the same code. elf2rof -s 8 does the conversion.
-# fixed: 2026-10-17 elf2rof -s 8, m68k-os9-r68 -obj=rof8: ROF series 8
+# fixed: 6d5575e 2026-10-17 elf2rof -s 8, m68k-os9-r68 -obj=rof8: ROF series 8
 src s8 <<'EOF'
  psect s8_p,0,0,1,0,0
 Ent: lea Ext_a(pc),a0
