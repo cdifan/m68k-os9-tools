@@ -9,6 +9,10 @@ OS-9/68000 ROF objects (`.r`) and libraries (`.l`), so that code from the
 
     elf2rof [-k] [-s <series>] [-n <name>] [-o <output>] <input>
 
+- An ELF relocatable becomes a ROF object (`main.o` → `main.r`), one psect named `<name>` with
+  `-n`. Without `-n`, the psect gets the object's file symbol if that has no extension (our
+  assembler writes the psect's name there), else the file's base name (`main`; GCC's file symbol
+  is the source's name, `main.c`).
 - An `ar` archive becomes a library of concatenated ROFs (`libgcc.a` → `libgcc.l`), one psect per
   member, named the same way from each member.
 - `-k` skips archive members that can't be converted, with a warning, instead of stopping.

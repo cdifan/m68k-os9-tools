@@ -397,7 +397,10 @@ add_ext_ref (Ext **exts, int *n, const char *name, Ref r)
   (*exts)[k].refs[(*exts)[k].nrefs++] = r;
 }
 
-/* Convert the ELF object O to a ROF psect named NAME, appended to OUT.  */
+static char *psect_name (const char *file);
+
+/* Convert the ELF object O to a ROF psect named NAME (NULL: the default
+   name), appended to OUT.  */
 static void
 elf_to_rof (Obj *o, const char *name, Buf *out)
 {
@@ -521,6 +524,18 @@ elf_to_rof (Obj *o, const char *name, Buf *out)
 	      }
 	  }
       }
+
+  /* Without a name: the file symbol if it has no extension (our assembler
+     writes the psect's name there; GCC the source's name), else the
+     file's base name.  */
+  if (!name)
+    {
+      for (j = 1; j < nsyms; j++)
+	if (syms[j].type == STT_FILE && syms[j].name[0]
+	    && !strchr (syms[j].name, '.') && !strchr (syms[j].name, '/'))
+	  break;
+      name = j < nsyms ? syms[j].name : psect_name (o->file);
+    }
 
   /* Every area has an even size.  */
   for (i = 0; i < A_NUM; i++)
@@ -1006,7 +1021,7 @@ convert_member (Obj *o, Buf *out, int keep_going)
       return 0;
     }
   skip_member = keep_going ? &jb : NULL;
-  elf_to_rof (o, psect_name (o->file), out);
+  elf_to_rof (o, NULL, out);
   skip_member = NULL;
   return 1;
 }
@@ -1019,7 +1034,8 @@ usage (void)
 	   "  INPUT   an m68k ELF relocatable (.o) or an ar archive of them (.a)\n"
 	   "  -o      the output: a ROF (default INPUT.r) or, from an archive, a\n"
 	   "          library of ROFs (default INPUT.l)\n"
-	   "  -n      the psect name (default: INPUT's base name; for an\n"
+	   "  -n      the psect name (default: the object's file symbol if\n"
+	   "          it has no extension, else INPUT's base name; for an\n"
 	   "          archive, each member's)\n"
 	   "  -k      skip archive members that can't be converted, with a\n"
 	   "          warning\n"
@@ -1066,7 +1082,7 @@ main (int argc, char **argv)
   if (!archive)
     {
       Obj o = { input, data, size };
-      elf_to_rof (&o, name ? name : psect_name (input), &out);
+      elf_to_rof (&o, name, &out);
     }
   else
     {
