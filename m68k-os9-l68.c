@@ -835,7 +835,7 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
  * the data offsets of programs and trap libraries by 0x8000 (data from
  * -0x8000, a6 0x8000 into it, as cstart.r sets it up), not those of other
  * module types, whose static storage is addressed from its start. */
-static char *write_script(const char *base, long align, int plain, const char *data)
+static char *write_script(const char *base, long align, int plain, const char *data, int raw)
 {
 	char *path = os9_temp(".ld");
 	FILE *fp = fopen(path, "w");
@@ -873,6 +873,15 @@ static char *write_script(const char *base, long align, int plain, const char *d
 		sub, a, sub, a, sub, a, sub, a);
 	if (plain)
 		fprintf(fp, "    PROVIDE (end = .);\n");
+	if (raw) {
+		/* l68 -r's own: the data size rounded up to $100, and the
+		 * initialized data block's and reference tables' starts, after
+		 * the code (placeholders: elf2mod sets the references) */
+		fprintf(fp, "    PROVIDE (_dsize = ABSOLUTE (ALIGN (_enddata - _bdata, 0x100)));\n"
+			"    PROVIDE (_bidata = ADDR(.text)); PROVIDE (_birefs = ADDR(.text));\n");
+		if (plain)
+			fprintf(fp, "    PROVIDE (dsize = _dsize); PROVIDE (edata = ADDR(.text));\n");
+	}
 	fprintf(fp, "}\n");
 	if (fclose(fp) != 0)
 		error("cannot write %s", path);
@@ -972,7 +981,7 @@ int main(int argc, char **argv)
 	char *base = st.raw ? concat("0x", st.base != NULL ? st.base : "0", NULL) : xstrdup("0x400000");
 	/* Raw output (-r) isn't biased either, whatever the type (as l68). */
 	int biased = !st.raw && (type == 0x01 || type == 0x0B);
-	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0"));
+	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw));
 	free(base);
 	for (int i = 0; i < objects.n; i++) {
 		if (whole[i])

@@ -225,8 +225,12 @@ long read_ldmap(const char *map, InputSec **secs) {
 // any value; elf2mod puts the module offset into every reference to them,
 // which ld -q keeps: a pointer in the initialized data (relocated when OS-9
 // loads the module, as any pointer into the code), or a PC-relative
-// reference in the code.
-enum { LSYM_NONE, LSYM_BTEXT, LSYM_BNAME, LSYM_ETEXT };
+// reference in the code. Raw output (--raw, l68 -r) also has _bidata (the
+// initialized data block's start, after the code) and edata/_birefs (the
+// reference tables' start, after it), as both are in l68 -r's links only
+// (Ultra C's l68, measured 2026-10-18); there an absolute reference to any
+// of them is its address (the link's base plus the offset).
+enum { LSYM_NONE, LSYM_BTEXT, LSYM_BNAME, LSYM_ETEXT, LSYM_BIDATA, LSYM_EDATA };
 
 // The jump table target standing for etext until the module's size is
 // known (no code is there: .text never reaches the top of memory).
@@ -238,6 +242,8 @@ int linker_symbol(const asymbol *s) {
 	if(!strcmp(n, "btext")) return LSYM_BTEXT;
 	if(!strcmp(n, "bname")) return LSYM_BNAME;
 	if(!strcmp(n, "etext")) return LSYM_ETEXT;
+	if(opt_raw && !strcmp(n, "bidata")) return LSYM_BIDATA;
+	if(opt_raw && (!strcmp(n, "edata") || !strcmp(n, "birefs"))) return LSYM_EDATA;
 	return LSYM_NONE;
 }
 
@@ -930,14 +936,20 @@ int main(int argc, char *argv[]) {
 			// the largest the module can be is in reach (maxend); else an
 			// entry, filled in below.
 			int ls = linker_symbol(rel->sym_ptr_ptr[0]);
-			bfd_vma target = ls == LSYM_ETEXT ? ETEXT_TARGET
+			// (_bidata and edata, raw only, after the code too: as etext.)
+			int late = ls >= LSYM_ETEXT;
+			bfd_vma target = late ? ETEXT_TARGET
 				: ls ? tvma - itext + (ls == LSYM_BNAME ? iname : 0) + rel->addend
 				: bfd_asymbol_value(rel->sym_ptr_ptr[0]) + rel->addend;
 			int64_t edisp = (int64_t)maxend + rel->addend - (int64_t)(itext + rel->address);
-			int32_t disp = ls == LSYM_ETEXT ? (edisp > 0x7FFF ? 0x8000 : (int32_t)edisp)
+			int32_t disp = late ? (edisp > 0x7FFF ? 0x8000 : (int32_t)edisp)
 				: (int32_t)(target - (tvma + rel->address));
 			if(-0x8000 <= disp && disp <= 0x7FFF) {
 				continue;
+			}
+			if(late && ls != LSYM_ETEXT) {
+				printf("far reference to %s at .text+%08lx: only etext can go through the jump table\n", rel->sym_ptr_ptr[0]->name, rel->address);
+				return 1;
 			}
 			if(ls == LSYM_ETEXT && rel->addend != 0) {
 				printf("far reference to %s%+ld at .text+%08lx: only etext itself can go through the jump table\n", rel->sym_ptr_ptr[0]->name, (long)rel->addend, rel->address);
@@ -1083,6 +1095,15 @@ int main(int argc, char *argv[]) {
 	// idrefs
 	size_t iidrefs = has_prog ? make_idrefs(vec, drefs, ndrefs, 1) : 0;
 	if(has_prog) make_idrefs(vec, drefs, ndrefs, 0);
+	if(opt_raw) {
+		// l68 -r ends the image with four zero bytes more when exactly
+		// one of the two tables has entries (Ultra C's, measured
+		// 2026-10-18), where etext is 4 more than a module's size
+		size_t ntext = 0;
+		for(size_t i = 0; i < ndrefs; i++) ntext += drefs[i].text != 0;
+		if((ntext > 0) != (ndrefs - ntext > 0))
+			vec_zero(vec, 4);
+	}
 	if(opt_nirefspad > 0) {
 		if(!has_prog) {
 			printf("--irefs-pad: the module has no M$IRefs table (--header)\n");
@@ -1137,6 +1158,14 @@ int main(int argc, char *argv[]) {
 	size_t ncoderefs = 0;
 	for(size_t i = 0; i < ndrefs; i++) ncoderefs += drefs[i].text != 0;
 	size_t etextoff = vec->len + ((ncoderefs > 0) != (ndrefs - ncoderefs > 0) ? 4 : 0);
+	// Raw (l68 -r, Ultra C's measured 2026-10-18): etext and _bidata are the
+	// code's end (the initialized data block's start), edata and _birefs the
+	// reference tables' start, after that block.
+	size_t edataoff = 0;
+	if(opt_raw) {
+		etextoff = iidatahdr;
+		edataoff = iidatahdr + 8 + idsize;
+	}
 
 	// References to btext, bname and etext (see linker_symbol), now that
 	// the module's layout and size are known.
@@ -1145,10 +1174,12 @@ int main(int argc, char *argv[]) {
 		if(r->kind == LSYM_NONE) {
 			continue; // a far one, through the jump table
 		}
-		int64_t off = r->kind == LSYM_BTEXT ? 0 : r->kind == LSYM_BNAME ? (int64_t)iname : (int64_t)etextoff;
+		int64_t off = r->kind == LSYM_BTEXT ? 0 : r->kind == LSYM_BNAME ? (int64_t)iname
+			: r->kind == LSYM_EDATA ? (int64_t)edataoff : (int64_t)etextoff;
 		if(i < ntls && (r->type == 1 /* R_68K_32 */ || r->type == 2 /* R_68K_16 */)) {
-			// absolute: the offset in the module (no relocation at load)
-			int64_t v = off + r->addend;
+			// absolute: the offset in the module (no relocation at load);
+			// raw: the address (the code linked at its base)
+			int64_t v = off + r->addend + (opt_raw ? (int64_t)tvma : 0);
 			unsigned char *p = (unsigned char*)vec->buf + itext + r->addr;
 			if(r->type == 2) {
 				if(v < -0x8000 || v > 0xFFFF) {

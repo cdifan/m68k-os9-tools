@@ -169,6 +169,29 @@ The linker script only has to define them, with any value, so that `ld` accepts 
     PROVIDE (etext = ADDR(.text)); PROVIDE (_etext = ADDR(.text));
 ```
 
+A pointer to one of them in the initialized data is relocated when OS-9 loads the module, as any
+pointer into the code; an absolute reference in the code (`dc.w bname` in a descriptor) gets the
+offset in the module; a PC-relative reference gets the right displacement, and a far one goes
+through the jump table. `etext` is known only at the end, so a reference to it is taken as near
+only if even the largest the module can become is in reach, and a far one must be to `etext`
+itself, without an offset. A link-time expression with one of these symbols in it (`etext+Size`,
+from a ROF) is corrected by each such term's coefficient times the difference between the symbol's
+value and the linker script's placeholder. The other symbols Microware's linker defines are
+ordinary values the linker script gives: `end` (Ultra C: `_enddata`), the end of the data area, and
+`_jmptbl`.
+
+## Raw output
+
+`--raw` (`l68 -r`) writes the module's body without header, name and CRC: the code, the initialized
+data block and the pointer tables, the code running at its link address. It has more of the
+linker's symbols, as Ultra C's `l68 -r` defines them: `_bidata`, the initialized data block's start
+(after the code, where `etext` is); `edata`/`_birefs`, the pointer tables' start (after that
+block); and `dsize`/`_dsize`, the data size rounded up to `$100`, which the linker script gives. In
+raw output an absolute reference to `btext`, `etext`, `_bidata` or `edata` is the address (the
+link's base plus the offset); PC-relative references and pointers in the initialized data stay
+offsets in the image. The image ends with four zero bytes more when exactly one of the two pointer
+tables has entries, as `l68 -r` writes it.
+
 ## Symbol modules
 
 With `-g`, `elf2mod` also writes a symbol module `<outfile>.stb`, as `l68 -g` does: an OS-9 data
