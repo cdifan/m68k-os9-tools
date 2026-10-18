@@ -1,0 +1,25 @@
+* \L of a macro argument with '@' that a macro passes on to one using \L (Pm @O, Pm's body Tm \1):
+* each '@' counts 1, as r68 counts it. r68togas writes '@' as _at_ (gas takes no '@' in names),
+* and r68L counted that 4: @O was 5 long (move.l, not move.w). r68L now counts _at_ as 1 where
+* the source had an '@' renamed.
+* expect text: 3afc404f 3afc3a23 3afc4142 3afc4f40 3afc4040 2afc00784079 4e71
+Tm macro
+ ifgt \L1-1
+ ifgt \L1-2
+ move.l #'\1',(a5)+
+ else
+ move.w #'\1',(a5)+
+ endc
+ endc
+ endm
+Pm macro
+ Tm \1
+ endm
+ psect mlat,0,0,0,0,0
+ Pm @O
+ Pm :#
+ Pm AB
+ Pm O@
+ Pm @@
+ Pm x@y
+ ends

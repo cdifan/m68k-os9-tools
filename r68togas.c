@@ -256,6 +256,11 @@ static void skip_percent(const char **s, size_t *n)
 
 static int defined_name(const char *s, size_t n);
 
+/* Whether some name had an '@' (as "_at_"): r68L then counts "_at_" in an
+ * argument as one character, as \L counts the '@' (an argument passed on to a
+ * macro using \L: U @O, U's body T \1) */
+static int at_renamed;
+
 /* A symbol's name as gas gets it: '@' (legal in r68) as "_at_", a name
  * gas takes for a register with "__r68" after it (one r68 knows as a
  * register too where the source defines it: a1 dc.b 1, CCR equ 0; with -r
@@ -271,8 +276,10 @@ static void put_symbol(struct buf *b, const char *s, size_t n)
 			/* a macro parameter in the name (Name\@) */
 			bput(b, s + i, 2);
 			i++;
-		} else if (s[i] == '@')
+		} else if (s[i] == '@') {
 			bputs(b, "_at_");
+			at_renamed = 1;
+		}
 		else if (s[i] == '.' && i > 0) {
 			bputs(b, "__dot__");
 			dots = 1;
@@ -6264,6 +6271,12 @@ static void translate_file(const char *path, FILE *out, int depth)
 		annotate = annotate_op = 0;
 		int was_macro = st.in_macro, cond = st.cond_depth;
 		translate_line(raw, &line, path, lineno, out, depth);
+		if (at_renamed == 1) {
+			/* the first '@' renamed: from here r68L counts "_at_" as 1 */
+			bputs(&line_before, "r68__at set 1\n");
+			put_marker(&line_before);
+			at_renamed = 2;
+		}
 		/* A macro defined outside conditionals and other macros: moved
 		 * before the source (hoisted), gas's MRI mode aligning at its
 		 * macro statement after an odd dc.b (descriptor templates:
@@ -6691,9 +6704,21 @@ int main(int argc, char **argv)
 	/* r68L NAME,args: r68__L1..8 set to the arguments' lengths (\Ln in
 	 * r68), then NAME__r68 called with the same arguments */
 	fputs("r68L macro\n", out);
-	for (int a = 1; a <= 8; a++)
-		fprintf(out, "r68__L%d set 0\n ifnc '\\%d',''\n irpc r68__ch,\\%d\nr68__L%d set r68__L%d+1\n endr\n endc\n",
-			a, a + 1, a + 1, a, a);
+	for (int a = 1; a <= 8; a++) {
+		fprintf(out, "r68__L%d set 0\n ifnc '\\%d',''\n", a, a + 1);
+		/* where an '@' was renamed (r68__at), "_at_" counts 1: r68__s
+		 * the state, 1 after '_', 2 after "_a", 3 after "_at"; a '_'
+		 * there takes 3 off (in MRI mode gas puts irpc's character in
+		 * for its plain name, r68__ch, not \r68__ch) */
+		fputs(" ifdef r68__at\n", out);
+		fprintf(out, "r68__s set 0\n irpc r68__ch,\\%d\nr68__L%d set r68__L%d+1\n"
+				" ifc 'r68__ch','_'\n ifeq r68__s-3\nr68__L%d set r68__L%d-3\nr68__s set 0\n else\nr68__s set 1\n endc\n"
+				" else\n ifc 'r68__ch','a'\n ifeq r68__s-1\nr68__s set 2\n else\nr68__s set 0\n endc\n"
+				" else\n ifc 'r68__ch','t'\n ifeq r68__s-2\nr68__s set 3\n else\nr68__s set 0\n endc\n"
+				" else\nr68__s set 0\n endc\n endc\n endc\n endr\n",
+				a + 1, a, a, a, a);
+		fprintf(out, " else\n irpc r68__ch,\\%d\nr68__L%d set r68__L%d+1\n endr\n endc\n endc\n", a + 1, a, a);
+	}
 	for (int n = 1; n <= 9; n++) {
 		fprintf(out, " ifeq r68__Ln-%d\n \\1__r68", n);
 		for (int a = 2; a <= n; a++)

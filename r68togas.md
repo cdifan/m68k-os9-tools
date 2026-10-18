@@ -272,6 +272,11 @@ Most instruction lines need no change. Where the same text means something else 
   get an `xdef` in the epilogue. Outside a psect (in definition files used before it) no label is
   exported. References to undefined names are external, as in r68.
 - **`label equ *`** is a plain label.
+- **`@` in names**, legal in r68, is written `_at_` (and the output sets `r68__at`); **a dot in a
+  name** (a label `lab.s`, a macro `DO_IT.w`) is written `__dot__` with `__r68` after the name.
+  `m68k-os9-r68` gives the object's global and undefined symbols their names back, as the
+  Microware assemblers and `rof2elf` have them, so objects from either link together. A name with
+  `_at_` of its own keeps it in a source without `@` names.
 - **A label or equate named like a register** (`a1 dc.b 1`, `CCR equ 0`), which both Microware
   assemblers take as a symbol: `__r68` after the name. A register name in an `equ` or `set` value
   (`Val equ d2`) is an external symbol for r68, written the same way.
