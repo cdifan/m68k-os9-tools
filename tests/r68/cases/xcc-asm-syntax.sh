@@ -3,7 +3,9 @@
 # writes (when no -obj= says) and that of .a inputs, which -asm=auto (the default) detects
 # (asmsyntax.c: the first decisive statement; any line end; undecided: r68). A gas .a goes to
 # GCC's assembler, an r68 one to m68k-os9-r68. -obj=gas or -obj=r68 without -a is an error.
-# Before, -a wrote gas syntax and every .a went to m68k-os9-r68.
+# Ultra C mode's -e=be writes it through gastor68 -mode=ucc (psect t.c); Microware's r68 takes
+# -a's output (where run.sh has R68). Before, -a wrote gas syntax and every .a went to
+# m68k-os9-r68.
 # fixed: f527463 2026-10-18 xcc -a writes r68 syntax (gastor68); -asm= and .a inputs of either syntax
 cat > t.c <<'EOF'
 int g = 3;
@@ -36,3 +38,12 @@ xcc -asm=gas -obj=rof -r g.a > f2.log 2>&1 || why="$why -asm=gas -obj=rof -r g.a
 xcc -obj=gas t.c > e1.log 2>&1 && why="$why -obj=gas without -a accepted;"
 grep -q -- '-obj=gas goes with -a' e1.log || why="$why no -obj=gas error: $(head -1 e1.log);"
 xcc -asm=xyz -a t.c > e2.log 2>&1 && why="$why -asm=xyz accepted;"
+# Ultra C mode: -e=be writes the .a, through gastor68 -mode=ucc (Ultra C names the psect t.c)
+mkdir -p ucc mw/SRC/DEFS mw/OS9/SRC/DEFS	# a fake MWOS tree: t.c includes nothing
+MWOS=$PWD/mw m68k-os9-xcc -mode=ucc -e=be=ucc t.c > u1.log 2>&1 || why="$why -mode=ucc -e=be failed: $(head -1 u1.log);"
+grep -q '^ psect t\.c,' ucc/t.a 2>/dev/null || why="$why -mode=ucc -e=be: no psect t.c line;"
+# Microware's r68 takes -a's output (where run.sh has it, R68)
+if [ -n "${R68:-}" ]; then
+	cp r.a mwr.a
+	mwasm mwr
+fi
