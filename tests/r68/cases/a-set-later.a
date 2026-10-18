@@ -2,6 +2,7 @@
 * -a= value, and ifdef/ifndef see it defined (an ifndef block that sets it is skipped), as r68
 * takes it (measured 2026-10-18; without -a= the final value, as before). Before, the source's
 * set made it a symbol not set yet there: the final value, and the ifndef block assembled.
+* fixed: 98c270f 2026-10-18 r68togas: an -a= symbol the source sets too has its -a= value before
 * options: -a=Rv=2
 * expect text: 0002 1111 0005 0006
  psect a_set,0,0,0,0,0
