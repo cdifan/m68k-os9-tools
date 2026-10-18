@@ -60,8 +60,8 @@ install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 clean:
 	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
 
-$(EXE): elf2mod.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+$(EXE): elf2mod.c r68x_note.c r68x_note.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c $(LIBS)
 
 # rof2elf and elf2rof need no BFD.
 $(EXE_ROF2ELF): rof2elf.c r68x_note.c r68x_note.h

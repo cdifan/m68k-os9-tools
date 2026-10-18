@@ -47,7 +47,7 @@ enum kind {
 enum id {
 	O_A, O_B, O_C, O_E, O_F, O_G, O_GU, O_I, O_J, O_L, O_M, O_MM, O_MT, O_N, O_NN,
 	O_OO, O_O, O_P, O_R, O_RR, O_S, O_SS, O_T, O_V, O_W, O_X, O_Z, O_DIALECT,
-	O_NAMEPAD, O_IREFSPAD, O_JMPTBLPAD, O_STBNAMEPAD,
+	O_NAMEPAD, O_IREFSPAD, O_JMPTBLPAD, O_STBNAMEPAD, O_DBGVERSION,
 };
 
 #define C32	1	/* in C 3.2's l68 */
@@ -96,6 +96,7 @@ static const struct option options[] = {
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
 	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
 	{ "namepad", VALUE, "=<hex>", "The byte after an odd-length module name (default 00)", NULL, O_NAMEPAD, OURS },
+	{ "dbgversion", VALUE, "=<n>", "With -g, the .dbg's word after the magic (default: 3 Ultra C style, 0 C 3.2's)", NULL, O_DBGVERSION, OURS },
 	{ "stbnamepad", VALUE, "=<hex>", "With -g, the byte after the symbol module's odd-length name (default 00)", NULL, O_STBNAMEPAD, OURS },
 	{ "jmptblpad", VALUE, "=<n>", "With a jump table (-a), <n> unused entries (jmp 0) after the used ones", NULL, O_JMPTBLPAD, OURS },
 	{ "irefspad", VALUE, "=<hex>", "Bytes after the initialized data's pointer table (M$IRefs), before the CRC", NULL, O_IREFSPAD, OURS },
@@ -133,6 +134,7 @@ static struct {
 	const char *irefspad;	/* -irefspad= */
 	long jmptblpad;		/* -jmptblpad= */
 	const char *stbnamepad;	/* -stbnamepad= */
+	const char *dbgversion;	/* -dbgversion= */
 } st;
 
 /* ----- Usage ----- */
@@ -304,6 +306,14 @@ static void apply(const struct option *o, const char *value)
 			error("-namepad=%s: expected one byte in hex (two digits)", value);
 		st.namepad = value;
 		break;
+	case O_DBGVERSION: {
+		char *end;
+		long v = strtol(value, &end, 0);
+		if (end == value || *end != '\0' || v < 0 || v > 0xFFFF)
+			error("-dbgversion=%s: expected a word (0 to 65535)", value);
+		st.dbgversion = value;
+		break;
+	}
 	case O_STBNAMEPAD:
 		if (hex_bytes(value) != 1)
 			error("-stbnamepad=%s: expected one byte in hex (two digits)", value);
@@ -1050,6 +1060,10 @@ int main(int argc, char **argv)
 	if (st.namepad != NULL) {
 		args_add(&l.mod, "--name-pad-byte");
 		args_add(&l.mod, st.namepad);
+	}
+	if (st.dbgversion != NULL) {
+		args_add(&l.mod, "--dbg-version");
+		args_add(&l.mod, st.dbgversion);
 	}
 	if (st.stbnamepad != NULL) {
 		args_add(&l.mod, "--stb-name-pad-byte");

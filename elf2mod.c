@@ -32,6 +32,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include "r68x_note.h"
 
 struct modheader {
 	uint16_t magic;
@@ -93,6 +94,7 @@ unsigned char opt_stbnamepadbyte = 0; // --stb-name-pad-byte: the same in the sy
 unsigned char *opt_irefspad = NULL; // --irefs-pad: bytes after the M$IRefs table, before the CRC
 size_t opt_nirefspad = 0;
 long opt_jtspare = 0; // --jmptbl-spare: unused jump table entries (jmp 0) after the used ones
+long opt_dbgversion = -1; // --dbg-version: the .dbg's word after the magic (else the style's)
 #define DEFAULT_STACK 0x00000C00
 #define DEFAULT_REVS 1
 #define DEFAULT_EDIT 0
@@ -287,8 +289,7 @@ enum { LSYM_NONE, LSYM_BTEXT, LSYM_BNAME, LSYM_ETEXT, LSYM_BIDATA, LSYM_EDATA };
 // known (no code is there: .text never reaches the top of memory).
 #define ETEXT_TARGET ((bfd_vma)0xFFFFFFFE)
 
-int linker_symbol(const asymbol *s) {
-	const char *n = bfd_asymbol_name(s);
+int linker_symbol_name(const char *n) {
 	if(*n == '_') n++;
 	if(!strcmp(n, "btext")) return LSYM_BTEXT;
 	if(!strcmp(n, "bname")) return LSYM_BNAME;
@@ -297,6 +298,22 @@ int linker_symbol(const asymbol *s) {
 	if(opt_raw && (!strcmp(n, "edata") || !strcmp(n, "birefs"))) return LSYM_EDATA;
 	return LSYM_NONE;
 }
+
+int linker_symbol(const asymbol *s) {
+	return linker_symbol_name(bfd_asymbol_name(s));
+}
+
+// A reference to a link-time expression (r68x_..., r68x_note.h), which ld
+// evaluated with the linker symbols' placeholder values: where (an offset in
+// .text, or in the data area), its relocation type, and its symbol. Where the
+// expression has linker symbols in it, elf2mod corrects the field once the
+// module's layout is known.
+typedef struct xref {
+	uint32_t addr;
+	int type;
+	int data;
+	const asymbol *sym;
+} XRef;
 
 // A reference to such a symbol: where (an offset in .text, or in the data
 // area), which symbol, the relocation type, and the addend.
@@ -466,6 +483,7 @@ int opt(int *argc, char ***argv) {
 		{ "stb-name-pad-byte", required_argument, NULL, 'b' + 0x100 },
 		{ "irefs-pad", required_argument, NULL, 'I' + 0x100 },
 		{ "jmptbl-spare", required_argument, NULL, 'J' + 0x100 },
+		{ "dbg-version", required_argument, NULL, 'D' + 0x100 },
 		{ "help",  no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 },
 	};
@@ -544,6 +562,15 @@ int opt(int *argc, char ***argv) {
 			free(b);
 			break;
 		}
+		case 'D' + 0x100: {
+			char *end;
+			opt_dbgversion = strtol(optarg, &end, 0);
+			if(end == optarg || *end || opt_dbgversion < 0 || opt_dbgversion > 0xFFFF) {
+				printf("--dbg-version=%s: expected a word (0 to 65535)\n", optarg);
+				return 0;
+			}
+			break;
+		}
 		case 'J' + 0x100: {
 			char *end;
 			opt_jtspare = strtol(optarg, &end, 10);
@@ -607,6 +634,7 @@ int opt(int *argc, char ***argv) {
 			printf("      --name-pad-byte=HH the byte after an odd-length name (default 00)\n");
 			printf("      --stb-name-pad-byte=HH  the same after the symbol module's name\n");
 			printf("      --irefs-pad=HEX    bytes after the M$IRefs table, before the CRC\n");
+			printf("      --dbg-version=N    the .dbg's word after the magic (default: 3 Ultra C, 0 C 3.2)\n");
 			printf("      --jmptbl-spare=N   N unused jump table entries (jmp 0) after the used ones,\n");
 			printf("                         listed with them (the table must have room)\n");
 			printf("  A stack, entry point, data area, initialized data or trap entry that is\n");
@@ -792,10 +820,16 @@ int main(int argc, char *argv[]) {
 	CodeRef *crefs = NULL; // absolute references from the code to code labels
 	size_t ncrefs = 0;
 	int64_t etext_entry = -1; // the jump table entry for etext: its offset in the data area
+	XRef *xrefs = NULL; // references to link-time expressions (see XRef)
+	size_t nxrefs = 0;
 	for(long i = 0; i < ntrels; i++) {
 		arelent *rel = trels[i];
 		asection *ssec = rel->sym_ptr_ptr[0]->section;
 		if(rel->sym_ptr_ptr >= syms && rel->sym_ptr_ptr < syms + nsyms) refd[rel->sym_ptr_ptr - syms] = 1;
+		if(!strncmp(bfd_asymbol_name(rel->sym_ptr_ptr[0]), R68X_PREFIX, strlen(R68X_PREFIX))) {
+			xrefs = realloc(xrefs, (nxrefs + 1) * sizeof(XRef));
+			xrefs[nxrefs++] = (XRef){ rel->address, rel->howto->type, 0, rel->sym_ptr_ptr[0] };
+		}
 		int ls = linker_symbol(rel->sym_ptr_ptr[0]);
 		if(ls) {
 			// PC-relative, or absolute (dc.w bname in a descriptor: the
@@ -869,6 +903,10 @@ int main(int argc, char *argv[]) {
 			// weak symbol (0, as ld resolved it) stays as it is.
 			asymbol *s = rel->sym_ptr_ptr[0];
 			asection *ssec = s->section;
+			if(!strncmp(bfd_asymbol_name(s), R68X_PREFIX, strlen(R68X_PREFIX))) {
+				xrefs = realloc(xrefs, (nxrefs + 1) * sizeof(XRef));
+				xrefs[nxrefs++] = (XRef){ DOFF(bfd_section_vma(sec)) + rel->address, rel->howto->type, 1, s };
+			}
 			int ls = linker_symbol(s);
 			if(ls) {
 				// A pointer into the module, relocated at load time; its
@@ -1305,6 +1343,78 @@ int main(int argc, char *argv[]) {
 			*p = BE32((uint32_t)(off + r->addend));
 		}
 	}
+	// Link-time expressions with linker symbols in them (dc.l etext+Size
+	// from a ROF): ld evaluated them with the linker script's placeholders;
+	// each such term adds its coefficient times (the value elf2mod gives the
+	// symbol - the placeholder), as Microware's l68 takes the expression
+	// (measured 2026-10-18: Ultra C's l68, a module and -r).
+	if(nxrefs > 0) {
+		asection *xsec = bfd_get_section_by_name(abfd, R68X_SECTION);
+		bfd_byte *xbuf = NULL;
+		size_t xlen = 0;
+		if(xsec && bfd_malloc_and_get_section(abfd, xsec, &xbuf))
+			xlen = bfd_section_size(xsec);
+		for(size_t i = 0; i < nxrefs && xbuf; i++) {
+			// its note: "r68x_...=TEXT" on a line of its own
+			const char *xn = bfd_asymbol_name(xrefs[i].sym);
+			size_t nl = strlen(xn);
+			char *text = NULL;
+			for(size_t p = 0; p + nl < xlen; p++) {
+				if((p == 0 || xbuf[p - 1] == '\n') && !memcmp(xbuf + p, xn, nl) && xbuf[p + nl] == '=') {
+					size_t q = p + nl + 1, e = q;
+					while(e < xlen && xbuf[e] != '\n' && xbuf[e] != 0) e++;
+					text = malloc(e - q + 1);
+					memcpy(text, xbuf + q, e - q);
+					text[e - q] = 0;
+					break;
+				}
+			}
+			struct r68x x;
+			if(!text || !r68x_parse(text, &x)) {
+				free(text);
+				continue;
+			}
+			int64_t delta = 0;
+			for(int t = 0; t < x.n; t++) {
+				int ls = linker_symbol_name(x.t[t].sym);
+				if(!ls) continue;
+				int64_t off = ls == LSYM_BTEXT ? 0 : ls == LSYM_BNAME ? (int64_t)iname
+					: ls == LSYM_EDATA ? (int64_t)edataoff : (int64_t)etextoff;
+				int64_t truth = off + (opt_raw ? (int64_t)tvma : 0);
+				int64_t placeholder = 0;
+				for(long k = 0; k < nsyms; k++) {
+					if(!strcmp(bfd_asymbol_name(syms[k]), x.t[t].sym)) {
+						placeholder = (int64_t)bfd_asymbol_value(syms[k]);
+						break;
+					}
+				}
+				delta += x.t[t].coef * (truth - placeholder);
+			}
+			r68x_free(&x);
+			free(text);
+			if(delta == 0) continue;
+			int size = xrefs[i].type == 1 ? 4 : xrefs[i].type == 2 ? 2 : xrefs[i].type == 3 ? 1 : 0;
+			if(size == 0) {
+				printf("%s at %s+%08x: a link-time expression with a module symbol in a PC-relative field\n",
+				       xn, xrefs[i].data ? "data" : ".text", xrefs[i].addr);
+				return 1;
+			}
+			unsigned char *f = (unsigned char*)vec->buf + (xrefs[i].data ? iidata + xrefs[i].addr - idstart : itext + xrefs[i].addr);
+			int64_t v = 0;
+			for(int k = 0; k < size; k++) v = (v << 8) | f[k];
+			if(size < 4 && (v >> (8 * size - 1)) & 1) v -= (int64_t)1 << (8 * size); // signed
+			v += delta;
+			if(size < 4 && (v < -((int64_t)1 << (8 * size - 1)) || v >= ((int64_t)1 << (8 * size)))) {
+				printf("%s at %s+%08x: the value %lld doesn't fit its %d-byte field\n",
+				       xn, xrefs[i].data ? "data" : ".text", xrefs[i].addr, (long long)v, size);
+				return 1;
+			}
+			for(int k = size - 1; k >= 0; k--, v >>= 8) f[k] = (unsigned char)v;
+		}
+		free(xbuf);
+	}
+	free(xrefs);
+
 	if(etext_entry >= 0) {
 		uint32_t *p = (void*)(vec->buf + iidata + etext_entry - idstart);
 		*p = BE32((uint32_t)etextoff);
@@ -1565,6 +1675,12 @@ int main(int argc, char *argv[]) {
 				gh[0] = 0xCA; gh[1] = 0xFE; gh[2] = 0xBE; gh[3] = 0xEF; gh[5] = 3;
 			} else {
 				gh[0] = 0xBE; gh[1] = 0xEF; gh[2] = 0xCA; gh[3] = 0xFE;
+			}
+			// the word after the magic (--dbg-version): 3 from Ultra C 2.5's
+			// l68, 1 in older Ultra C files, 0 in C 3.2's; its meaning isn't
+			// known (a format version, perhaps)
+			if(opt_dbgversion >= 0) {
+				gh[4] = opt_dbgversion >> 8; gh[5] = opt_dbgversion;
 			}
 			gh[6] = crc >> 24; gh[7] = crc >> 16; gh[8] = crc >> 8; gh[9] = crc;
 			char *gfile = malloc(strlen(sfile) + 1);

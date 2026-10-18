@@ -33,6 +33,7 @@ suitably linked ELF file (see "The ELF input").
 | `--name-pad-byte=HH` | the byte after an odd-length module name (default 00) |
 | `--stb-name-pad-byte=HH` | the same after the symbol module's name |
 | `--irefs-pad=HEX` | bytes after the pointer tables, before the CRC |
+| `--dbg-version=N` | the `.dbg` file's word after the magic (default 3 in Ultra C's format, 0 in C 3.2's) |
 | `--jmptbl-spare=N` | N unused jump table entries (`jmp 0`) after the used ones (the table must have room) |
 
 A stack, entry point, data area, initialized data or trap entry that is non-zero but has no field
@@ -250,6 +251,11 @@ and rof2elf put into a section `.r68dbg`, put together in link order), `-g` also
 
 - `c32`: `$BEEFCAFE`, a zero word, the program module's CRC as a long, the psects' debug areas;
 - `ucc`: `$CAFEBEEF`, the word 3, the CRC, a zero long, the areas.
+
+The word after the magic is 3 in Ultra C 2.5's `l68`'s files, 1 in older Ultra C files and 0 in
+C 3.2's; its meaning isn't known. `--dbg-version=N` sets it. A reference to a code label in the
+areas holds the label's offset in the module, one to data its a6-relative offset. Without debug
+information there's no `.dbg` file.
 
 ## Pad bytes
 
