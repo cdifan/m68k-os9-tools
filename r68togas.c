@@ -5564,7 +5564,11 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (st.in_vsect && strcmp(base, "align") == 0) {
-		bprintf(out, " r68align %s,%s,%s%s", data_section(0), data_section(1), *l.args ? l.args : "2", rest);
+		/* a label on the line: after the alignment, in the vsect's
+		 * initialized data, as a label alone (c68 writes Agg: align
+		 * before an initialized aggregate; r68 defines it there) */
+		bprintf(out, " r68align %s,%s,%s%s%s%s", data_section(0), data_section(1), *l.args ? l.args : "2",
+			*labs ? "," : "", labs, rest);
 		st.section = data_section(1);
 		goto done;
 	}
@@ -6410,6 +6414,7 @@ static const char prelude[] =
 	" align \\3\n"
 	" r68sect \\2\n"
 	" align \\3\n"
+	"\\4\n"
 	" endm\n"
 	"* the offset counter: org, do, lo, and . in expressions\n"
 	"r68__ofs set 0\n"

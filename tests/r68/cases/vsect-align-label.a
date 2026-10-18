@@ -1,0 +1,18 @@
+* A label on an align line in a vsect (C 3.2's c68 writes Agg: align before an initialized
+* aggregate): defined after the alignment, in the vsect's initialized data, as r68 defines it
+* (measured 2026-10-18: Ag at 2, Lc at 6). Before, r68togas left the label out: the reference to
+* it became an external.
+* expect sym: D Ag 00000002
+* expect reloc: .data+0x00000006
+* expect data: 0100 0000 0005 0006
+ psect vs_al,0,0,0,0,0
+ vsect
+B1 dc.b 1
+Ag: align
+ dc.l 5
+Lc align
+ dc.w 6
+ ends
+ rts
+ dc.l Ag,Lc
+ ends
