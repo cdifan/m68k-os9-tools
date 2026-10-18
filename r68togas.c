@@ -6566,7 +6566,12 @@ int main(int argc, char **argv)
 			char *name = xstrndup(d, n);
 			add_equate(name);
 			note_value(name, eq ? eq + 1 : "1");
-			free(name);
+			/* set already: a source that sets it too (ifndef SYM / SYM
+			 * set ..) has the -a= value before its first set, and
+			 * ifdef SYM true there, not the final value (r68,
+			 * measured 2026-10-18) */
+			st.set_done = xrealloc(st.set_done, (st.nset_done + 1) * sizeof *st.set_done);
+			st.set_done[st.nset_done++] = name;
 		} else if (strcmp(argv[i], "-b") == 0) {
 			st.branch_sizing = 1;
 		} else if (strcmp(argv[i], "-B") == 0) {

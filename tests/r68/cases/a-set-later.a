@@ -1,0 +1,20 @@
+* A symbol defined with -a= that the source sets too: before the source's first set it has the
+* -a= value, and ifdef/ifndef see it defined (an ifndef block that sets it is skipped), as r68
+* takes it (measured 2026-10-18; without -a= the final value, as before). Before, the source's
+* set made it a symbol not set yet there: the final value, and the ifndef block assembled.
+* options: -a=Rv=2
+* expect text: 0002 1111 0005 0006
+ psect a_set,0,0,0,0,0
+ dc.w Rv
+ ifdef Rv
+ dc.w $1111
+ endc
+ ifndef Rv
+ dc.w $2222
+Rv set 9
+ endc
+Rv set 5
+ dc.w Rv
+Rv set Rv+1
+ dc.w Rv
+ ends
