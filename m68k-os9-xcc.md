@@ -66,6 +66,8 @@ limit; a short cache directory avoids it.
 | `-elf-save=` | `save=` | `cache`, `beside`, `subdir` | `cache` |
 | `-elf-dir=` | `dir=` | the subdirectory's name, also used in the cache | `m68k-os9-elf` |
 | `-elf-cache=` | `cache=` | the cache's root | `${XDG_CACHE_HOME:-$HOME/.cache}` |
+| `-obj=` | `obj=` | `elf`, `rof`, `ucc`: what `-r` writes into `.r` files (see "Objects"); with `-a`, `r68` or `gas`: the syntax `-a` writes | `elf`; with `-a`, from `-asm=` |
+| `-asm=` | none | `auto`, `r68`, `gas`: the syntax of `.a` files, read (`auto`: detected) and written by `-a` unless `-obj=` says (`auto`: `r68`) | `auto` |
 
 The environment variable takes the same values, comma-separated, for makefiles that shouldn't
 change (`M68K_OS9_ELF=save=subdir,obj=rof`); options override it. Neither Microware driver has
@@ -80,6 +82,15 @@ object, or an `ar` archive for a library; `rof` (C 3.2's kit) a ROF, or concaten
 an assembly syntax there would turn a whole build's objects into sources. So the assembly values
 are command-line options: `m68k-os9-r68 -obj=gas`, and `-a -obj=r68|gas` here (without `-a` an
 error).
+
+**`-asm=`** names the syntax of `.a` files in both directions: inputs (`auto`, the default,
+detects it; `r68` or `gas` force it) and, where no `-obj=` says, what `-a` writes (`auto`
+writing r68). The detection reads the statements up to the first decisive one: a Microware
+directive (`psect`, `vsect`, `ends`, `use`, `nam`, `ttl`, `opt`, `spc`, `pag`) decides r68; a
+known `gas` directive (`.text`, `.globl`, `.long`, ...), a register written with `%` (in r68 `%`
+starts a binary number), or GCC's `#APP`/`#NO_APP` and line markers decide `gas`. Plain
+instructions, labels, `equ`, `dc` and comments decide nothing; a file with nothing decisive is
+r68's.
 
 ## Finding the tools
 
@@ -150,6 +161,7 @@ Options are case-insensitive, `=` optional where C 3.2 allows it.
 
 | Option | Meaning in C 3.2 | Here |
 |---|---|---|
+| `-a` | assembler output (`.a`) | `-S`, then [gastor68](gastor68.md) into r68 syntax; `-obj=gas` (or `-asm=gas`) keeps GCC's syntax |
 | `-bg` | adhesive (sticky) module | not supported (an error) |
 | `-bp` | show the phases' command lines | the commands run |
 | `-c` | comments in assembler output | with `-a`, `-fverbose-asm` |
@@ -194,6 +206,17 @@ The default libraries, after `cstart.r`, as C 3.2's `xcc` picks them (the `n` li
 
 GCC code doesn't need `math.l`/`math881.l` (its floating point is libgcc's, or with
 `-mos9math` the math module's), but they stay for Microware objects linked in.
+
+### Source files
+
+By suffix, in any case: `.c` compiled; `.r`, `.o` and `.l` linked (converted as needed); `.a`
+assembled with [m68k-os9-r68](m68k-os9-r68.md) (`-m2` for the 68020 and the CPU32), into an
+object for the link or, with `-r`, into `<dir>/<name>.r` (a ROF with `-obj=rof`). An `.a` file in
+`gas` syntax (as `xcc -a -obj=gas` writes; detected, or `-asm=gas`) goes to GCC's assembler
+instead, with its line ends made LF. Both Microware drivers reject `.s` and `.S` ("no recognized
+suffix"), and so does this one; r68 sources named `.s` are assembled by calling `m68k-os9-r68`
+directly. The default output name is the first source file's, without its suffix (`pp.c` makes
+`pp`).
 
 ### Linking
 

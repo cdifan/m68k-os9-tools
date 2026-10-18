@@ -1380,19 +1380,19 @@ int main(int argc, char *argv[]) {
 		// after the program's; C 3.2's (listed in reverse) _jmptbl, end,
 		// bname, btext, before the program's (rank 0).
 		const StbSym ucclinker[] = {
-			{ (int32_t)iname, 0x2004, "_bname", 0 }, { 0, 0x2004, "_btext", 1 },
-			{ (int32_t)dvma, 0x2001, "_bdata", 2 }, { (int32_t)(dvma + dend), 0x2001, "_enddata", 3 },
-			{ (int32_t)etextoff, 0x2004, "_etext", 4 },
-			{ 0, 0x2004, "btext", 5 }, { (int32_t)dvma, 0x2001, "bdata", 6 },
-			{ (int32_t)(dvma + dend), 0x2001, "end", 7 }, { (int32_t)jmptbl, 0x2001, "_jmptbl", 8 },
-			{ (int32_t)iname, 0x2004, "bname", 9 }, { (int32_t)etextoff, 0x2004, "etext", 10 },
+			{ (int32_t)iname, 0x2004, "_bname", 0, 0 }, { 0, 0x2004, "_btext", 1, 0 },
+			{ (int32_t)dvma, 0x2001, "_bdata", 2, 0 }, { (int32_t)(dvma + dend), 0x2001, "_enddata", 3, 0 },
+			{ (int32_t)etextoff, 0x2004, "_etext", 4, 0 },
+			{ 0, 0x2004, "btext", 5, 0 }, { (int32_t)dvma, 0x2001, "bdata", 6, 0 },
+			{ (int32_t)(dvma + dend), 0x2001, "end", 7, 0 }, { (int32_t)jmptbl, 0x2001, "_jmptbl", 8, 0 },
+			{ (int32_t)iname, 0x2004, "bname", 9, 0 }, { (int32_t)etextoff, 0x2004, "etext", 10, 0 },
 		};
 		const StbSym c32linker[] = {
-			{ 0, 0x2004, "btext", 1 },
-			{ (int32_t)iname, 0x2004, "bname", 2 },
-			{ (int32_t)etextoff, 0x2004, "etext", 3 },
-			{ (int32_t)(dvma + dend), 0x2001, "end", 4 },
-			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 5 },
+			{ 0, 0x2004, "btext", 1, 0 },
+			{ (int32_t)iname, 0x2004, "bname", 2, 0 },
+			{ (int32_t)etextoff, 0x2004, "etext", 3, 0 },
+			{ (int32_t)(dvma + dend), 0x2001, "end", 4, 0 },
+			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 5, 0 },
 		};
 		const StbSym *linker0 = opt_stb == 2 ? ucclinker : c32linker;
 		const size_t nlinker0 = opt_stb == 2 ? sizeof(ucclinker) / sizeof(ucclinker[0]) : sizeof(c32linker) / sizeof(c32linker[0]);

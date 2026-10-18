@@ -14,6 +14,7 @@
 #include "hostsys.h"
 #include "os9conv.h"
 #include "os9link.h"
+#include "asmsyntax.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -25,6 +26,7 @@
 
 #define GCC	os9_gnu("gcc")
 #define ELF2ROF	os9_tool("elf2rof")
+#define GASTOR68 os9_tool("gastor68")
 #define R68	os9_front("r68")
 #define ROF2ELF	os9_tool("rof2elf")
 
@@ -59,7 +61,7 @@ struct option {
 
 /* In the order of C 3.2's usage; the usage is made from this table. */
 static const struct option options[] = {
-	{ "a", FLAG, "", "Stop after compiling; write assembler source", "GNU as syntax, not r68", O_A, COMPAT },
+	{ "a", FLAG, "", "Stop after compiling; write assembler source", "r68 syntax (gastor68); -obj=gas: GNU as syntax", O_A, COMPAT },
 	{ "bg", FLAG, "", "Make a sticky (adhesive) module", "not supported", O_BG, COMPAT },
 	{ "bp", FLAG, "", "Print each command before running it", NULL, O_BP, COMPAT },
 	{ "c", FLAG, "", "Comments in assembler output", "ignored", O_C, COMPAT },
@@ -179,6 +181,8 @@ static struct {
 
 	/* What to do. */
 	int asm_only, rel_only;
+	int asm_syntax;		/* -obj=r68 'r', -obj=gas 'g' (with -a; else 0: -asm=) */
+	int asm_files;		/* -asm=r68 'r', -asm=gas 'g', auto 0 */
 	const char *reldir;
 
 	/* Linking. */
@@ -262,7 +266,8 @@ static void usage(void)
 	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
-	usage_line("-obj=<kind>", "what -r writes into .r files: elf (default), rof or ucc (ROF, for Microware's l68)");
+	usage_line("-obj=<kind>", "what -r writes into .r files: elf (default), rof or ucc (ROF, for Microware's l68);\n"
+		"with -a the syntax: r68 (default) or gas");
 	printf("Files, by suffix, in any case:\n");
 	usage_line(".c", "C source");
 	usage_line(".r, .o", "object, ROF or ELF (ROF is converted; see -elf-save=)");
@@ -557,6 +562,23 @@ static int own_option(const char *arg)
 		const char *value = arg + 1 + strlen("mode=");
 		if (!ci_eq(value, "ucc") && !ci_eq(value, "c89") && !ci_eq(value, "compat"))
 			error("unknown -mode=%s (compat, c89 or ucc)", value);
+		return 1;
+	}
+	/* -obj=r68|gas: the assembly syntax of -a (xcc's own, not passed on) */
+	if (ci_eq(arg + 1, "obj=r68") || ci_eq(arg + 1, "obj=gas")) {
+		st.asm_syntax = ci_eq(arg + 1, "obj=gas") ? 'g' : 'r';
+		return 1;
+	}
+	/* -asm=auto|r68|gas: the syntax of .a files, read (auto: detected) and
+	 * written by -a (auto: r68) */
+	if (ci_prefix(arg + 1, "asm=")) {
+		const char *value = arg + 1 + strlen("asm=");
+		if (ci_eq(value, "auto"))
+			st.asm_files = 0;
+		else if (ci_eq(value, "r68") || ci_eq(value, "gas"))
+			st.asm_files = ci_eq(value, "gas") ? 'g' : 'r';
+		else
+			error("unknown -asm=%s (auto, r68 or gas)", value);
 		return 1;
 	}
 	if (os9_tools_option(arg) || os9conv_option(arg, OBJ_KINDS)) {
@@ -924,7 +946,11 @@ static void compile(const char *source, const char *output, int assembler, int r
 	compile_flags(&argv);
 	args_add(&argv, assembler ? "-S" : "-c");
 	args_add(&argv, "-o");
-	char *object = rof ? os9_temp(".o") : (char *)output;
+	/* -a: GCC's gas syntax, then r68's through gastor68 (as Microware's
+	 * xcc -a writes r68 source), unless -obj=gas, or -asm=gas without -obj= */
+	int syntax = st.asm_syntax != 0 ? st.asm_syntax : st.asm_files;
+	int r68 = assembler && syntax != 'g';
+	char *object = rof ? os9_temp(".o") : r68 ? os9_temp(".s") : (char *)output;
 	args_add(&argv, object);
 	args_add(&argv, source);
 	if (!os9_quiet && !os9_show)
@@ -933,11 +959,89 @@ static void compile(const char *source, const char *output, int assembler, int r
 		error("compiling %s failed", source);
 	args_free(&argv);
 
+	if (r68) {
+		args_add(&argv, GASTOR68);
+		args_add(&argv, ucc_mode ? "-mode=ucc" : "-mode=c32");
+		args_add(&argv, "-o");
+		args_add(&argv, output);
+		args_add(&argv, object);
+		if (os9_run(&argv, NULL, NULL) != 0)
+			error("translating %s to r68 syntax failed", source);
+		args_free(&argv);
+	}
+
 	if (rof) {
 		char *name = stem(source, 0);
 		args_add(&argv, ELF2ROF);
 		args_add(&argv, "-n");
 		args_addf(&argv, "%s_c", name);
+		args_add(&argv, "-o");
+		args_add(&argv, output);
+		args_add(&argv, object);
+		free(name);
+		if (os9_run(&argv, NULL, NULL) != 0)
+			error("converting %s to ROF failed", source);
+		args_free(&argv);
+	}
+}
+
+/* Assembles gas source SOURCE (an xcc -a -obj=gas file) into OUTPUT, an ELF
+ * object or (ROF) a ROF, with GCC's assembler for the CPU of -k/-tp. */
+static void assemble_gas(const char *source, const char *output, int rof)
+{
+	struct args argv = { 0 };
+	/* gas takes LF line ends only (a CR is junk to it); CR LF and CR (OS-9's)
+	 * as m68k-os9-r68 takes them: a copy with LF */
+	const char *input = source;
+	FILE *in = fopen(source, "rb");
+	if (in != NULL) {
+		int c, cr = 0;
+		while ((c = getc(in)) != EOF && !cr)
+			cr = c == '\r';
+		if (cr) {
+			char *copy = os9_temp(".s");
+			FILE *out = fopen(copy, "wb");
+			if (out == NULL)
+				error("cannot write %s", copy);
+			rewind(in);
+			int prev = 0;
+			while ((c = getc(in)) != EOF) {
+				if (c == '\n' && prev == '\r') {
+					prev = c;
+					continue;	/* CR LF: the LF already written for the CR */
+				}
+				putc(c == '\r' ? '\n' : c, out);
+				prev = c;
+			}
+			if (fclose(out) != 0)
+				error("cannot write %s", copy);
+			input = copy;
+		}
+		fclose(in);
+	}
+	args_add(&argv, GCC);
+	args_add(&argv, st.cpu == 2 ? "-m68020" : st.cpu == 32 ? "-mcpu=cpu32" : "-m68000");
+	if (st.fpu)
+		args_add(&argv, "-m68881");
+	args_add(&argv, "-c");
+	args_add(&argv, "-x");
+	args_add(&argv, "assembler");
+	args_add(&argv, input);
+	args_add(&argv, "-x");
+	args_add(&argv, "none");
+	args_add(&argv, "-o");
+	char *object = rof ? os9_temp(".o") : (char *)output;
+	args_add(&argv, object);
+	if (!os9_quiet && !os9_show)
+		printf("'%s'\n", source);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("assembling %s failed", source);
+	args_free(&argv);
+	if (rof) {
+		char *name = stem(source, 0);
+		args_add(&argv, ELF2ROF);
+		args_add(&argv, "-n");
+		args_addf(&argv, "%s_a", name);
 		args_add(&argv, "-o");
 		args_add(&argv, output);
 		args_add(&argv, object);
@@ -1148,6 +1252,8 @@ int main(int argc, char **argv)
 		st.asm_only = st.endphase == 's';
 		st.reldir = st.enddir;
 	}
+	if (st.asm_syntax != 0 && !st.asm_only)
+		error("-obj=%s goes with -a (the assembler output's syntax)", st.asm_syntax == 'g' ? "gas" : "r68");
 
 	struct args objects = { 0 };
 	const char *first = NULL;
@@ -1200,19 +1306,22 @@ int main(int argc, char **argv)
 		} else if (ci_eq(sfx, ".l")) {
 			args_add(&st.libs, file);
 		} else if (ci_eq(sfx, ".a")) {
-			/* r68 assembler: through m68k-os9-r68 (-a has nothing to
-			 * do for it). */
+			/* assembler source: r68's through m68k-os9-r68, gas's (an
+			 * xcc -a -obj=gas file) through GCC's assembler; which one
+			 * from -asm=, else detected (asmsyntax.c; undecided: r68).
+			 * -a has nothing to do for it. */
 			char *name = stem(file, 0);
 			if (first == NULL)
 				first = xstrdup(name);
+			int gas = st.asm_files == 'g' || (st.asm_files == 0 && asm_syntax_of_file(file) == ASM_GAS);
 			if (st.rel_only) {
 				const char *dir = st.reldir != NULL ? st.reldir : ".";
 				char *out = concat(dir, "/", name, ".r", NULL);
-				assemble(file, out, os9conv.obj != OBJ_ELF);
+				(gas ? assemble_gas : assemble)(file, out, os9conv.obj != OBJ_ELF);
 				free(out);
 			} else if (!st.asm_only) {
 				char *out = os9_temp(".o");
-				assemble(file, out, 0);
+				(gas ? assemble_gas : assemble)(file, out, 0);
 				args_add(&objects, out);
 			}
 			free(name);

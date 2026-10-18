@@ -30,8 +30,8 @@ TRANSLATORS=r68togas gastor68
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
 # libiberty runs the programs
 FRONTENDS=m68k-os9-gcc m68k-os9-xcc m68k-os9-l68 m68k-os9-libgen m68k-os9-r68
-FE_SRCS=os9conv.c os9link.c hostsys.c r68x_note.c
-FE_HDRS=os9conv.h os9link.h hostsys.h r68x_note.h
+FE_SRCS=os9conv.c os9link.c hostsys.c r68x_note.c asmsyntax.c
+FE_HDRS=os9conv.h os9link.h hostsys.h r68x_note.h asmsyntax.h
 LIBIBERTY_CFLAGS=-I/usr/include/libiberty
 # These binutils of m68k-elfos9 as m68k-os9- too, so that
 # build systems find a complete toolchain (./configure --host=m68k-os9)
