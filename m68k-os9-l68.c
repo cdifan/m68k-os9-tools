@@ -565,6 +565,12 @@ struct member {
 
 static struct member *members;
 static int nmembers;
+static int nroot_members;	/* the first ones: the files given, archives as their members */
+
+static const char *members_path(int i)
+{
+	return members[i].path;
+}
 
 static struct member *new_member(const char *path, int library)
 {
@@ -791,6 +797,7 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
 		}
 	}
 	int nroots = nmembers;
+	nroot_members = nroots;
 	for (int i = 0; i < libs->n; i++) {
 		int first = nmembers;
 		/* an object (a ROF of one psect, converted) is a library of one
@@ -861,26 +868,63 @@ static void ucc_members(const struct args *roots, const struct args *libs, struc
  * the data offsets of programs and trap libraries by 0x8000 (data from
  * -0x8000, a6 0x8000 into it, as cstart.r sets it up), not those of other
  * module types, whose static storage is addressed from its start. */
-static char *write_script(const char *base, long align, int plain, const char *data, int raw)
+/* Writes into FP the input sections PATTERNS of output section SECT: with
+ * FILES (every input file, in link order) and -b= above 2 each file's in
+ * turn, padded to ALIGN from SECT's start, as Ultra C's l68 -b= pads each
+ * psect's sizes (measured 2026-10-18: a link's remote data right after its
+ * jump table, at 2 mod 4, its psects' offsets multiples of 4 from there);
+ * else all at once. */
+static void sect_inputs(FILE *fp, const char *sect, const char *patterns, long align, const struct args *files)
+{
+	if (files == NULL || align <= 2) {
+		fprintf(fp, " *(%s)", patterns);
+		return;
+	}
+	/* (in an output section . counts from its start) */
+	(void)sect;
+	for (int i = 0; i < files->n; i++)
+		fprintf(fp, "\n        \"%s\"(%s) . += (%ld - . %% %ld) %% %ld;", files->v[i], patterns, align, align, align);
+	/* the rest (libgcc's members) */
+	fprintf(fp, "\n        *(%s)\n   ", patterns);
+}
+
+static char *write_script(const char *base, long align, int plain, const char *data, int raw, const struct args *files)
 {
 	char *path = os9_temp(".ld");
 	FILE *fp = fopen(path, "w");
 	if (fp == NULL)
 		error("cannot write %s", path);
 	char sub[32] = "";
-	if (align > 1)
+	/* -b=: each input's sections aligned to it (SUBALIGN), or with every
+	 * input named padded relative to its section's start (sect_inputs),
+	 * the inputs then only even, so that a section starts where the one
+	 * before ends */
+	if (align > 2 && files != NULL)
+		snprintf(sub, sizeof sub, " SUBALIGN(2)");
+	else if (align > 1)
 		snprintf(sub, sizeof sub, " SUBALIGN(%ld)", align);
+	/* -b= pads each psect's code and data to its alignment, as l68 does:
+	 * the section's end too (from its start where each input is padded) */
+	long a = align > 2 ? align : 2;
+	char end[96];
+	if (align > 2 && files != NULL)
+		snprintf(end, sizeof end, ". += (%ld - . %% %ld) %% %ld;%%.0s", a, a, a);
+	else
+		snprintf(end, sizeof end, ". = ALIGN(%ld);", a);
 	fprintf(fp,
 		"OUTPUT_FORMAT(\"elf32-m68k\")\n"
 		"OUTPUT_ARCH(m68k)\n"
 		"PROVIDE (__jmptbl_size = 0);\n"
 		"SECTIONS {\n"
 		"    . = %s;\n"
-		"    .text :%s { *(.text .text.* .rodata .rodata.*) . = ALIGN(%ld); }\n"
+		"    .text :%s {", base, sub);
+	sect_inputs(fp, ".text", ".text .text.* .rodata .rodata.*", align, files);
+	fprintf(fp, " ");
+	fprintf(fp, end, ".text");
+	fprintf(fp, " }\n"
 		"    /* l68's symbols for the module's start, name and end: elf2mod sets\n"
 		"       every reference to them, so these values are only placeholders. */\n"
-		"    PROVIDE (_btext = ADDR(.text)); PROVIDE (_bname = ADDR(.text)); PROVIDE (_etext = ADDR(.text));\n",
-		base, sub, align > 2 ? align : 2L);
+		"    PROVIDE (_btext = ADDR(.text)); PROVIDE (_bname = ADDR(.text)); PROVIDE (_etext = ADDR(.text));\n");
 	if (plain)
 		fprintf(fp, "    PROVIDE (btext = ADDR(.text)); PROVIDE (bname = ADDR(.text)); PROVIDE (etext = ADDR(.text));\n");
 	fprintf(fp,
@@ -888,15 +932,25 @@ static char *write_script(const char *base, long align, int plain, const char *d
 		"    PROVIDE (_bdata = .);\n", data);
 	if (plain)
 		fprintf(fp, "    PROVIDE (bdata = .);\n");
-	/* -b= pads each psect's code and data to its alignment, as l68 does. */
-	long a = align > 2 ? align : 2;
-	fprintf(fp,
-		"    .bss (NOLOAD) :%s { *(.bss .bss.*) *(COMMON) . = ALIGN(%ld); }\n"
-		"    .data :%s { *(.data .data.*) . = ALIGN(%ld); _jmptbl = .; . += __jmptbl_size; _ejmptbl = .; }\n"
-		"    .remote.data :%s { *(.remote.data .remote.data.*) . = ALIGN(%ld); }\n"
-		"    .remote.bss (NOLOAD) :%s { *(.remote.bss .remote.bss.*) . = ALIGN(%ld); }\n"
-		"    PROVIDE (_enddata = .);\n",
-		sub, a, sub, a, sub, a, sub, a);
+	static const struct { const char *sect, *patterns, *flags, *after; } outs[] = {
+		{ ".bss", ".bss .bss.*", " (NOLOAD)", "" },
+		{ ".data", ".data .data.*", "", " _jmptbl = .; . += __jmptbl_size; _ejmptbl = .;" },
+		{ ".remote.data", ".remote.data .remote.data.*", "", "" },
+		{ ".remote.bss", ".remote.bss .remote.bss.*", " (NOLOAD)", "" },
+	};
+	for (size_t i = 0; i < sizeof outs / sizeof *outs; i++) {
+		/* where each input is padded, the section starts where the one
+		 * before ends (at the address ., not aligned to its inputs': an
+		 * assembler's are 4, rof2elf's 2) */
+		fprintf(fp, "    %s%s%s :%s {", outs[i].sect, align > 2 && files != NULL ? " ." : "", outs[i].flags, sub);
+		sect_inputs(fp, outs[i].sect, outs[i].patterns, align, files);
+		if (i == 0)
+			fprintf(fp, " *(COMMON)");	/* after all .bss, as before */
+		fprintf(fp, " ");
+		fprintf(fp, end, outs[i].sect);
+		fprintf(fp, "%s }\n", outs[i].after);
+	}
+	fprintf(fp, "    PROVIDE (_enddata = .);\n");
 	if (plain)
 		fprintf(fp, "    PROVIDE (end = .);\n");
 	if (raw) {
@@ -1003,19 +1057,6 @@ int main(int argc, char **argv)
 	else if (strcmp(map, "-") == 0)
 		map = map_stdout = os9_temp(".map");
 	args_addf(&l.link, "-Wl,-Map=%s", map);
-	args_add(&l.link, "-T");
-	char *base = st.raw ? concat("0x", st.base != NULL ? st.base : "0", NULL) : xstrdup("0x400000");
-	/* Raw output (-r) isn't biased either, whatever the type (as l68). */
-	int biased = !st.raw && (type == 0x01 || type == 0x0B);
-	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw));
-	free(base);
-	for (int i = 0; i < objects.n; i++) {
-		if (whole[i])
-			args_add(&l.link, "-Wl,--whole-archive");
-		add_input(&l.link, objects.v[i]);
-		if (whole[i])
-			args_add(&l.link, "-Wl,--no-whole-archive");
-	}
 	/* -l= libraries after all files, in one pass in their order, as l68
 	 * searches them; then libgcc, for objects GCC compiled. With Ultra C's
 	 * order the members it needs, chosen here, as objects. */
@@ -1027,8 +1068,37 @@ int main(int argc, char **argv)
 		args_add(&libs, lib);
 		free(lib);
 	}
-	if (!st.c32 && libs.n > 0 && !os9_dry_run) {
+	/* -b= above 2 in Ultra C's order: every input file named, an archive
+	 * linked whole as its members in its order (as ld links it), so that
+	 * the script can pad each one's sections (see write_script) */
+	int pad_each = st.align > 2 && !st.c32 && !os9_dry_run;
+	int by_member = !st.c32 && (libs.n > 0 || pad_each) && !os9_dry_run;
+	if (by_member)
 		ucc_members(&objects, &libs, &order);
+	struct args files = { 0 };
+	if (pad_each) {
+		for (int i = 0; i < nroot_members; i++)
+			args_add(&files, members_path(i));
+		args_append(&files, &order);
+	}
+	args_add(&l.link, "-T");
+	char *base = st.raw ? concat("0x", st.base != NULL ? st.base : "0", NULL) : xstrdup("0x400000");
+	/* Raw output (-r) isn't biased either, whatever the type (as l68). */
+	int biased = !st.raw && (type == 0x01 || type == 0x0B);
+	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw,
+				       pad_each ? &files : NULL));
+	free(base);
+	args_free(&files);
+	for (int i = 0; pad_each && i < nroot_members; i++)
+		add_input(&l.link, members_path(i));
+	for (int i = 0; !pad_each && i < objects.n; i++) {
+		if (whole[i])
+			args_add(&l.link, "-Wl,--whole-archive");
+		add_input(&l.link, objects.v[i]);
+		if (whole[i])
+			args_add(&l.link, "-Wl,--no-whole-archive");
+	}
+	if (by_member) {
 		for (int i = 0; i < order.n; i++)
 			add_input(&l.link, order.v[i]);
 	} else {
@@ -1053,6 +1123,19 @@ int main(int argc, char **argv)
 	args_add(&l.mod, header);
 	args_add(&l.mod, "--ld-map");
 	args_add(&l.mod, map);
+	/* the -l= libraries' members, by library: for the jump table's order */
+	if (by_member) {
+		char *ranks = os9_temp(".rank");
+		FILE *f = fopen(ranks, "w");
+		if (f == NULL)
+			error("cannot write %s", ranks);
+		for (int i = nroot_members; i < nmembers; i++)
+			if (members[i].library > 0)
+				fprintf(f, "%d %s\n", members[i].library, members[i].path);
+		fclose(f);
+		args_add(&l.mod, "--ld-ranks");
+		args_add(&l.mod, ranks);
+	}
 	if (name_last)
 		args_add(&l.mod, "-N");
 	if (st.raw)

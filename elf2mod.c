@@ -89,6 +89,7 @@ int opt_raw = 0; // --raw: the module's body only, no header, name or CRC
 int opt_noentry = 0; // --entry=none: no entry point, whatever __os9_entry says
 int opt_namepad = 0; // --name-pad-zeros: zero bytes after the name (l68 -x on a trap library)
 const char *opt_ldmap = NULL; // --ld-map: GNU ld's map of the link, for the order of M$IRefs
+const char *opt_ldranks = NULL; // --ld-ranks: the link's library members' ranks, for the jump table's order
 unsigned char opt_namepadbyte = 0; // --name-pad-byte: the byte that pads an odd-length name
 unsigned char opt_stbnamepadbyte = 0; // --stb-name-pad-byte: the same in the symbol module
 unsigned char *opt_irefspad = NULL; // --irefs-pad: bytes after the M$IRefs table, before the CRC
@@ -159,6 +160,8 @@ typedef struct idref {
 	int text;
 	int obj; // the object it came from, in link order (--ld-map)
 	int vs; // its vsect's place in the .r68ord records (INT_MAX: none)
+	asymbol *sym; // the global symbol it refers to (NULL: none)
+	const char *ext; // that symbol's name, if another object defines it (--ld-map)
 } IdRef;
 
 int cmp_idref(const void *a, const void *b) {
@@ -170,55 +173,155 @@ int cmp_idref(const void *a, const void *b) {
 // object linked first (measured 2026-10-15), each object's vsect by vsect
 // in the order its source has them, each vsect's in address order (a remote
 // vsect before a plain one: its pointers first; measured 2026-10-17).
+// That is the reverse of the objects' ROF references, in link order: Ultra
+// C's l68 lists a ROF's references to other ROFs' symbols (by name, each
+// name's in address order) before its local ones (a vsect's in reverse
+// address order), and after all objects the jump table's entries, and puts
+// each first (measured 2026-10-19 on a ROM link's 709). So: the jump table's
+// entries, the last first; then by object, the last first; in one, its
+// local pointers, then those to other objects' symbols by name and address,
+// both the last first.
 int cmp_idref_obj(const void *a, const void *b) {
 	const IdRef *p = a, *q = b;
 	if(p->obj != q->obj) return p->obj > q->obj ? -1 : 1;
+	if(p->obj == INT_MAX) return -cmp_idref(a, b);
+	if(!p->ext != !q->ext) return p->ext ? 1 : -1;
+	if(p->ext) {
+		int c = strcmp(p->ext, q->ext);
+		return c ? -c : -cmp_idref(a, b);
+	}
 	if(p->vs != q->vs) return p->vs < q->vs ? -1 : 1;
 	return cmp_idref(a, b);
 }
 
-// An input section of the initialized data in GNU ld's map: its start, its
-// size and its object's place in the link.
+// An input section in GNU ld's map: its start, its size, its object's place
+// in the link, and whether it is in .text.
 typedef struct inputsec {
 	uint64_t start, size;
 	int obj;
+	int text;
 } InputSec;
 
-// The objects' parts of .data and .remote.data in GNU ld's map MAP: their
-// input sections (" .data  0x... 0x... file", the name alone on a line
-// when long, the rest on the next); the objects numbered in their order of
-// appearance. The number of input sections, -1 if MAP can't be read.
-long read_ldmap(const char *map, InputSec **secs) {
+// The objects' parts of .data and .remote.data in GNU ld's map MAP (with
+// ALL, of every output section): their input sections (" .data  0x... 0x...
+// file", the name alone on a line when long, the rest on the next); the
+// objects numbered in the link's order: by their LOAD line's place (an
+// archive member's: its archive's), then by where the map first names them
+// in any section (an object with remote data only is named in .data's part
+// only when it has some). The number of input sections, -1 if MAP can't be
+// read.
+long read_ldmap(const char *map, InputSec **secs, int all) {
 	FILE *fp = fopen(map, "r");
 	if(!fp) return -1;
-	static char files[256][1024];
+	static char loads[1024][512], seen[4096][512];
 	char line[4096];
-	int nfiles = 0, in_data = 0;
+	int nloads = 0, nseen = 0, in_data = 0;
 	long n = 0;
 	*secs = NULL;
 	while(fgets(line, sizeof line, fp)) {
+		char name[256], file[512];
+		if(!strncmp(line, "LOAD ", 5)) {
+			if(nloads < 1024 && sscanf(line + 5, "%511s", loads[nloads]) == 1)
+				nloads++;
+			continue;
+		}
+		if(line[0] != ' ' || line[1] != '.') continue;
+		unsigned long long start, size;
+		int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &start, &size, file);
+		if(k == 1 && fgets(line, sizeof line, fp))
+			k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &start, &size, file);
+		if(k != 4) continue;
+		int f;
+		for(f = 0; f < nseen && strcmp(seen[f], file); f++);
+		if(f == nseen && nseen < 4096)
+			strcpy(seen[nseen++], file);
+	}
+	rewind(fp);
+	int in_text = 0;
+	while(fgets(line, sizeof line, fp)) {
 		if(line[0] == '.') {
 			char name[64];
-			in_data = sscanf(line, "%63s", name) == 1 && (!strcmp(name, ".data") || !strcmp(name, ".remote.data"));
+			in_data = sscanf(line, "%63s", name) == 1 && (!strcmp(name, ".data") || !strcmp(name, ".remote.data")
+				|| (all && (!strcmp(name, ".text") || !strcmp(name, ".bss") || !strcmp(name, ".remote.bss"))));
+			in_text = in_data && !strcmp(name, ".text");
 			continue;
 		}
 		if(!in_data || line[0] != ' ' || line[1] != '.') continue;
-		char name[256], file[1024];
+		char name[256], file[512];
 		unsigned long long start = 0, size = 0;
-		int k = sscanf(line, " %255s 0x%llx 0x%llx %1023s", name, &start, &size, file);
+		int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &start, &size, file);
 		if(k == 1 && fgets(line, sizeof line, fp))
-			k = 1 + sscanf(line, " 0x%llx 0x%llx %1023s", &start, &size, file);
+			k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &start, &size, file);
+		if(k != 4 || size == 0) continue;
+		int s, l;
+		for(s = 0; s < nseen && strcmp(seen[s], file); s++);
+		size_t alen = strchr(file, '(') ? (size_t)(strchr(file, '(') - file) : strlen(file);
+		for(l = 0; l < nloads && (strlen(loads[l]) != alen || strncmp(loads[l], file, alen)); l++);
+		*secs = realloc(*secs, (n + 1) * sizeof(InputSec));
+		(*secs)[n++] = (InputSec){ start, size, l * 4096 + s, in_text };
+	}
+	fclose(fp);
+	return n;
+}
+
+// The objects' parts of .text in GNU ld's map MAP (its input sections, any
+// name: .text, .rodata, ...), as read_ldmap; the objects numbered in their
+// order of appearance there. RANKS gets each object's rank from the file
+// RANKSFILE (lines "RANK PATH"; an object not there, or without RANKSFILE,
+// ranks 0). The number of input sections, -1 if MAP can't be read.
+long read_ldmap_text(const char *map, const char *ranksfile, InputSec **secs, int **ranks) {
+	FILE *fp = fopen(map, "r");
+	if(!fp) return -1;
+	static char files[1024][512];
+	static int fileranks[1024];
+	char line[4096];
+	int nfiles = 0, in_text = 0;
+	long n = 0;
+	*secs = NULL;
+	char (*rpaths)[512] = NULL;
+	int *rranks = NULL, nr = 0;
+	FILE *rf = ranksfile ? fopen(ranksfile, "r") : NULL;
+	while(rf && fgets(line, sizeof line, rf)) {
+		int r;
+		char path[512];
+		if(sscanf(line, "%d %511[^\n]", &r, path) != 2) continue;
+		rpaths = realloc(rpaths, (nr + 1) * sizeof *rpaths);
+		rranks = realloc(rranks, (nr + 1) * sizeof(int));
+		strcpy(rpaths[nr], path);
+		rranks[nr++] = r;
+	}
+	if(rf) fclose(rf);
+	while(fgets(line, sizeof line, fp)) {
+		if(line[0] == '.') {
+			char name[64];
+			in_text = sscanf(line, "%63s", name) == 1 && !strcmp(name, ".text");
+			continue;
+		}
+		if(!in_text || line[0] != ' ' || line[1] != '.') continue;
+		char name[256], file[512];
+		unsigned long long start = 0, size = 0;
+		int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &start, &size, file);
+		if(k == 1 && fgets(line, sizeof line, fp))
+			k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &start, &size, file);
 		if(k != 4 || size == 0) continue;
 		int f;
 		for(f = 0; f < nfiles && strcmp(files[f], file); f++);
 		if(f == nfiles) {
-			if(nfiles == 256) continue;
+			if(nfiles == 1024) continue;
+			fileranks[nfiles] = 0;
+			for(int r = 0; r < nr; r++)
+				if(!strcmp(rpaths[r], file))
+					fileranks[nfiles] = rranks[r];
 			strcpy(files[nfiles++], file);
 		}
 		*secs = realloc(*secs, (n + 1) * sizeof(InputSec));
-		(*secs)[n++] = (InputSec){ start, size, f };
+		(*secs)[n++] = (InputSec){ start, size, f, 1 };
 	}
 	fclose(fp);
+	free(rpaths);
+	free(rranks);
+	*ranks = malloc((nfiles + 1) * sizeof(int));
+	memcpy(*ranks, fileranks, nfiles * sizeof(int));
 	return n;
 }
 
@@ -479,6 +582,7 @@ int opt(int *argc, char ***argv) {
 		{ "entry", required_argument, NULL, 'E' + 0x100 },
 		{ "name-pad-zeros", required_argument, NULL, 'P' + 0x100 },
 		{ "ld-map", required_argument, NULL, 'M' + 0x100 },
+		{ "ld-ranks", required_argument, NULL, 'K' + 0x100 },
 		{ "name-pad-byte", required_argument, NULL, 'B' + 0x100 },
 		{ "stb-name-pad-byte", required_argument, NULL, 'b' + 0x100 },
 		{ "irefs-pad", required_argument, NULL, 'I' + 0x100 },
@@ -532,6 +636,9 @@ int opt(int *argc, char ***argv) {
 			break;
 		case 'M' + 0x100:
 			opt_ldmap = optarg;
+			break;
+		case 'K' + 0x100:
+			opt_ldranks = optarg;
 			break;
 		case 'P' + 0x100:
 			opt_namepad = strtol(optarg, NULL, 0);
@@ -631,6 +738,8 @@ int opt(int *argc, char ***argv) {
 			printf("      --name-pad-zeros=N N zero bytes after the name (as l68 -x= pads a trap library)\n");
 			printf("      --ld-map=FILE      GNU ld's map of the link: the initialized data's pointers\n");
 			printf("                         (M$IRefs) by object, the last first, as l68 lists them\n");
+			printf("      --ld-ranks=FILE    lines \"RANK PATH\": the rank of an input (the -l= library\n");
+			printf("                         it came from, from 1; others 0), for the jump table's order\n");
 			printf("      --name-pad-byte=HH the byte after an odd-length name (default 00)\n");
 			printf("      --stb-name-pad-byte=HH  the same after the symbol module's name\n");
 			printf("      --irefs-pad=HEX    bytes after the M$IRefs table, before the CRC\n");
@@ -911,8 +1020,7 @@ int main(int argc, char *argv[]) {
 			if(ls) {
 				// A pointer into the module, relocated at load time; its
 				// value is set once the module's layout is known.
-				drefs[ndrefs].addr = DOFF(bfd_section_vma(sec)) + rel->address;
-				drefs[ndrefs].text = 1;
+				drefs[ndrefs] = (IdRef){ DOFF(bfd_section_vma(sec)) + rel->address, 1, 0, 0, NULL, NULL };
 				ndrefs++;
 				dls = realloc(dls, (ndls + 1) * sizeof(LsRef));
 				dls[ndls++] = (LsRef){ DOFF(bfd_section_vma(sec)) + rel->address, ls, rel->howto->type, rel->addend };
@@ -929,8 +1037,8 @@ int main(int argc, char *argv[]) {
 				printf("%s pointer to an unexpected section: %s@%s\n", sec->name, s->name, ssec->name);
 				return 1;
 			}
-			drefs[ndrefs].addr = DOFF(bfd_section_vma(sec)) + rel->address;
-			drefs[ndrefs].text = ssec == text;
+			drefs[ndrefs] = (IdRef){ DOFF(bfd_section_vma(sec)) + rel->address, ssec == text, 0, 0,
+						 (s->flags & BSF_GLOBAL) && !(s->flags & BSF_SECTION_SYM) ? s : NULL, NULL };
 			ndrefs++;
 		}
 	}
@@ -1051,6 +1159,34 @@ int main(int argc, char *argv[]) {
 		// reaches even that far.
 		size_t jtcap = have_jt && have_ejt && (int32_t)(ejt - jt) >= 0 ? (size_t)(int32_t)(ejt - jt) / 6 : 0;
 		uint64_t maxend = vec->len + 8 + 6 * (uint64_t)(ndrefs + jtcap) + 4 + 4; // + 4: etext (see below)
+		// The entries' order, as Ultra C's l68 has it (measured 2026-10-19
+		// on a ROM link's 57): by the object of a target's first far
+		// reference (the link's order); among one object's new targets by
+		// where the target is defined (the files given first, then the -l=
+		// libraries in their order: --ld-ranks), then by name (strcmp).
+		// Two passes: the targets with their keys, then the patching.
+		InputSec *tsecs = NULL;
+		int *objranks = NULL;
+		long ntsecs = opt_ldmap ? read_ldmap_text(opt_ldmap, opt_ldranks, &tsecs, &objranks) : -1;
+		int *tobjs = NULL, *tranks = NULL;
+		const char **tnames = NULL;
+		for(int pass = 0; pass < 2; pass++) {
+		if(pass == 1 && ntargets > 1) {
+			// a stable insertion sort
+			for(size_t a = 1; a < ntargets; a++) {
+				for(size_t b = a; b > 0; b--) {
+					int c = tobjs[b - 1] != tobjs[b] ? (tobjs[b - 1] > tobjs[b] ? 1 : -1)
+						: tranks[b - 1] != tranks[b] ? (tranks[b - 1] > tranks[b] ? 1 : -1)
+						: strcmp(tnames[b - 1], tnames[b]);
+					if(c <= 0) break;
+					bfd_vma tv = targets[b - 1]; targets[b - 1] = targets[b]; targets[b] = tv;
+					int to = tobjs[b - 1]; tobjs[b - 1] = tobjs[b]; tobjs[b] = to;
+					int tr = tranks[b - 1]; tranks[b - 1] = tranks[b]; tranks[b] = tr;
+					const char *tn = tnames[b - 1]; tnames[b - 1] = tnames[b]; tnames[b] = tn;
+				}
+			}
+		}
+		nfar = 0;
 		for(long i = 0; i < ntrels; i++) {
 			arelent *rel = trels[i];
 			if(rel->howto->type != 5 /* R_68K_PC16 */ && rel->howto->type != 14 /* R_68K_PLT16 */) {
@@ -1114,9 +1250,27 @@ int main(int argc, char *argv[]) {
 			size_t k;
 			for(k = 0; k < ntargets && targets[k] != target; k++)
 				;
-			if(k == ntargets) {
-				targets = realloc(targets, (ntargets + 1) * sizeof(bfd_vma));
-				targets[ntargets++] = target;
+			if(pass == 0) {
+				if(k == ntargets) {
+					// the object of this first reference (by its place in
+					// .text), the rank of the target's object, its name
+					int obj = INT_MAX, rank = 0;
+					for(long s = 0; s < ntsecs; s++) {
+						if(tvma + rel->address >= tsecs[s].start && tvma + rel->address < tsecs[s].start + tsecs[s].size)
+							obj = tsecs[s].obj;
+						if(target >= tsecs[s].start && target < tsecs[s].start + tsecs[s].size)
+							rank = objranks[tsecs[s].obj];
+					}
+					targets = realloc(targets, (ntargets + 1) * sizeof(bfd_vma));
+					tobjs = realloc(tobjs, (ntargets + 1) * sizeof(int));
+					tranks = realloc(tranks, (ntargets + 1) * sizeof(int));
+					tnames = realloc(tnames, (ntargets + 1) * sizeof(char *));
+					targets[ntargets] = target;
+					tobjs[ntargets] = obj;
+					tranks[ntargets] = rank;
+					tnames[ntargets++] = bfd_asymbol_name(rel->sym_ptr_ptr[0]);
+				}
+				continue;
 			}
 			bfd_vma evma = jt + 6 * k;
 			int32_t d = (int32_t)(evma + extra);
@@ -1127,6 +1281,12 @@ int main(int argc, char *argv[]) {
 			ins[0] = newop >> 8; ins[1] = newop;
 			ins[2] = (uint16_t)d >> 8; ins[3] = (uint16_t)d;
 		}
+		}	// the two passes
+		free(tsecs);
+		free(objranks);
+		free(tobjs);
+		free(tranks);
+		free(tnames);
 		if(ntargets) {
 			size_t cap = have_jt && have_ejt && (int32_t)(ejt - jt) >= 0 ? (size_t)(int32_t)(ejt - jt) / 6 : 0;
 			if(!have_jt || !have_ejt || ntargets > cap) {
@@ -1155,8 +1315,7 @@ int main(int argc, char *argv[]) {
 				if(k < ntargets && targets[k] == ETEXT_TARGET) {
 					etext_entry = eoff + 2; // the address, filled in at the end
 				}
-				drefs[ndrefs].addr = eoff + 2;
-				drefs[ndrefs].text = 1;
+				drefs[ndrefs] = (IdRef){ eoff + 2, 1, 0, 0, NULL, NULL };
 				ndrefs++;
 			}
 			qsort(drefs, ndrefs, sizeof(IdRef), cmp_idref);
@@ -1171,9 +1330,11 @@ int main(int argc, char *argv[]) {
 	// vsect's initialized data ends (kinds 4 and 5), in the order of the source
 	// (of the ROF's references); a pointer belongs to the first vsect
 	// ending after it in its input section. Without records, address order.
+	// A pointer to a global symbol another object defines comes after its
+	// object's others (see cmp_idref_obj).
 	if(opt_ldmap) {
 		InputSec *isecs;
-		long nisecs = read_ldmap(opt_ldmap, &isecs);
+		long nisecs = read_ldmap(opt_ldmap, &isecs, 1);
 		if(nisecs < 0) {
 			printf("cannot read the map %s\n", opt_ldmap);
 			return 1;
@@ -1193,7 +1354,7 @@ int main(int argc, char *argv[]) {
 			drefs[i].vs = INT_MAX;
 			for(long k = 0; k < nisecs; k++) {
 				uint32_t st = DOFF((bfd_vma)isecs[k].start);
-				if(drefs[i].addr >= st && drefs[i].addr - st < isecs[k].size) {
+				if(!isecs[k].text && drefs[i].addr >= st && drefs[i].addr - st < isecs[k].size) {
 					drefs[i].obj = isecs[k].obj;
 					for(size_t r = 0; r < nord; r++) {
 						uint32_t end = DOFF(bfd_get_32(abfd, ob + r * 10 + 2));
@@ -1206,6 +1367,19 @@ int main(int argc, char *argv[]) {
 					}
 					break;
 				}
+			}
+			// the symbol's object, by where its value is (in .text or not)
+			if(drefs[i].sym && drefs[i].obj != INT_MAX) {
+				bfd_vma v = bfd_asymbol_value(drefs[i].sym);
+				int intext = drefs[i].sym->section == text;
+				int sobj = -1;
+				for(long k = 0; k < nisecs; k++)
+					if(isecs[k].text == intext && v >= isecs[k].start && v - isecs[k].start < isecs[k].size) {
+						sobj = isecs[k].obj;
+						break;
+					}
+				if(sobj != drefs[i].obj)
+					drefs[i].ext = bfd_asymbol_name(drefs[i].sym);
 			}
 		}
 		free(ob);
