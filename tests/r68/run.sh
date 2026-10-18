@@ -125,6 +125,8 @@ sh_case() {	# SCRIPT
 	case=$(basename "$1" .sh)
 	mkdir -p "$t/$case"
 	why=
+	# (sourced, a syntax error would only end it early, its checks not made)
+	bash -n "$1" 2> "$t/$case.syntax" || { result "$case" " syntax: $(head -1 "$t/$case.syntax")" "$(header known "$1")"; return; }
 	(cd "$t/$case" && { . "$1"; echo "$why" > "$t/$case/why"; }) > "$t/$case.out" 2>&1
 	[ -f "$t/$case/why" ] || echo " the script failed: $(tail -1 "$t/$case.out")" > "$t/$case/why"
 	result "$case" "$(cat "$t/$case/why")" "$(header known "$1")"
