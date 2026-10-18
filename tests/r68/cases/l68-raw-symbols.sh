@@ -7,6 +7,7 @@
 # were undefined, btext and etext had their module values (0, the size), and the four bytes were
 # missing. From ELF objects and from ROFs (dsize also in a link-time expression). The bytes are
 # Ultra C's r68 and l68's.
+# fixed: 4aa57ee 2026-10-18 l68 -r: dsize, _bidata, edata and raw addresses for the module symbols
 src re <<'EOF'
  psect re,$101,$8000,1,0,0
 f rts
