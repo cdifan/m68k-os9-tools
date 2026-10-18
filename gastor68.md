@@ -107,6 +107,39 @@ CFI directives, `.swbeg`, and the DWARF sections. Inline assembly arrives betwee
 `#NO_APP`, with `| <line> "<file>"` comments; it is translated like the rest, and
 `.pushsection`/`.popsection` keep a section stack.
 
+## r68togas's output
+
+Input that r68togas made (it starts with the prelude's line marker, `# 1 "r68.prelude"`) is
+recognised without an option and given back as the r68 source it came from:
+
+- `r68togas | gastor68 | r68 == r68`: the source given back, assembled by Microware's `r68`,
+  gives the same object as the source itself (the ROF but for its date);
+- `gastor68 | r68togas | as == as`: for GCC's output, gastor68's r68 translated back by r68togas
+  and assembled by `gas` gives GCC's own object;
+- the text is the source's but for blanks and parentheses (r68's precedence may need others).
+
+How:
+
+- The prelude, the epilogue and the lines r68togas adds are dropped: line markers, its labels and
+  `set` symbols (`.Lr68...`, `r68__...`, `NAME__p1`), `reloc` and `xdef` lines, and the blocks it
+  writes before or around a statement.
+- `* r68togas: the source` marks where the source starts; a macro definition r68togas moved
+  before it goes back to its place.
+- An inlined `use` file (between `* r68togas: use file PATH, sum CRC` and `* r68togas: end of
+  use file PATH`) is its `use` statement again. The sum is the CRC-32 of the file's text,
+  insensitive to layout (LF line ends, runs of blanks as one space, none at a line's end, blank
+  lines left out); gastor68 warns where the file as PATH names it has another text now, and checks
+  nothing where it can't read it.
+- A statement noted `;[r68: ...]` (see "Annotations" in [r68togas.md](r68togas.md)) is the note,
+  or the operation alone where only it is noted; a block noted on its last line is one statement.
+- The prelude's macros are their statements again (`r68dc`, `r68ds`, `r68dz`, `r68fill`, `r68lab`,
+  `r68align`, `r68do`, `r68lo`, `r68glab`, `r68xlab`, `r68gdef`, `r68chip`, `r68L`, `r68error`, and
+  the ones for statements `gas` must not see), in the operation's case (`R68DC` for `DC.B`); a label
+  passed to one is global where the epilogue exports it.
+- Names lose r68togas's renaming (`_at_`, `__dot__`, `__r68`, `__r68m<n>`, `__r68pc`,
+  `__final`); `r68__ofs` is `.` again, `r68__n\@` `\#`, `r68__L<n>` `\L<n>`.
+- The comment after a statement loses the `;` r68togas puts before it.
+
 ## Microware compatibility
 
 The output assembles with Ultra C's `r68` and with `m68k-os9-r68` to the same code and data as

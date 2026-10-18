@@ -362,6 +362,8 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		return;
 	}
 	if (*p == '+') {
+		/* kept (gas takes it): the source's text */
+		bputc(b, '+');
 		lx->p++;
 		parse_unary(lx, b);
 		return;
@@ -482,9 +484,10 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		/* gas splits operands at a comma, and ends them at a blank, in a
 		 * quote too (move.b #',',(a3)+): only a letter or digit is
 		 * kept as a character. */
-		if (expr_chars || count != 1 || !isalnum((unsigned char)v))
+		if (expr_chars || count != 1 || !isalnum((unsigned char)v)) {
 			bprintf(b, "$%lx", v);
-		else
+			annotate = 1;	/* the constant's value: noted */
+		} else
 			bput(b, p, q - p);
 		lx->p = q;
 		return;
@@ -847,15 +850,28 @@ static void put_regs(struct buf *b, const char *s, size_t n)
 			size_t j = i + 1;
 			while (j < n && isalnum((unsigned char)s[j]))
 				j++;
-			if (is_r68_register(s + i + 1, j - i - 1))
+			if (is_r68_register(s + i + 1, j - i - 1)) {
 				i++;
+				/* noted, but where -r's % goes back anyway */
+				if (!reg_prefix_only)
+					annotate = 1;
+			}
 		}
 		size_t j = i;
 		while (j < n && isalnum((unsigned char)s[j]))
 			j++;
 		if (j > i && (i == 0 || !symchar((unsigned char)s[i - 1])) && is_r68_register(s + i, j - i)) {
+			/* gas takes a register in lower or upper case: a name in
+			 * mixed case (Sp) in lower case, noted */
+			int lower = 0, upper = 0;
+			for (size_t k = i; k < j; k++) {
+				lower |= islower((unsigned char)s[k]);
+				upper |= isupper((unsigned char)s[k]);
+			}
+			if (lower && upper)
+				annotate = 1;
 			for (size_t k = i; k < j; k++)
-				bputc(b, (char)tolower((unsigned char)s[k]));
+				bputc(b, lower && upper ? (char)tolower((unsigned char)s[k]) : s[k]);
 			i = j;
 		} else if (j > i) {
 			bput(b, s + i, j - i);
@@ -998,10 +1014,12 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 				const char *r = pieces[i];
 				size_t rl = lens[i];
 				skip_percent(&r, &rl);
-				if (rl == 3 && strncasecmp(r, "pcr", 3) == 0)
+				if (rl == 3 && strncasecmp(r, "pcr", 3) == 0) {
 					bputs(b, "pc");
-				else
+					annotate = 1;	/* pcr: noted */
+				} else {
 					put_regs(b, pieces[i], lens[i]);
+				}
 			}
 			if (k == 2)
 				bputs(b, ",zd0.w");
@@ -1079,10 +1097,12 @@ static void operand(struct buf *b, const char *s, size_t n, int absolute)
 					const char *r = pieces[i];
 					size_t rl = lens[i];
 					skip_percent(&r, &rl);
-					if (rl == 3 && strncasecmp(r, "pcr", 3) == 0)
+					if (rl == 3 && strncasecmp(r, "pcr", 3) == 0) {
 						bputs(b, "pc");
-					else
+						annotate = 1;	/* pcr: noted */
+					} else {
 						put_regs(b, pieces[i], lens[i]);
+					}
 				} else {
 					expression(b, pieces[i], lens[i]);
 				}
@@ -1148,6 +1168,7 @@ static void string_operand(struct buf *b, const char *s, size_t n)
 				bputc(b, '\'');
 			open = 0;
 			bputs(b, any++ ? ",$5c" : "$5c");
+			annotate = 1;	/* the string's bounds lost: noted */
 			continue;
 		}
 		if (!open)
@@ -1184,7 +1205,9 @@ static char *comment(const char *s)
 	if (*c == '\0')
 		return xstrdup("");
 	char *r = xmalloc(strlen(s) + 3);
-	sprintf(r, "%.*s%s%s", c == s ? 1 : (int)(c - s), c == s ? " " : s, *c == ';' ? "" : ";", c);
+	/* one ';' added, also before one of the source's (gastor68 takes
+	 * one off) */
+	sprintf(r, "%.*s;%s", c == s ? 1 : (int)(c - s), c == s ? " " : s, c);
 	return r;
 }
 
@@ -2167,14 +2190,19 @@ static void expression_list(struct buf *b, const char *args, int chars)
 	long offset = 0;	/* bytes before this element (dc lists) */
 	for (int i = 0; i < k; i++) {
 		/* An empty string "" adds nothing (and '' is a quote in MRI). */
-		if (lens[i] == 2 && pieces[i][0] == '"' && pieces[i][1] == '"' && k > 1)
+		if (lens[i] == 2 && pieces[i][0] == '"' && pieces[i][1] == '"' && k > 1) {
+			annotate = 1;	/* left out: noted */
 			continue;
+		}
 		if (written++)
 			bputc(b, ',');
 		/* a string only if the element is one quoted token: ' '+12 is a
 		 * value (dc.b ...,27,"Y",' '+12,' '+58) */
 		if (lens[i] > 0 && (pieces[i][0] == '"' || (pieces[i][0] == '\'' && !chars)) &&
 		    whole_quoted(pieces[i], lens[i])) {
+			/* in single quotes: noted (gastor68 writes "...") */
+			if (pieces[i][0] == '\'')
+				annotate = 1;
 			string_operand(b, pieces[i], lens[i]);
 			/* its length, rounded to the element size (dc.w "er",
 			 * Err-*-4: * is the statement's start) */
@@ -2469,6 +2497,47 @@ static int read_text(const char *path, struct buf *text)
 		text->s[text->n] = '\0';
 	}
 	return 1;
+}
+
+/* The CRC-32 of PATH's text as read_text reads it, insensitive to layout:
+ * each line (ended by CR, LF or CR LF) with its runs of blanks as one
+ * space and none at its end, followed by LF; blank lines left out. A use
+ * file's sum, which gastor68 can check (0 if unread). */
+static unsigned long text_sum(const char *path)
+{
+	struct buf text = { 0 };
+	if (!read_text(path, &text))
+		return 0;
+	unsigned long crc = 0xFFFFFFFFUL;
+	struct buf line = { 0 };
+	for (size_t i = 0; i <= text.n; i++) {
+		char c = i < text.n ? text.s[i] : '\n';
+		if (c == '\r' || c == '\n') {
+			if (c == '\r' && i + 1 < text.n && text.s[i + 1] == '\n')
+				i++;
+			while (line.n > 0 && line.s[line.n - 1] == ' ')
+				line.n--;
+			if (line.n > 0) {
+				bputc(&line, '\n');
+				for (size_t j = 0; j < line.n; j++) {
+					crc ^= (unsigned char)line.s[j];
+					for (int k = 0; k < 8; k++)
+						crc = crc & 1 ? (crc >> 1) ^ 0xEDB88320UL : crc >> 1;
+				}
+			}
+			line.n = 0;
+		} else if (c == ' ' || c == '\t' || c == '\f' || c == '\v') {
+			if (line.n > 0 && line.s[line.n - 1] != ' ')
+				bputc(&line, ' ');
+			else if (line.n == 0)
+				bputc(&line, ' ');
+		} else {
+			bputc(&line, c);
+		}
+	}
+	free(line.s);
+	free(text.s);
+	return crc ^ 0xFFFFFFFFUL;
 }
 
 /* The names macro calls make (LAB Bad, whose body has \1: bsr.s
@@ -3685,6 +3754,10 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			 * \1) is one in gas's quotes, '...' */
 			const char *a = pieces[i] + 1;
 			size_t an = lens[i] - 2;
+			/* single quotes, or a backslash: not as gastor68 writes
+			 * it back ("..." without one) */
+			if (pieces[i][0] == '\'' || memchr(a, '\\', an) != NULL)
+				annotate = 1;
 			if (pieces[i][0] == '"' && memchr(a, '\\', an) != NULL) {
 				struct buf u = { 0 };
 				for (size_t c = 0; c < an; c++) {
@@ -3713,6 +3786,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			mri_strings(b, u.s ? u.s : "", u.n);
 			free(u.s);
 			angled = 1;
+			annotate = 1;
 		} else if (memchr(pieces[i], '"', lens[i]) != NULL) {
 			/* quotes inside an argument (MAC.l #"'"Done"'":
 			 * #'Done'): r68 strips them too */
@@ -3722,11 +3796,13 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 					bputc(&t, pieces[i][c]);
 			operand(b, t.s ? t.s : "", t.n, 0);
 			free(t.s);
+			annotate = 1;
 		} else if (memchr(pieces[i], '=', lens[i]) != NULL) {
 			/* = (Mac >150,=,.b,V_Done(a2)): a keyword argument
 			 * to gas's macros; in <> */
 			bput(b, pieces[i], lens[i]);
 			angled = 1;
+			annotate = 1;
 		} else if (lens[i] >= 4 && (strncasecmp(pieces[i], "addi", 4) == 0 || strncasecmp(pieces[i], "subi", 4) == 0) &&
 			   (lens[i] == 4 || pieces[i][4] == '.') && i < 9 && (ops & (1u << i))) {
 			/* A mnemonic argument (MAC subi.w,#1,V_Count): as in
@@ -3754,6 +3830,7 @@ static void macro_arguments(struct buf *out_b, const char *args, const char *nam
 			 * twin, as outside macros */
 			put_twin(b, pieces[i], lens[i]);
 		} else if (memchr(pieces[i], '\1', lens[i]) != NULL) {
+			annotate = 1;
 			char *t = xstrndup(pieces[i], lens[i]);
 			for (char *c = t; *c; c++)
 				if (*c == '\1')
@@ -4965,6 +5042,27 @@ static int pc_immediate(const char *op, const char *args, const char *labs, cons
 	return 1;
 }
 
+/* A statement gas must not see (nam, opt, pag, end, spanreg, an endc that
+ * closes nothing; ttl, spc, page after byte data, where gas would align at
+ * a directive) as a call of the prelude's empty macro r68<op> (OP's case
+ * kept: gas's macro names ignore it), the text after the operation as a
+ * comment: gastor68 gives the statement back. A macro call doesn't align. */
+static void skipped_statement(struct buf *out, const char *labs, const char *op, const char *text)
+{
+	const char *after = text;
+	if (!isspace((unsigned char)*after))
+		while (*after && !isspace((unsigned char)*after))
+			after++;	/* the label */
+	while (*after == ' ' || *after == '\t')
+		after++;
+	after += strlen(op) <= strlen(after) ? strlen(op) : strlen(after);
+	while (*after == ' ' || *after == '\t')
+		after++;
+	bprintf(out, "%s r68%s", labs, op);
+	if (*after)
+		bprintf(out, " ;%s", after);
+}
+
 static void translate_line(const char *text, struct buf *out, const char *path, int lineno, FILE *fp, int depth)
 {
 	struct line l;
@@ -4977,6 +5075,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	 * the string past endm: a quote here; \\' too (MAC.l #\\'????\\',
 	 * whose escaped backslash came out as \' as well) */
 	char *unesc = NULL;
+	const char *raw_text = text;
 	if (st.in_macro && strstr(text, "\\'")) {
 		unesc = xstrdup(text);
 		char *w = unesc;
@@ -5004,6 +5103,25 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		op_parts(l.op, base, sizeof base, &size);
 	else
 		base[0] = '\0', size = 0;
+	/* the statement as the source has it, for a note (before the
+	 * rewrites below: a renamed macro's call, a folded rept's list) */
+	orig_stmt.n = orig_op.n = 0;
+	if (orig_stmt.s)
+		orig_stmt.s[0] = '\0';
+	if (orig_op.s)
+		orig_op.s[0] = '\0';
+	if (l.op) {
+		/* of the line as it was before \' became a quote */
+		struct line raw;
+		int re = unesc != NULL && split_line(raw_text, &raw) && raw.op != NULL;
+		const struct line *o = re ? &raw : &l;
+		bputs(&orig_op, o->op);
+		bputs(&orig_stmt, o->op);
+		if (o->args && *o->args)
+			bprintf(&orig_stmt, " %s", o->args);
+		if (re)
+			free_line(&raw);
+	}
 	/* The dc line of a folded rept (see rept_of_bytes): its list N times. */
 	if (st.rept_fold && st.rept_state == 1 && l.op && strcmp(base, "dc") == 0) {
 		struct buf a = { 0 };
@@ -5012,6 +5130,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		free(l.args);
 		l.args = a.s;
 		st.rept_state = 2;
+		annotate = 1;
 	}
 	/* A call of a renamed macro (see the macro statement): by its new name. */
 	for (int i = 0; l.op && i < st.nmren; i++)
@@ -5046,17 +5165,6 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	if (line_rest.s)
 		line_rest.s[0] = '\0';
 	bputs(&line_rest, l.rest ? l.rest : "");
-	orig_stmt.n = orig_op.n = 0;
-	if (orig_stmt.s)
-		orig_stmt.s[0] = '\0';
-	if (orig_op.s)
-		orig_op.s[0] = '\0';
-	if (l.op) {
-		bputs(&orig_op, l.op);
-		bputs(&orig_stmt, l.op);
-		if (l.args && *l.args)
-			bprintf(&orig_stmt, " %s", l.args);
-	}
 	/* Outside a psect (definition files used before it) r68 exports
 	 * nothing. */
 	int wrap_global = 0;
@@ -5148,6 +5256,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		}
 		st.section = ".text";
 		bprintf(out, " section .text%s\nr68__sid set 1", rest);
+		/* its fields are spread over the output: the statement noted */
+		annotate = 1;
 		goto done;
 	}
 	if (strcmp(base, "vsect") == 0) {
@@ -5188,8 +5298,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 				put_marker(&line_before);
 			if (same_section(".text"))
 				bprintf(out, "*%s", text);
-			else
-				bprintf(out, " r68sect .text%s", rest);
+			else	/* called in ends's case (gastor68) */
+				bprintf(out, " %s .text%s", isupper((unsigned char)l.op[0]) ? "R68SECT" : "r68sect", rest);
 			st.section = ".text";
 		} else {
 			st.in_psect = 0;
@@ -5215,14 +5325,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	/* spanreg: Ultra C's scratch register for r68's branch sizing. */
 	if (strcmp(base, "nam") == 0 || strcmp(base, "pag") == 0 || strcmp(base, "opt") == 0 || strcmp(base, "end") == 0 ||
 	    strcmp(base, "spanreg") == 0) {
-		bprintf(out, "*%s", text);
+		skipped_statement(out, labs, l.op, text);
 		goto done;
 	}
 	if (strcmp(base, "ttl") == 0 || strcmp(base, "spc") == 0 || strcmp(base, "page") == 0) {
-		/* after byte data a comment: gas aligns at a directive there
-		 * (a ttl after a use file's Name dc.b ...,0) */
+		/* after byte data skipped: gas aligns at a directive there (a
+		 * ttl after a use file's Name dc.b ...,0) */
 		if (st.maybe_odd)
-			bprintf(out, "*%s", text);
+			skipped_statement(out, labs, l.op, text);
 		else
 			bprintf(out, "%s %s %s", labs, l.op, l.args);
 		goto done;
@@ -5237,6 +5347,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bputs(out, " r68error <use ");
 			error_text(out, l.args, strlen(l.args));
 			bputs(out, ": not found>");
+			annotate = 1;	/* the text changed (error_text) */
 		} else {
 			int include = separate && !st.maybe_odd && !st.in_macro;
 			if (include) {
@@ -5272,8 +5383,15 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			fprintf(fp, "%s\n", out->s);
 			out->n = 0;
 			out->s[0] = '\0';
+			/* the used file's bounds and its text's sum, comments (a
+			 * linemarker is owed after byte data): gastor68 gives the
+			 * use line back for them, and may check the file */
+			if (!include)
+				fprintf(fp, "* r68togas: use file %s, sum %08lx\n", found, text_sum(found));
 			if (!include)
 				translate_file(found, fp, depth + 1);
+			if (!include)
+				fprintf(fp, "* r68togas: end of use file %s\n", found);
 			/* The next line is the including file's next; after byte
 			 * data the marker is owed (gas aligns at it, see maybe_odd)
 			 * and written before the next statement that aligns. */
@@ -5299,6 +5417,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bputs(out, " r68error <");
 		error_text(out, t, tn);
 		bputc(out, '>');
+		annotate = 1;	/* the text changed (error_text): the whole */
+		orig_stmt.n = 0;
+		bprintf(&orig_stmt, "%s %.*s", l.op, (int)tn, t);
 		goto done;
 	}
 	if (strcmp(base, "rept") == 0 && rept_of_bytes(l.args)) {
@@ -5324,19 +5445,23 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			bprintf(out, "%s%s", labs, rest);
 			annotate = 1;
 		} else {
-			bprintf(out, "*%s", text);
+			/* a comment line, the statement noted */
+			bprintf(out, "*%s", rest);
+			annotate = 1;
 		}
 		goto done;
 	}
 	if (st.rept_fold && strcmp(base, "endr") == 0 && st.rept_state == 2) {
-		bprintf(out, "*%s", text);
+		bprintf(out, "*%s", rest);
+		annotate = 1;
 		st.rept_fold = st.rept_state = 0;
 		goto done;
 	}
 	if (strcmp(base, "rept") == 0) {
 		st.section = NULL;
-		bprintf(out, "%s rept ", labs);
+		bprintf(out, "%s %s ", labs, l.op);
 		expression(out, l.args, strlen(l.args));
+		bputs(out, rest);	/* after its ';', which gas doesn't take as the count */
 		goto done;
 	}
 	if (strcmp(base, "com") == 0) {
@@ -5446,6 +5571,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		struct buf src = { 0 }, part = { 0 };
 		int first = 1;
 		dc_split = 1;
+		/* the block's start, a comment line (it ends with the note, of
+		 * this statement: the pieces' translations change the note's
+		 * texts, kept here) */
+		bputs(out, "* r68togas: a split dc line\n");
+		annotate = 1;
+		char *keep_stmt = xstrdup(orig_stmt.s ? orig_stmt.s : ""), *keep_op = xstrdup(orig_op.s ? orig_op.s : "");
+		char *keep_rest = xstrdup(line_rest.s ? line_rest.s : "");
 		for (int i = 0; i <= k; i++) {
 			int ps = i < k && lens[i] == 4 && (pieces[i][0] == '"' || pieces[i][0] == '\'') &&
 				 pieces[i][3] == pieces[i][0] && pieces[i][1] == '\\' && isdigit((unsigned char)pieces[i][2]);
@@ -5485,6 +5617,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		bputs(out, rest);
 		free(src.s);
 		free(part.s);
+		orig_stmt.n = orig_op.n = line_rest.n = 0;
+		bputs(&orig_stmt, keep_stmt);
+		bputs(&orig_op, keep_op);
+		bputs(&line_rest, keep_rest);
+		free(keep_stmt);
+		free(keep_op);
+		free(keep_rest);
+		annotate = 1;
 		goto done;
 	}
 	if (st.in_macro && !st.macro_variant &&
@@ -5523,6 +5663,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (l.label)
 			put_symbol(&nm, l.label, strlen(l.label));
 		char sz = size ? size : 'w';
+		/* the operation's case and size as written (gastor68): the
+		 * prelude macro's name in its case (gas's macro names ignore
+		 * it), the size with its dot or none */
+		int up = isupper((unsigned char)l.op[0]);
+		const char *dot = strchr(l.op, '.');
+		const char *szs = dot != NULL ? dot : "";
 		/* Already in the section: the line as it is (a section switch
 		 * would also apply MRI's pending even alignment); otherwise a
 		 * prelude macro, the label passed to it. */
@@ -5537,10 +5683,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			expression_list(&list, l.args, sz != 'b');
 			dc_size = 0;
 			if (same) {
-				bprintf(out, "%s dc.%c ", labs, sz);
+				bprintf(out, "%s %s ", labs, l.op);
 				bput(out, list.s ? list.s : "", list.n);
 			} else {
-				bprintf(out, " r68dc %s,%c,%s,", sect, sz, nm.s ? nm.s : "");
+				bprintf(out, " %s %s,%s,%s,", up ? "R68DC" : "r68dc", sect, szs, nm.s ? nm.s : "");
 				put_angle(out, list.s ? list.s : "", list.n);
 			}
 			free(list.s);
@@ -5548,9 +5694,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* ds.b as fill: MRI's ds.b would align the next statement
 			 * after an odd count, a section switch too, r68 doesn't. */
 			if (same)
-				bprintf(out, "%s fill ", labs);
+				bprintf(out, "%s %s ", labs, up ? "FILL" : "fill");
 			else
-				bprintf(out, " r68fill %s,%s,", sect, nm.s ? nm.s : "");
+				bprintf(out, " %s %s,%s,", up ? "R68FILL" : "r68fill", sect, nm.s ? nm.s : "");
 			expression(out, l.args, strlen(l.args));
 			if (same)
 				bputs(out, ",1,0");
@@ -5559,9 +5705,10 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			goto done;
 		} else {
 			if (same)
-				bprintf(out, "%s %s.%c ", labs, strcmp(base, "dz") == 0 ? "dcb" : "ds", sz);
+				bprintf(out, "%s %s%s ", labs, strcmp(base, "dz") == 0 ? (up ? "DCB" : "dcb") : (up ? "DS" : "ds"), szs);
 			else
-				bprintf(out, " r68%s %s,%c,%s,", base, sect, sz, nm.s ? nm.s : "");
+				bprintf(out, " %s%s %s,%s,%s,", up ? "R68" : "r68", up ? (strcmp(base, "dz") == 0 ? "DZ" : "DS") : base,
+					sect, szs, nm.s ? nm.s : "");
 			expression(out, l.args, strlen(l.args));
 			if (same && strcmp(base, "dz") == 0)
 				bputs(out, ",0");
@@ -5574,7 +5721,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		/* a label on the line: after the alignment, in the vsect's
 		 * initialized data, as a label alone (c68 writes Agg: align
 		 * before an initialized aggregate; r68 defines it there) */
-		bprintf(out, " r68align %s,%s,%s%s%s%s", data_section(0), data_section(1), *l.args ? l.args : "2",
+		bprintf(out, " %s %s,%s,%s%s%s%s", isupper((unsigned char)l.op[0]) ? "R68ALIGN" : "r68align", data_section(0), data_section(1), *l.args ? l.args : "2",
 			*labs ? "," : "", labs, rest);
 		st.section = data_section(1);
 		goto done;
@@ -5602,7 +5749,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		goto done;
 	}
 	if (strcmp(base, "dz") == 0) {
-		bprintf(out, "%s dcb.%c ", labs, size ? size : 'w');
+		bprintf(out, "%s %s%s ", labs, isupper((unsigned char)l.op[0]) ? "DCB" : "dcb",
+			strchr(l.op, '.') != NULL ? strchr(l.op, '.') : "");
 		expression(out, l.args, strlen(l.args));
 		bputs(out, ",0");
 		bputs(out, rest);
@@ -5622,6 +5770,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		/* label equ *: a plain label (gas can't relax a branch to a
 		 * global symbol equated to "*"). */
 		bprintf(out, "%s%s", labs, rest);
+		annotate = 1;
 		goto done;
 	}
 	if (strcmp(base, "equ") == 0 || strcmp(base, "set") == 0 || strcmp(base, "ds") == 0 ||
@@ -5695,7 +5844,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			/* An endc that closes nothing (also
 			 * outside macros): r68 ignores it, gas doesn't: dropped. */
 			if (st.cond_depth == 0) {
-				bprintf(out, "*%s", text);
+				skipped_statement(out, labs, l.op, text);
 				goto done;
 			}
 			st.cond_depth--;
@@ -5703,7 +5852,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			st.macro_ifs++;
 		} else if (st.in_macro && strcmp(base, "endc") == 0) {
 			if (st.macro_ifs == 0) {
-				bprintf(out, "*%s", text);
+				skipped_statement(out, labs, l.op, text);
 				goto done;
 			}
 			st.macro_ifs--;
@@ -6314,8 +6463,11 @@ static void translate_file(const char *path, FILE *out, int depth)
 			line_after.n = 0;
 		}
 		if (hoisting) {
+			/* in its place comment lines, one for each of its lines:
+			 * where gastor68 puts it back */
 			bput(&hoisted, whole.s, whole.n);
-			fputs("*\n", out);
+			fputs(hoisting == 1 ? "* r68togas: a macro moved before the source\n" : "* r68togas: (moved)\n", out);
+			hoisting = 2;
 			if (!st.in_macro)
 				hoisting = 0;
 		} else {
@@ -6354,6 +6506,16 @@ static const char prelude[] =
 	" .error \"\\1\"\n"
 	" .mri 1\n"
 	" endm\n"
+	"* r68's statements gas must not see (skipped_statement): nothing\n"
+	"r68nam macro\n endm\n"
+	"r68ttl macro\n endm\n"
+	"r68opt macro\n endm\n"
+	"r68pag macro\n endm\n"
+	"r68page macro\n endm\n"
+	"r68spc macro\n endm\n"
+	"r68end macro\n endm\n"
+	"r68endc macro\n endm\n"
+	"r68spanreg macro\n endm\n"
 	"* os9 call: trap #0 and the call's code\n"
 	"os9 macro\n"
 	" trap #0\n"
@@ -6402,9 +6564,11 @@ static const char prelude[] =
 	" endc\n"
 	" endm\n"
 	"* vsect contents: uninitialized (ds), initialized (dc, dz), labels\n"
+	"* (their sizes with the dot or none, as written; called in the\n"
+	"* operation's case)\n"
 	"r68ds macro\n"
 	" r68sect \\1\n"
-	"\\3 ds.\\2 \\4\n"
+	"\\3 ds\\2 \\4\n"
 	" endm\n"
 	"r68fill macro\n"
 	" r68sect \\1\n"
@@ -6412,11 +6576,11 @@ static const char prelude[] =
 	" endm\n"
 	"r68dc macro\n"
 	" r68sect \\1\n"
-	"\\3 dc.\\2 \\4\n"
+	"\\3 dc\\2 \\4\n"
 	" endm\n"
 	"r68dz macro\n"
 	" r68sect \\1\n"
-	"\\3 dcb.\\2 \\4,0\n"
+	"\\3 dcb\\2 \\4,0\n"
 	" endm\n"
 	"r68lab macro\n"
 	" r68sect \\1\n"
@@ -6752,6 +6916,12 @@ int main(int argc, char **argv)
 		}
 	}
 	long source_at = ftell(out);
+	/* where the source starts, after the hoisted macro definitions (for
+	 * gastor68, which gives the source back) */
+	if (reg_prefix_only)
+		/* for gastor68: a register as the source has it, with % */
+		fputs("* r68togas: -r, registers with %\n", out);
+	fputs("* r68togas: the source\n", out);
 	translate_file(source, out, 0);
 	r68x_ok = 0;
 	/* A psect without ends: the end of its code, before the line marker

@@ -107,8 +107,19 @@ source back. Annotated, among others:
   elements, written `(*-offset)`;
 - `psect`, whose fields are spread over the output; `fail` and a `use` file not found;
   `label equ *`, written as a label alone; a folded `rept` of one `dc` line;
+- character constants written as numbers, `pcr` written `pc`, a register in mixed case, a `%`
+  dropped from a register;
 - `dc` strings in single quotes or with a backslash, macro arguments whose quoting the `<...>`
   form loses, `dc` lines in a macro body split around `"\N"` strings, renamed macros' calls.
+
+Not annotated: the parentheses that make r68's precedence explicit, `(d).w(An)` displacements,
+`|` written `!`, labels and section switches through the prelude's macros (in the operation's
+case: `R68DC` for `DC.B`), `-b`'s `jb<cc>`, a comment after the operands with one `;` before it,
+and the statements `gas` must not see (`nam`, `opt`, `pag`, `end`, `spanreg`, an `endc` that
+closes nothing; `ttl`, `spc` and `page` after byte data), which are calls of the prelude's empty
+macros (`r68nam` and so on) with their text after a `;`. Comment lines `* r68togas: ...` mark
+where the source starts, the bounds of an inlined `use` file (with a checksum of its text), and
+where a moved macro definition was.
 
 ## Dialects
 

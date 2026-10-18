@@ -30,6 +30,29 @@ r68exe() { local n=$1; shift; (cd "$mw" && "$R68" "$n.a" -q "$@" -o="$n.r") > "$
 # crlf SRC DEST: r68.exe needs CR LF line ends (rept)
 crlf() { sed 's/\r*$/\r/' "$1" > "$2"; }
 
+# identity SOURCE NAME OPTS: r68togas | gastor68 gives the source back: its text, but for blanks
+# and parentheses (normtext), and with R68 (not -dialect=c32, not "* not r68") the same object
+# from r68.exe as the source's (the ROF but for its date). Adds to $why.
+normtext() { tr -d '\r()' < "$1" | sed 's/[ \t]//g' | grep -v '^$'; }
+rofhex() { od -An -tx1 -v "$1" | tr -d ' \n' | sed 's/^\(.\{24\}\).\{12\}/\1xxxxxxxxxxxx/'; }
+identity() {
+	local src=$1 name=$2 opts=$3
+	(cd "$t" && m68k-os9-r68 "$src" -q $opts -obj=gas -o="$t/$name.id.s") > "$t/$name.id.log" 2>&1 < /dev/null
+	if ! gastor68 -o "$t/$name.id.a" "$t/$name.id.s" >> "$t/$name.id.log" 2>&1; then
+		why="$why identity: gastor68 failed: $(head -1 "$t/$name.id.log");"
+		return
+	fi
+	local d=$(diff <(normtext "$src") <(normtext "$t/$name.id.a") | grep -c '^<')
+	[ "$d" = 0 ] || why="$why identity: $d lines differ ($(diff <(normtext "$src") <(normtext "$t/$name.id.a") | grep -m1 '^>'));"
+	if [ -n "${R68:-}" ] && ! grep -q -i 'dialect=c32' <<< "$opts" && [ -z "$(header 'not r68' "$src")" ] &&
+	   [ -s "$mw/$name.r" ]; then
+		crlf "$t/$name.id.a" "$mw/$name.id.a"
+		r68exe "$name.id" $opts
+		[ -s "$mw/$name.id.r" ] && [ "$(rofhex "$mw/$name.r")" = "$(rofhex "$mw/$name.id.r")" ] ||
+			why="$why identity: r68's object differs;"
+	fi
+}
+
 asm_case() {	# SOURCE
 	local src=$1 name=$(basename "$1" .a) why=
 	local opts=$(header options "$src")
@@ -78,6 +101,7 @@ asm_case() {	# SOURCE
 				why="$why r68 or rof2elf failed;"
 			fi
 		fi
+		identity "$src" "$name" "$opts"
 	fi
 	result "$name" "$why" "$(header known "$src")"
 }
