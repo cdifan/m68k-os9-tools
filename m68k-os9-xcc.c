@@ -962,6 +962,8 @@ static void compile(const char *source, const char *output, int assembler, int r
 	if (r68) {
 		args_add(&argv, GASTOR68);
 		args_add(&argv, ucc_mode ? "-mode=ucc" : "-mode=c32");
+		if (st.cpu != 0)
+			args_add(&argv, "-m2");	/* as r68 is run for it */
 		args_add(&argv, "-o");
 		args_add(&argv, output);
 		args_add(&argv, object);

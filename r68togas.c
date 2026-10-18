@@ -338,6 +338,7 @@ static void dot_less_use(const char *s, size_t n);
 static int twin_mode;	/* in a PC-relative displacement or a branch target: global labels as twins */
 static int p1_mode;	/* an expression as r68's first pass: set symbols not set yet are 0 (p1_name) */
 static int value_mode;	/* an equ's or set's value: register names are symbols there */
+static int designated;	/* after Ultra C's = label designator: a register name a symbol */
 static int p1_name(struct buf *b, const char *s, size_t n);
 static int in_macro_def(void);
 static int memory_instruction(const char *base);
@@ -369,6 +370,15 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		return;
 	}
 	if (*p == '(') {
+		/* the source's own (+NAME): noted (gastor68 takes the form for
+		 * =NAME) */
+		if (p[1] == '+' && symstart((unsigned char)p[2])) {
+			const char *e = p + 2;
+			while (symchar((unsigned char)*e))
+				e++;
+			if (*e == ')')
+				annotate = 1;
+		}
 		lx->p++;
 		bputc(b, '(');
 		parse_binary(lx, b, P_SHIFT, 1);
@@ -419,6 +429,7 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		const char *q = p + 2;
 		while (isxdigit((unsigned char)*q))
 			q++;
+		annotate = 1;	/* noted: gastor68 writes $ */
 		bputc(b, '$');
 		bput(b, p + 2, q - p - 2);
 		lx->p = q;
@@ -503,9 +514,17 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		return;
 	}
 	if (*p == '=' && symstart((unsigned char)p[1])) {
-		/* Ultra C's label designator, not part of the name. */
+		/* Ultra C's label designator, not part of the name: the name
+		 * a symbol, also a register's (=a1 an external a1, =d0 an
+		 * equate d0, where d0 is the register; Ultra C's r68, tested
+		 * 2026-10-18) */
 		lx->p++;
+		designated = 1;
+		/* written (+NAME), which gas takes as NAME, gastor68 as =NAME */
+		bputs(b, "(+");
 		parse_unary(lx, b);
+		bputc(b, ')');
+		designated = 0;
 		return;
 	}
 	if (symstart((unsigned char)*p) || *p == '.') {
@@ -523,8 +542,12 @@ static void parse_unary(struct lexer *lx, struct buf *b)
 		}
 		put_symbol(b, p, q - p);
 		dot_less_use(p, q - p);
-		if (value_mode && is_r68_register(p, q - p) && !defined_name(p, q - p))
-			bputs(b, "__r68");	/* Reg equ d3: d3 an undefined symbol in r68 */
+		/* In an expression a register's name is a symbol (Reg equ
+		 * d3, =a1, +a1, #a1, 0+a1, -a1; Ultra C's r68, tested
+		 * 2026-10-18): only at an operand's start, which the
+		 * operands' code takes before, is it the register */
+		if (is_r68_register(p, q - p) && !defined_name(p, q - p) && !reg_prefix_only)
+			bputs(b, "__r68");
 		if (forward_set(p, q - p))
 			bputs(b, "__final");
 		lx->p = q;
@@ -1323,6 +1346,9 @@ struct state {
 	int in_macro, macro_ifs;	/* in a macro definition; its open conditionals */
 	int cond_depth;		/* open conditionals outside macro definitions */
 	int branch_sizing;	/* -b: r68's -b/-bt */
+	int ext_long;		/* -bt: r68's -bt, branches to externals long */
+	int spanreg;		/* spanreg's register (0-7 d0-d7, 8-15 a0-a7), -1 none: */
+	int spanreg_last;	/* at the start the file's last one, as r68 has it */
 	int relax_globals;	/* -B: gas relaxes branches to global symbols */
 	int cpu_level;		/* -m: 0, 10, 20, 30, 40, 60 */
 	char **locals;		/* -b: labels defined without ':' (scan_labels) */
@@ -2851,6 +2877,18 @@ static void scan_labels(const char *path, int depth, char ***globals, int *nglob
 				on++;
 			}
 			ob[on] = '\0';
+			if (strcmp(ob, "spanreg") == 0) {
+				/* the last one is the register before the first */
+				const char *r = p + on;
+				while (*r == ' ' || *r == '\t')
+					r++;
+				size_t rn = 0;
+				while (isalnum((unsigned char)r[rn]) || r[rn] == '%')
+					rn++;
+				int reg = reg_number(r, rn);
+				if (reg >= 0 && reg != 15)
+					st.spanreg_last = reg;
+			}
 			if (scan_macro_def) {
 				if (strcmp(ob, "endm") == 0)
 					scan_macro_def = 0;
@@ -4793,6 +4831,8 @@ static void debug_line(struct buf *out, const char *labs, const char *args, char
 	int n = ++st.ndebug;
 	char loc[32];
 	st.used_debug = 1;
+	/* the block's start (gastor68: a label in it is the statement's) */
+	bputs(out, "* r68togas: a debug line\n");
 	if (*labs)
 		bprintf(out, "%s\n", labs);
 	if (st.in_vsect) {
@@ -4968,6 +5008,12 @@ static int next_is_label(const char *name)
 			p = e;
 			continue;
 		}
+		/* spanreg makes no code: r68 still leaves the branch out
+		 * (measured 2026-10-18) */
+		if (t > p && e - t >= 7 && strncasecmp(t, "spanreg", 7) == 0 && (e - t == 7 || isspace((unsigned char)t[7]))) {
+			p = e;
+			continue;
+		}
 		if (t > p || (size_t)(e - p) < n || strncmp(p, name, n) != 0)
 			return 0;
 		const char *a = p + n;
@@ -5020,6 +5066,8 @@ static int pc_immediate(const char *op, const char *args, const char *labs, cons
 	}
 	static int npi;
 	npi++;
+	/* the block's start (gastor68: a label in it is the statement's) */
+	bputs(out, "* r68togas: a pc-relative immediate\n");
 	if (*labs)
 		bprintf(out, "%s\n", labs);
 	bprintf(out, ".Lr68pi%d %s #0+r68__0", npi, op);
@@ -5325,6 +5373,12 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	/* spanreg: Ultra C's scratch register for r68's branch sizing. */
 	if (strcmp(base, "nam") == 0 || strcmp(base, "pag") == 0 || strcmp(base, "opt") == 0 || strcmp(base, "end") == 0 ||
 	    strcmp(base, "spanreg") == 0) {
+		if (strcmp(base, "spanreg") == 0) {
+			/* -bt's scratch register from here on */
+			int reg = reg_number(l.args, strlen(l.args));
+			if (reg >= 0 && reg != 15)
+				st.spanreg = reg;
+		}
 		skipped_statement(out, labs, l.op, text);
 		goto done;
 	}
@@ -5333,8 +5387,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		 * ttl after a use file's Name dc.b ...,0) */
 		if (st.maybe_odd)
 			skipped_statement(out, labs, l.op, text);
-		else
-			bprintf(out, "%s %s %s", labs, l.op, l.args);
+		else	/* the text's other words after the ; (ttl Run a command) */
+			bprintf(out, "%s %s %s%s", labs, l.op, l.args, rest);
 		goto done;
 	}
 	if (strcmp(base, "use") == 0) {
@@ -5666,9 +5720,14 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		/* the operation's case and size as written (gastor68): the
 		 * prelude macro's name in its case (gas's macro names ignore
 		 * it), the size with its dot or none */
-		int up = isupper((unsigned char)l.op[0]);
+		int up = !!isupper((unsigned char)l.op[0]);
 		const char *dot = strchr(l.op, '.');
 		const char *szs = dot != NULL ? dot : "";
+		/* an operation in mixed case (Dz): noted, the macro's name
+		 * carries one case */
+		for (const char *c = l.op + 1; *c && *c != '.'; c++)
+			if (isalpha((unsigned char)*c) && !!isupper((unsigned char)*c) != up)
+				annotate = 1;
 		/* Already in the section: the line as it is (a section switch
 		 * would also apply MRI's pending even alignment); otherwise a
 		 * prelude macro, the label passed to it. */
@@ -5751,6 +5810,8 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 	if (strcmp(base, "dz") == 0) {
 		bprintf(out, "%s %s%s ", labs, isupper((unsigned char)l.op[0]) ? "DCB" : "dcb",
 			strchr(l.op, '.') != NULL ? strchr(l.op, '.') : "");
+		if (!!isupper((unsigned char)l.op[0]) != !!isupper((unsigned char)l.op[1]))
+			annotate = 1;	/* Dz: noted, dcb carries one case */
 		expression(out, l.args, strlen(l.args));
 		bputs(out, ",0");
 		bputs(out, rest);
@@ -6028,6 +6089,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			static int nsb;
 			struct buf t = { 0 };
 			put_symbol(&t, l.args, strlen(l.args));
+			/* the block's start (gastor68: a label in it is the
+			 * statement's) */
+			bputs(out, "* r68togas: a short branch to an external\n");
 			if (*labs)
 				bprintf(out, "%s\n", labs);
 			nsb++;
@@ -6037,6 +6101,57 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			annotate = 1;
 			goto done;
 		}
+		if (st.ext_long && is_branch(base) && symstart((unsigned char)l.args[0]) &&
+		    strspn(l.args, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$@.") == strlen(l.args) &&
+		    external_name(l.args, strlen(l.args))) {
+			char opb_bt[16];
+			/* -bt: a branch to an external long, whatever its size
+			 * (Ultra C's r68, measured 2026-10-18): bra.l, bsr.l,
+			 * b<cc>.l from the 68020 on; on a 68000 or 68010 through
+			 * spanreg's register, the distance from the jsr's or jmp's
+			 * extension word loaded into it (a PC-relative long, the
+			 * field's addend -6), a conditional as the opposite one
+			 * around it */
+			if (st.cpu_level >= 20) {
+				snprintf(opb_bt, sizeof opb_bt, "%s.l", strcmp(base, "bhs") == 0 ? "bcc" :
+					 strcmp(base, "blo") == 0 ? "bcs" : base);
+				struct buf nm = { 0 };
+				put_symbol(&nm, l.args, strlen(l.args));
+				bprintf(out, "%s %s %s%s", labs, opb_bt, nm.s, rest);
+				free(nm.s);
+				annotate_op = 1;
+				goto done;
+			}
+			if (st.spanreg < 0) {
+				/* no register for it: the branch as without -bt (a
+				 * word), with a warning; r68 writes a broken object
+				 * there without a message (the manual has this one) */
+				fprintf(stderr, "%s:%d: warning: spanreg must be specified for branch sizing: %s %s a word\n",
+					path, lineno, l.op, l.args);
+				goto bt_word;
+			}
+			static const char *const inv[][2] = { { "hi", "ls" }, { "ls", "hi" }, { "cc", "cs" }, { "cs", "cc" },
+				{ "hs", "cs" }, { "lo", "cc" }, { "ne", "eq" }, { "eq", "ne" }, { "vc", "vs" }, { "vs", "vc" },
+				{ "pl", "mi" }, { "mi", "pl" }, { "ge", "lt" }, { "lt", "ge" }, { "gt", "le" }, { "le", "gt" } };
+			char reg[4];
+			snprintf(reg, sizeof reg, "%c%d", st.spanreg >= 8 ? 'a' : 'd', st.spanreg & 7);
+			struct buf nm = { 0 };
+			put_symbol(&nm, l.args, strlen(l.args));
+			const char *lab = labs;
+			bputs(out, "* r68togas: a long branch\n");
+			for (size_t c = 0; c < sizeof inv / sizeof *inv; c++)
+				if (strcmp(base + 1, inv[c][0]) == 0) {
+					bprintf(out, "%s b%s.s *+12\n", lab, inv[c][1]);
+					lab = "";
+				}
+			bprintf(out, " reloc *+2,R_68K_PC32,%s-6\n", nm.s);
+			bprintf(out, "%s %s #0+r68__0,%s\n", lab, st.spanreg >= 8 ? "movea.l" : "move.l", reg);
+			bprintf(out, " %s 0(pc,%s.l)%s", strcmp(base, "bsr") == 0 ? "jsr" : "jmp", reg, rest);
+			free(nm.s);
+			annotate = 1;
+			goto done;
+		}
+	bt_word:
 		if (st.branch_sizing && !st.in_macro && size != 'l' && is_branch(base) && next_is_label(l.args)) {
 			/* -b: a branch to the next statement's label, nothing
 			 * but blank and comment lines between (bra.s Done, then
@@ -6691,7 +6806,8 @@ static void usage(void)
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
 	printf("  -m N       the CPU in the prelude (r68's -m: 0 68000 ... 6 68060); also the\n");
 	printf("             padding of the sections (ucc: 2 with -m0, else 4, nop without -m)\n");
-	printf("  -b         r68's -b/-bt: branches to this source's labels sized by gas\n");
+	printf("  -b         r68's -b: branches to this source's labels sized by gas\n");
+	printf("  -bt        r68's -bt: -b, and branches to externals long (spanreg's on a 68000)\n");
 	printf("  -B         with -b: also to its global labels (gas relaxes those)\n");
 	printf("  -r         r68's -r: registers only written with %% (%%d0); d0 is a symbol\n");
 	printf("  -y         r68's -y with -b (68020 and later): branches and PC-relative\n");
@@ -6756,6 +6872,8 @@ int main(int argc, char **argv)
 			st.set_done[st.nset_done++] = name;
 		} else if (strcmp(argv[i], "-b") == 0) {
 			st.branch_sizing = 1;
+		} else if (strcmp(argv[i], "-bt") == 0) {
+			st.branch_sizing = st.ext_long = 1;
 		} else if (strcmp(argv[i], "-B") == 0) {
 			st.relax_globals = 1;
 		} else if (strcmp(argv[i], "-r") == 0) {
@@ -6894,7 +7012,9 @@ int main(int argc, char **argv)
 	{
 		char **globals = NULL;
 		int nglobals = 0;
+		st.spanreg_last = -1;
 		scan_labels(source, 0, &globals, &nglobals);
+		st.spanreg = st.spanreg_last;
 		st.gl = globals;
 		st.ngl = nglobals;
 		/* a name defined global anywhere isn't local */

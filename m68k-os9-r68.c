@@ -84,6 +84,7 @@ static struct {
 	int cpu;		/* -m */
 	int cpu_given;		/* -m given: r68 pads differently without it */
 	int branch_sizing;	/* -b, -bt */
+	int ext_long;		/* -bt: branches to externals long too */
 	int reg_prefix;		/* -r: registers only with %, as r68togas -r */
 	int long_refs;		/* -y: with -b, as r68togas -y */
 	int listing, symbols, conditionals, all_bytes, macros;
@@ -170,7 +171,8 @@ static void apply(const struct option *o, const char *value)
 	int on = !flag_off;
 	switch (o->id) {
 	case O_A: args_add(&st.defs, "-a"); args_add(&st.defs, value); break;
-	case O_B: case O_BT: st.branch_sizing = on; break;
+	case O_B: st.branch_sizing = on; if (on) st.ext_long = 0; break;
+	case O_BT: st.branch_sizing = st.ext_long = on; break;
 	case O_C: st.conditionals = on; break;
 	case O_D: case O_E: case O_F: case O_N: case O_P: if (on) note_ignored(o, value); break;
 	case O_G: st.all_bytes = on; break;
@@ -662,7 +664,7 @@ static void assemble(const char *source)
 		args_add(&argv, st.dialect);
 	}
 	if (st.branch_sizing) {
-		args_add(&argv, "-b");
+		args_add(&argv, st.ext_long ? "-bt" : "-b");
 		if (relaxes_globals())
 			args_add(&argv, "-B");
 	}

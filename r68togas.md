@@ -8,6 +8,10 @@ links. [m68k-os9-r68](m68k-os9-r68.md) is the front end with r68's options that 
 alone gives an object that is right only where none of that applies. `m68k-os9-r68 -obj=gas`
 stops after the translation. The reverse, for GCC's output, is [gastor68](gastor68.md).
 
+r68togas is a tool in a chain, not a source converter: its output is shaped for `gas` to give
+r68's bytes, not for people to read or maintain. Writing new code in r68 syntax through it works,
+but nothing in it is made for that use.
+
 ## Usage
 
     r68togas [-a <sym>[=<val>]]... [-m <n>] [-d ucc|c32|ucc95] [-b [-B] | -bt] [-r] [-y] [-s]
@@ -19,8 +23,10 @@ stops after the translation. The reverse, for GCC's output, is [gastor68](gastor
 | `-m <n>` | the CPU, as r68's `-m` (0 the 68000 ... 6 the 68060); written as an `.arch` directive; it also chooses the padding (see "Dialects") |
 | `-d ucc\|c32\|ucc95` | the dialect: whose encodings and padding the output gives (see "Dialects") |
 | `-b` | r68's `-b`: branches to the source's own labels sized by `gas`; `-B` also those to its global labels |
+| `-bt` | r68's `-bt`: `-b`, and branches to externals long (see "Branches") |
 | `-r` | r68's `-r`: registers only with `%` (`%d0`); a plain `d0` is a symbol |
 | `-y` | r68's `-y`, with `-b`, on a 68020 or later: branches and PC-relative references to labels 32-bit |
+| `-s` | each `use` file translated into an output file of its own (see "Separate files") |
 | `-x <ext>` | the extension of outputs named after their sources (default `s`) |
 | `-u <dir>` | a directory to search for `use` files, as r68's `-u` |
 | `-o <output>` | the output; a directory: the output there, named after the source. Without `-o`, standard output (with `-s`, the working directory) |
@@ -48,6 +54,15 @@ A construct the translation doesn't cover is an error naming it, never silently 
 ## The output
 
 ### MRI mode
+
+The output starts with `.mri 1`, which switches `gas` into MRI mode from inside the file, so it
+needs no `--mri` option. MRI mode takes the syntax of the Microtec Research 68000 assembler,
+which is close to r68's: bare register names, `%` binary numbers (`#%1010`), `*` comment lines,
+labels without a colon, comments after the operands, `$` hex numbers and `$` in names (`F$Exit`).
+So instruction lines go through almost as they are, and the translation is r68's own layer:
+psect and vsect, expressions in r68's precedence, strings, macros, `use`.
+
+What MRI mode costs, and how the translation handles it:
 
 - **Register names are symbols** in MRI mode: a symbol named like a `gas` register (`val`,
   `mask`, `acc`, also `d0` in a source with `-r`) is written `NAME__r68`, and `m68k-os9-r68` gives
@@ -240,6 +255,12 @@ Most instruction lines need no change. Where the same text means something else 
   assemblers take the constant as the displacement itself, without a relocation; written as data
   words. In a macro body with a parameter as the target, both forms, chosen by a flag each call
   sets.
+- **`-bt`:** as `-b`, and a branch to an external long whatever its size: `bra.l`, `bsr.l`,
+  `b<cc>.l` on a 68020 or later; on a 68000 or 68010 through the register `spanreg` names
+  (`move.l #target-*,Dn` then `jsr` or `jmp 0(pc,Dn.l)`, a conditional one as the opposite
+  condition's short branch around them). Without a `spanreg`, Ultra C's `r68` writes a broken
+  object; the translation keeps such a branch a word, with the manual's message as a warning.
+  `spanreg` itself makes no code.
 - **`-y`** (with `-b`, on a 68020 or later): every branch to a label 32-bit, also an explicit `.s`
   or `.w`, and every PC-relative reference to a label the 32-bit `(bd,PC)` form; a branch to a
   constant and `db<cc>` stay as without. Without `-b`, `-y` changes nothing; on a 68000 or 68010
@@ -487,6 +508,9 @@ differ, the assemblers are followed.
   a label a conditional leaves out, stays in `gas`'s object as an undefined symbol no relocation
   uses, which would make a link take in a library member for it. `m68k-os9-r68` removes such
   symbols; `r68togas` alone doesn't.
+- **`-bt`:** a local branch out of word range, which r68 writes as a long jump through `spanreg`'s
+  register, is `gas`'s error: `gas` can't choose between forms by a distance only its relaxation
+  knows.
 - **A macro calling itself** with link-time expression aliases would see the inner call's values
   after it.
 - **More lenient than Microware's assemblers** (these are taken where one or both refuse them):

@@ -43,6 +43,17 @@ static void error(const char *format, ...)
 	errors++;
 }
 
+/* A warning at the current input line. */
+static void warning(const char *format, ...)
+{
+	va_list ap;
+	fprintf(stderr, "%s:%d: warning: ", input_name, lineno);
+	va_start(ap, format);
+	vfprintf(stderr, format, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+}
+
 static void *xmalloc(size_t n)
 {
 	void *p = malloc(n ? n : 1);
@@ -136,7 +147,20 @@ static void add(struct names *s, const char *name, size_t n)
 /* ----- What the pre-pass collects ----- */
 
 static struct names globals;	/* .globl */
+static struct names defined;	/* the labels the file defines */
+
+/* Whether a branch's operand ARGS is a label of this file (a GNU numeric
+ * label's reference, 1f, 1b, too). */
+static int local_target(const char *args)
+{
+	size_t n = strlen(args);
+	if (n >= 2 && isdigit((unsigned char)args[0]) && (args[n - 1] == 'f' || args[n - 1] == 'b') &&
+	    strspn(args, "0123456789") == n - 1)
+		return 1;
+	return has(&defined, args, n);
+}
 static char *file_name;		/* .file */
+static int spanreg = -1;	/* __os9_spanreg (GCC's -mspanreg=): 2-7 d2-d7, 10-12 a2-a4 */
 static char *header[6];		/* __os9_typelang ... __os9_entry, as written */
 static const char *const header_names[] = { "__os9_typelang", "__os9_attrev", "__os9_edition", "__os9_stack",
 	"__os9_entry", "__os9_trapent" };
@@ -235,6 +259,16 @@ static void tokens(struct buf *b, const char *s, size_t n)
 			size_t j = i;
 			while (j < n && symchar((unsigned char)s[j]))
 				j++;
+			/* A C name of a register's (d0, sp): r68's label designator,
+			 * which makes it the symbol (both Microware assemblers,
+			 * tested 2026-10-18), not the register a bare one is. */
+			static const char *const regs[] = { "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a0", "a1",
+				"a2", "a3", "a4", "a5", "a6", "a7", "sp", "pc", "pcr", "sr", "ccr", "usp", "vbr", "sfc", "dfc",
+				"cacr", "caar", "msp", "isp", "fp0", "fp1", "fp2", "fp3", "fp4", "fp5", "fp6", "fp7", "fpcr",
+				"fpsr", "fpiar", NULL };
+			for (const char *const *r = regs; *r; r++)
+				if (strlen(*r) == j - i && strncasecmp(*r, s + i, j - i) == 0)
+					bputc(b, '=');
 			/* A size after a name (sym:w) is GNU's; r68 needs none. */
 			put_symbol(b, s + i, j - i);
 			i = j;
@@ -285,6 +319,8 @@ static int split_commas(const char *s, size_t n, const char **piece, size_t *len
 
 /* One operand in r68's form: (d,An) as d(An), (d,An,Xn) as d(An,Xn),
  * (An) and the others as they are; MIT's An@(d,Xn:s) as d(An,Xn.s). */
+static int cpu_level;	/* -m<n>: r68's CPU (0 the 68000, 2 the 68020, ...) */
+
 static void operand(struct buf *b, const char *s, size_t n)
 {
 	/* MIT: %pc@(2,%d0:w), %a0@(4), %a0@, %a0@+, %a0@- */
@@ -411,6 +447,25 @@ static void operand(struct buf *b, const char *s, size_t n)
 			return;
 		}
 	}
+	/* -m2 and later: a displacement of a symbol off an address register
+	 * (GCC's x(%a6), x+4(%a6,%d0.l)), which gas makes 32 bits there, not
+	 * knowing its value: r68's full form (x,a6), which r68 assembles
+	 * with 32 bits too (not the PC, whose displacements GCC sizes) */
+	if (cpu_level >= 2 && n > 4 && s[n - 1] == ')' && s[0] != '(' && s[0] != '-' && s[0] != '%') {
+		const char *open = memchr(s, '(', n);
+		int symbol = 0;
+		for (const char *c = s; open != NULL && c < open && !symbol; c++)
+			symbol = symstart((unsigned char)*c) && (c == s || !isalnum((unsigned char)c[-1]));
+		if (open != NULL && symbol && open[1] == '%' && open[2] == 'a' && open[3] >= '0' && open[3] <= '6' &&
+		    (open[4] == ')' || open[4] == ',') && memchr(s, ':', open - s) == NULL) {
+			bputc(b, '(');
+			tokens(b, s, open - s);
+			bputc(b, ',');
+			tokens(b, open + 1, n - (open - s) - 2);
+			bputc(b, ')');
+			return;
+		}
+	}
 	tokens(b, s, n);
 }
 
@@ -481,16 +536,19 @@ static void movem_operands(struct buf *b, const char *args, int fp)
 
 /* ----- Sections ----- */
 
-enum sect { S_NONE, S_CODE, S_DATA, S_BSS, S_RDATA, S_RBSS, S_SKIP };
+enum sect { S_NONE, S_CODE, S_DATA, S_BSS, S_RDATA, S_RBSS, S_SKIP, S_RODATA };
+
+static char *code_name;		/* the code section section_of named last */
 
 static enum sect section_of(const char *name)
 {
 	size_t n = strcspn(name, ", \t");
 	char *s = xstrndup(name, n);
 	enum sect r;
-	if (strcmp(s, ".text") == 0 || strncmp(s, ".text.", 6) == 0 || strcmp(s, ".rodata") == 0 ||
-	    strncmp(s, ".rodata.", 8) == 0)
+	if (strcmp(s, ".text") == 0 || strncmp(s, ".text.", 6) == 0)
 		r = S_CODE;
+	else if (strcmp(s, ".rodata") == 0 || strncmp(s, ".rodata.", 8) == 0)
+		r = S_RODATA;
 	else if (strcmp(s, ".data") == 0 || strncmp(s, ".data.", 6) == 0)
 		r = S_DATA;
 	else if (strcmp(s, ".bss") == 0 || strncmp(s, ".bss.", 5) == 0)
@@ -506,6 +564,11 @@ static enum sect section_of(const char *name)
 		error("section %s: no r68 equivalent", s);
 		r = S_SKIP;
 	}
+	if (r == S_CODE || r == S_RODATA) {
+		/* which code section: its own part (see switch_to) */
+		free(code_name);
+		code_name = xstrdup(s);
+	}
 	free(s);
 	return r;
 }
@@ -515,28 +578,55 @@ static enum sect section_of(const char *name)
 static int mode_ucc;		/* -mode=ucc */
 static enum sect cur = S_CODE;	/* the section of the lines being read */
 static enum sect open_vsect = S_NONE;	/* the vsect being written, if any */
-static struct buf out;		/* the lines being written: the code's or the vsects' */
-static struct buf other;	/* the other of the two */
-static int in_vsects;		/* out has the vsects' lines */
+/* The code's sections (.text, .text.startup, .rodata, .rodata.str1.1,
+ * ...) are written one after the other, in the order the file first
+ * names them, as the link puts gas's sections (l68's script: *(.text
+ * .text.* .rodata .rodata.*), a file's sections in their order); the
+ * vsects after them. */
+#define MAX_PARTS 64
+static struct buf out;		/* the lines being written: a code section's or the vsects' */
+static struct buf parts[MAX_PARTS + 1];	/* the others' (parts[MAX_PARTS] the vsects') */
+static char *part_names[MAX_PARTS] = { ".text" };
+static int nparts = 1;
+static int part = 0;		/* whose out has */
 static struct buf comms;	/* .local + .comm, for the end */
+
+static void switch_part(int p)
+{
+	if (p == part)
+		return;
+	parts[part] = out;
+	out = parts[p];
+	memset(&parts[p], 0, sizeof parts[p]);
+	part = p;
+}
+
+/* The part of code section NAME, a new one where the file names it first. */
+static int code_part(const char *name)
+{
+	for (int i = 0; i < nparts; i++)
+		if (strcmp(part_names[i], name) == 0)
+			return i;
+	if (nparts == MAX_PARTS)
+		die("more than %d code sections", MAX_PARTS);
+	part_names[nparts] = xstrdup(name);
+	return nparts++;
+}
 
 /* Switches the output to section S. The vsects are written apart and go
  * after the code, at the end of the psect: in the code a vsect after an odd
  * dc.b (GCC's string, then a static's data) would make the translation for
  * gas (MRI mode) align the code there, which r68 doesn't. A vsect for data,
- * closed for another vsect kind; open while the code is written. */
+ * closed for another vsect kind; open while the code is written. .rodata
+ * (GCC's strings and constants) is code too, written after the code, where
+ * the link puts gas's .rodata. */
 static void switch_to(enum sect s)
 {
 	if (s == S_SKIP)
 		return;
 	int remote = s == S_RDATA || s == S_RBSS;
-	int want = s == S_CODE ? S_NONE : remote ? S_RDATA : S_DATA;
-	if ((want != S_NONE) != in_vsects) {
-		struct buf t = out;
-		out = other;
-		other = t;
-		in_vsects = !in_vsects;
-	}
+	int want = s == S_CODE || s == S_RODATA ? S_NONE : remote ? S_RDATA : S_DATA;
+	switch_part(s == S_CODE || s == S_RODATA ? code_part(code_name ? code_name : ".text") : MAX_PARTS);
 	if (want == S_NONE)
 		return;
 	if (open_vsect != S_NONE && open_vsect != (enum sect)want) {
@@ -670,8 +760,19 @@ static void instruction(const char *label, const char *op, const char *args)
 		lower[i] = tolower((unsigned char)op[i]);
 	lower[i] = '\0';
 	const char *b = branch(lower);
-	if (cur != S_CODE)
+	if (cur != S_CODE && cur != S_RODATA)
 		error("instruction %s outside the code", op);
+	char unsized[40];
+	if (b != NULL && mode_ucc && (local_target(args) || spanreg >= 0)) {
+		/* Ultra C's style: a branch to a label of the file without a
+		 * size, which r68 -b (xcc's -bt) sizes as gas sizes GCC's
+		 * j<cc>; one to an external stays .w (-bt would make it long
+		 * through spanreg's register, which GCC doesn't keep free),
+		 * unless GCC kept one free (-mspanreg=, __os9_spanreg): then it
+		 * is unsized too, and -bt makes it long through that register */
+		snprintf(unsized, sizeof unsized, "%.*s", (int)(strlen(b) - 2), b);
+		b = unsized;
+	}
 	bprintf(&out, "%s %s", label, b != NULL ? b : op);
 	if (*args) {
 		bputc(&out, ' ');
@@ -708,9 +809,12 @@ static void directive(const char *label, const char *op, const char *args)
 {
 	static enum sect stack[16];
 	static int depth;
+	static char *names[16];	/* the code sections' names with them */
 	if (strcmp(op, ".pushsection") == 0) {
-		if (depth < 16)
+		if (depth < 16) {
+			names[depth] = code_name != NULL ? xstrdup(code_name) : NULL;
 			stack[depth++] = cur;
+		}
 		cur = section_of(args);
 		switch_to(cur);
 		return;
@@ -721,6 +825,8 @@ static void directive(const char *label, const char *op, const char *args)
 			return;
 		}
 		cur = stack[--depth];
+		free(code_name);
+		code_name = names[depth];
 		switch_to(cur);
 		return;
 	}
@@ -926,7 +1032,7 @@ static void translate_line(char *line)
 			/* In a vsect, a label alone takes the initialized data's
 			 * counter in r68: it goes onto the next data line. */
 			flush_pending();
-			if (cur == S_CODE)
+			if (cur == S_CODE || cur == S_RODATA)
 				bprintf(&out, "%s\n", lab);
 			else
 				pending = xstrdup(lab);
@@ -965,6 +1071,14 @@ static void prepass(char **lines, int n)
 		char *s = lines[i];
 		while (*s == ' ' || *s == '\t')
 			s++;
+		{
+			/* a label: NAME: (GCC writes every label so) */
+			size_t k = 0;
+			while (s[k] && symchar((unsigned char)s[k]))
+				k++;
+			if (k > 0 && s[k] == ':')
+				add(&defined, s, k);
+		}
 		if (strncmp(s, ".globl", 6) == 0 || strncmp(s, ".global", 7) == 0 || strncmp(s, ".local", 6) == 0) {
 			int local = s[1] == 'l';
 			s += strcspn(s, " \t");
@@ -988,6 +1102,12 @@ static void prepass(char **lines, int n)
 				s += 4;
 			while (*s == ' ' || *s == '\t')
 				s++;
+			if (strncmp(s, "__os9_spanreg", 13) == 0 && !symchar((unsigned char)s[13])) {
+				char *v = s + 13 + strspn(s + 13, " \t,=");
+				spanreg = atoi(v);
+				if (!((spanreg >= 2 && spanreg <= 7) || (spanreg >= 10 && spanreg <= 12)))
+					error("__os9_spanreg %d: not d2-d7 or a2-a4", spanreg);
+			}
 			for (int h = 0; h < 6; h++) {
 				size_t k = strlen(header_names[h]);
 				if (strncmp(s, header_names[h], k) == 0 && !symchar((unsigned char)s[k])) {
@@ -1151,6 +1271,11 @@ static struct ex *ex_unary(const char **p)
 			return NULL;
 		}
 		(*p)++;
+		/* (+NAME): r68togas's for Ultra C's =NAME (the label
+		 * designator, which gas doesn't take) */
+		if (e->kind == 'u' && e->op[0] == '+' && e->a->kind == 'l' &&
+		    (isalpha((unsigned char)e->a->text[0]) || e->a->text[0] == '_' || e->a->text[0] == '.'))
+			e->op[0] = '=';
 		return e;
 	}
 	const char *q = s;
@@ -1768,8 +1893,10 @@ static void gl_split(const char *line, struct gline *g)
 	while (*t == ' ' || *t == '\t')
 		t++;
 	if (starts(t, ";[r68: ")) {
+		/* the first ] before a blank or the line's end (a ] in the
+		 * comment after it is the comment's: argv[0] method?) */
 		const char *s = t + 7, *end = NULL;
-		for (const char *c = s; *c; c++)
+		for (const char *c = s; *c && end == NULL; c++)
 			if (*c == ']' && (c[1] == '\0' || isspace((unsigned char)c[1])))
 				end = c;
 		if (end != NULL) {
@@ -1833,7 +1960,8 @@ static char *line_label(const char *line)
 		{ "r68do ", 0, 0 }, { "r68lo ", 0, 0 }, { "r68align ", 3, 0 }, { "r68com ", 0, 0 },
 	};
 	for (size_t m = 0; m < sizeof ms / sizeof *ms; m++) {
-		if (!starts(p, ms[m].op))
+		/* in any case: R68DC for DC.B */
+		if (strncasecmp(p, ms[m].op, strlen(ms[m].op)) != 0)
 			continue;
 		const char *a = p + strlen(ms[m].op);
 		const char *pc[8];
@@ -2164,6 +2292,73 @@ static int nhoisted, nhoisted_lines, next_hoisted;
 
 static void undo_region(char **lines, int from, int to, int depth);
 
+/* The CRC-32 of file PATH's text as r68togas's text_sum takes it (to a
+ * Ctrl-Z; each line with its runs of blanks as one space and none at its
+ * end, then LF; blank lines left out); 0 and *OK 0 if it can't be read. */
+static unsigned long use_sum(const char *path, int *ok)
+{
+	FILE *fp = fopen(path, "rb");
+	*ok = fp != NULL;
+	if (fp == NULL)
+		return 0;
+	unsigned long crc = 0xFFFFFFFFUL;
+	struct buf line = { 0 };
+	bputs(&line, "");
+	int c;
+	for (;;) {
+		c = getc(fp);
+		if (c == 0x1A)
+			c = EOF;
+		if (c == '\r' || c == '\n' || c == EOF) {
+			if (c == '\r') {
+				int d = getc(fp);
+				if (d != '\n' && d != EOF)
+					ungetc(d, fp);
+			}
+			while (line.n > 0 && line.s[line.n - 1] == ' ')
+				line.s[--line.n] = '\0';
+			if (line.n > 0) {
+				bputc(&line, '\n');
+				for (size_t j = 0; j < line.n; j++) {
+					crc ^= (unsigned char)line.s[j];
+					for (int k = 0; k < 8; k++)
+						crc = crc & 1 ? (crc >> 1) ^ 0xEDB88320UL : crc >> 1;
+				}
+			}
+			line.n = 0;
+			line.s[0] = '\0';
+			if (c == EOF)
+				break;
+		} else if (c == ' ' || c == '\t' || c == '\f' || c == '\v') {
+			if (line.n == 0 || line.s[line.n - 1] != ' ')
+				bputc(&line, ' ');
+		} else {
+			bputc(&line, (char)c);
+		}
+	}
+	fclose(fp);
+	free(line.s);
+	return crc ^ 0xFFFFFFFFUL;
+}
+
+/* An inlined use file's start line, "* r68togas: use file PATH, sum CRC":
+ * a warning where the file there has another text now. */
+static void check_use(const char *line)
+{
+	const char *p = line + strlen("* r68togas: use file ");
+	const char *s = strstr(p, ", sum ");
+	if (s == NULL)
+		return;
+	char *path = xstrndup(p, s - p);
+	unsigned long want = strtoul(s + 6, NULL, 16);
+	int ok;
+	unsigned long have = use_sum(path, &ok);
+	if (ok && have != want)
+		fprintf(stderr, "%s:%d: warning: use file %s has changed since the translation\n", input_name, lineno,
+			path);
+	free(path);
+}
+
 /* The output of undo_region: a label alone is held (it may be the first
  * line of a block whose statement is noted on its last), written before
  * anything else. */
@@ -2183,19 +2378,13 @@ static void emit(const char *text)
 	bprintf(&undo_out, "%s\n", text ? text : "");
 }
 
-/* A noted line ending a block whose first line may be a label alone (held):
- * the label and the noted statement as one line. */
+/* A noted line ending a block (a label of its statement is in the block,
+ * which r68togas starts with a comment line: see undo_region). */
 static void emit_noted(const char *line)
 {
 	struct buf l = { 0 };
 	undo_line(&l, line);
-	if (held_label != NULL) {
-		bprintf(&undo_out, "%s%s\n", held_label, l.s ? l.s : "");
-		free(held_label);
-		held_label = NULL;
-	} else {
-		bprintf(&undo_out, "%s\n", l.s ? l.s : "");
-	}
+	emit(l.s);
 	free(l.s);
 }
 
@@ -2218,6 +2407,7 @@ static void undo_region(char **lines, int from, int to, int depth)
 			continue;
 		}
 		if (starts(line, "* r68togas: use file ")) {
+			check_use(line);
 			int nest = 1;
 			while (++i < to && nest > 0) {
 				if (starts(lines[i], "* r68togas: use file "))
@@ -2248,18 +2438,28 @@ static void undo_region(char **lines, int from, int to, int depth)
 		if (strcmp(line, "* r68togas: (moved)") == 0)
 			continue;
 		/* blocks r68togas writes for one statement */
-		if (strcmp(line, "* r68togas: a split dc line") == 0) {
+		if (strcmp(line, "* r68togas: a split dc line") == 0 || strcmp(line, "* r68togas: a long branch") == 0 ||
+		    strcmp(line, "* r68togas: a pc-relative immediate") == 0 || strcmp(line, "* r68togas: a debug line") == 0 ||
+		    strcmp(line, "* r68togas: a short branch to an external") == 0) {
 			/* a split dc line: noted on its last line, its label on
 			 * the first that has one */
 			char *lab = NULL;
 			struct buf xdefs = { 0 };	/* the block's xdef names, "\nNAME\n" */
 			bputs(&xdefs, "\n");
+			char *brest = NULL;	/* the statement's comment, where on a line before the note's */
 			while (++i < to && strstr(lines[i], ";[r68: ") == NULL) {
 				if (starts(lines[i], " xdef ")) {
 					unname(&xdefs, lines[i] + 6, strcspn(lines[i] + 6, " \t"));
 					bputc(&xdefs, '\n');
 				} else if (lab == NULL) {
 					lab = line_label(lines[i]);
+				}
+				if (brest == NULL && lines[i][0] != '*') {
+					struct gline gb;
+					gl_split(lines[i], &gb);
+					if (gb.rest[strspn(gb.rest, " \t")] != '\0')
+						brest = xstrdup(gb.rest);
+					gl_free(&gb);
 				}
 			}
 			if (i < to) {
@@ -2279,12 +2479,13 @@ static void undo_region(char **lines, int from, int to, int depth)
 				}
 				free(xdefs.s);
 				bprintf(&l, " %s", g.tag ? g.tag : "");
-				put_rest(&l, g.rest);
+				put_rest(&l, g.rest[strspn(g.rest, " \t")] == '\0' && brest != NULL ? brest : g.rest);
 				emit(l.s);
 				free(l.s);
 				gl_free(&g);
 			}
 			free(lab);
+			free(brest);
 			continue;
 		}
 		if (starts(line, "r68__n\\@ set NARG")) {
@@ -2514,10 +2715,11 @@ static void undo_r68togas(char **lines, int n)
 
 static void usage(void)
 {
-	printf("usage: %s [-mode=c32|ucc] [-n=<psect>] [-o <output>] <source>\n", progname);
+	printf("usage: %s [-mode=c32|ucc] [-m<n>] [-n=<psect>] [-o <output>] <source>\n", progname);
 	printf("  Translates GCC's gas output (m68k-elfos9-gcc -S) to a Microware r68\n");
 	printf("  source; see gastor68.md.\n");
 	printf("  -mode=  the style of the psect line: C 3.2's (default) or Ultra C's\n");
+	printf("  -m<n>   the CPU, as r68's -m (2 and later: a symbol's displacement 32 bits, as gas)\n");
 	printf("  -n=     the psect's name (default: from .file, else the source's name)\n");
 	printf("  -o      the output (default: the source with .s as .a)\n");
 }
@@ -2535,6 +2737,8 @@ int main(int argc, char **argv)
 			psect = a + 3;
 		else if (strcmp(a, "-mode=c32") == 0)
 			mode_ucc = 0;
+		else if (strlen(a) == 3 && a[0] == '-' && a[1] == 'm' && strchr("0123456", a[2]) != NULL)
+			cpu_level = a[2] - '0';
 		else if (strcmp(a, "-mode=ucc") == 0)
 			mode_ucc = 1;
 		else if (strcmp(a, "-?") == 0 || strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
@@ -2637,6 +2841,12 @@ int main(int argc, char **argv)
 	bputc(&out, '\n');
 	if (!mode_ucc)
 		bprintf(&out, " nam %s\n", name);
+	/* GCC's -mspanreg=: the register it keeps free, for r68 -bt's long
+	 * branches (see instruction) */
+	if (spanreg >= 0 && mode_ucc)
+		bprintf(&out, " spanreg %c%d\n", spanreg < 8 ? 'd' : 'a', spanreg % 8);
+	else if (spanreg >= 0)
+		warning("__os9_spanreg: spanreg only with -mode=ucc; branches to externals stay .w");
 
 	for (lineno = 1; lineno <= nlines; lineno++)
 		translate_line(lines[lineno - 1]);
@@ -2645,10 +2855,17 @@ int main(int argc, char **argv)
 		switch_to(S_BSS);
 		bput(&out, comms.s, comms.n);
 	}
+	free(code_name);
+	code_name = NULL;
 	switch_to(S_CODE);
+	/* the other code sections after .text, in their order, then the
+	 * vsects */
+	for (int i = 1; i < nparts; i++)
+		if (parts[i].n)
+			bput(&out, parts[i].s, parts[i].n);
 	if (open_vsect != S_NONE) {
-		bputs(&other, " ends\n");
-		bput(&out, other.s, other.n);
+		bputs(&parts[MAX_PARTS], " ends\n");
+		bput(&out, parts[MAX_PARTS].s, parts[MAX_PARTS].n);
 	}
 	bputs(&out, " ends\n");
 	if (errors)
