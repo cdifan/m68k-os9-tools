@@ -1,0 +1,21 @@
+* A global label in a conditional, and one a macro makes, after an odd dc.b: at the statement's
+* aligned address, as r68 puts it. Before, r68togas's macros for them put the label on a line of
+* its own, and gas aligned only the statement after it: the label stayed on the odd address (a
+* dbf to it branched there).
+* expect text: 6004 6162 6300 7202 51cc fffc 6400 7203 60fc 4e75
+Flag_x equ 1
+mk macro
+\1: moveq #3,d1
+ endm
+ psect glab_odd,0,0,0,0,0
+entry bra.s Lp
+ dc.b "abc"
+ ifne Flag_x
+Lp: moveq #2,d1
+ endc
+ dbf d4,Lp
+ dc.b "d"
+ mk Mx
+ bra.s Mx
+ rts
+ ends

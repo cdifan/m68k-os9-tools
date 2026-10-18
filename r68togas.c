@@ -6661,8 +6661,10 @@ int main(int argc, char **argv)
 	if (arch != NULL)
 		fprintf(out, " .arch %s\n", arch);
 	fputs(prelude, out);
-	/* r68glab NAME[,<rest>]: a global label in a conditional, with a marker */
-	fputs("r68glab macro\n\\1\nr68__g_\\1 set 1\n \\2\n endm\n", out);
+	/* r68glab NAME[,<rest>]: a global label in a conditional, with a marker;
+	 * the label on the statement's line, so that it moves with the
+	 * statement's alignment after odd data, as in r68 */
+	fputs("r68glab macro\nr68__g_\\1 set 1\n\\1 \\2\n endm\n", out);
 	/* r68imml OPCODE,VALUE: an instruction word and a long immediate (-d c32) */
 	fputs("r68imml macro\n dc.w \\1\n dc.l \\2\n endm\n", out);
 	/* r68immb OPCODE,VALUE: an instruction word and a byte immediate of an
@@ -6671,7 +6673,7 @@ int main(int argc, char **argv)
 	/* r68com NAME,SIZE: a common block */
 	fputs("r68com macro\n .mri 0\n .comm \\1,\\2,2\n .mri 1\n endm\n", out);
 	/* r68xlab NAME[,<rest>]: a global label made by a macro expansion */
-	fputs("r68xlab macro\n xdef \\1\n\\1\n \\2\n endm\n", out);
+	fputs("r68xlab macro\n xdef \\1\n\\1 \\2\n endm\n", out);
 	/* r68gdef NAME,<equ value>: the same for an equ or set (one line) */
 	fputs("r68gdef macro\n\\1 \\2\nr68__g_\\1 set 1\n endm\n", out);
 	/* r68chip CPU,<instruction>: one instruction of a later CPU than -m's */
