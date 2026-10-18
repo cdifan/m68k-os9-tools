@@ -2,6 +2,7 @@
 # ones, listed among the pointers to code as the used ones are, as some of Ultra C's l68 -a links
 # have them (the rule for how many is unknown: an option for byte-identical rebuilds). Without a
 # jump table it changes nothing; -jmptblpad=x is an error.
+# fixed: 1f1377c 2026-10-18 l68: -jmptblpad= (elf2mod --jmptbl-spare): unused jump table entries
 # A far call: 40K of code between it and its target.
 src ja <<'EOF2'
  psect ja,$101,$8000,1,0,e
