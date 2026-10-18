@@ -28,6 +28,7 @@ suitably linked ELF file (see "The ELF input").
 | `--header=SIZE` | `0x48` (the program header, the default), `0x3C` (`M$Exec`, `M$Excpt`, `M$Mem`; name last) or `0x30` (no fields; name last) |
 | `--raw` | the module's body only: no header, name or CRC (see "Raw output") |
 | `--entry=none` | no entry point, whatever `__os9_entry` says |
+| `--name-pad-zeros=N` | N zero bytes after the name (as `l68 -x=` pads a trap library) |
 | `--ld-map=FILE` | GNU `ld`'s map of the link, for the order of the pointer tables and the jump table |
 | `--name-pad-byte=HH` | the byte after an odd-length module name (default 00) |
 | `--stb-name-pad-byte=HH` | the same after the symbol module's name |

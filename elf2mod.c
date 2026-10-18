@@ -86,7 +86,7 @@ int opt_header = 0x48; // --header: 0x30 (no fields), 0x3C (M$Exec, M$Excpt, M$M
 int opt_xalign = 0; // -x: the code's start in the module aligned to this, zero fill
 int opt_raw = 0; // --raw: the module's body only, no header, name or CRC
 int opt_noentry = 0; // --entry=none: no entry point, whatever __os9_entry says
-int opt_namepad = 0; // --name-pad: zero bytes after the name (l68 -x on a trap library)
+int opt_namepad = 0; // --name-pad-zeros: zero bytes after the name (l68 -x on a trap library)
 const char *opt_ldmap = NULL; // --ld-map: GNU ld's map of the link, for the order of M$IRefs
 unsigned char opt_namepadbyte = 0; // --name-pad-byte: the byte that pads an odd-length name
 unsigned char opt_stbnamepadbyte = 0; // --stb-name-pad-byte: the same in the symbol module
@@ -460,7 +460,7 @@ int opt(int *argc, char ***argv) {
 		{ "header", required_argument, NULL, 'H' + 0x100 },
 		{ "raw",   no_argument,       NULL, 'R' + 0x100 },
 		{ "entry", required_argument, NULL, 'E' + 0x100 },
-		{ "name-pad", required_argument, NULL, 'P' + 0x100 },
+		{ "name-pad-zeros", required_argument, NULL, 'P' + 0x100 },
 		{ "ld-map", required_argument, NULL, 'M' + 0x100 },
 		{ "name-pad-byte", required_argument, NULL, 'B' + 0x100 },
 		{ "stb-name-pad-byte", required_argument, NULL, 'b' + 0x100 },
@@ -518,7 +518,7 @@ int opt(int *argc, char ***argv) {
 		case 'P' + 0x100:
 			opt_namepad = strtol(optarg, NULL, 0);
 			if(opt_namepad < 0 || opt_namepad > 64 || opt_namepad % 2) {
-				printf("--name-pad=%s: an even number of bytes up to 64\n", optarg);
+				printf("--name-pad-zeros=%s: an even number of bytes up to 64\n", optarg);
 				return 0;
 			}
 			break;
@@ -601,7 +601,7 @@ int opt(int *argc, char ***argv) {
 			printf("                         M$Mem; name last) or 0x30 (no fields; name last)\n");
 			printf("      --raw              write the module's body only: no header, name or CRC\n");
 			printf("      --entry=none       no entry point, whatever __os9_entry says\n");
-			printf("      --name-pad=BYTES   zero bytes after the name (as l68 -x= pads a trap library)\n");
+			printf("      --name-pad-zeros=N N zero bytes after the name (as l68 -x= pads a trap library)\n");
 			printf("      --ld-map=FILE      GNU ld's map of the link: the initialized data's pointers\n");
 			printf("                         (M$IRefs) by object, the last first, as l68 lists them\n");
 			printf("      --name-pad-byte=HH the byte after an odd-length name (default 00)\n");

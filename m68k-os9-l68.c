@@ -1067,7 +1067,7 @@ int main(int argc, char **argv)
 		nm += nm % 2;
 		long pad = (xalign - (long)((0x48 + nm) % xalign)) % xalign;
 		if (pad > 0) {
-			args_add(&l.mod, "--name-pad");
+			args_add(&l.mod, "--name-pad-zeros");
 			args_addf(&l.mod, "%ld", pad);
 		}
 	} else if (xalign > 2) {
