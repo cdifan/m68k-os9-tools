@@ -6,6 +6,7 @@
 # data symbol in $8000..$FFFF sign-extended ($FFFF8004); a data label that a link-time expression
 # with an external names (Dat+Ext(a6)) flagged $2000 as referenced (C 3.2 style). Before: the
 # module's revision, _jmptbl everywhere, other orders, $00008004, and no flag there.
+# fixed: 42b82e4 2026-10-18 elf2mod -g: symbol modules as Microware's l68 writes them
 # an entry: value (4 bytes), type (2), name offset (4)
 src prg <<'EOF'
  psect prg,$101,$8003,1,0,e
