@@ -89,6 +89,7 @@ int opt_noentry = 0; // --entry=none: no entry point, whatever __os9_entry says
 int opt_namepad = 0; // --name-pad: zero bytes after the name (l68 -x on a trap library)
 const char *opt_ldmap = NULL; // --ld-map: GNU ld's map of the link, for the order of M$IRefs
 unsigned char opt_namepadbyte = 0; // --name-pad-byte: the byte that pads an odd-length name
+unsigned char opt_stbnamepadbyte = 0; // --stb-name-pad-byte: the same in the symbol module
 unsigned char *opt_irefspad = NULL; // --irefs-pad: bytes after the M$IRefs table, before the CRC
 size_t opt_nirefspad = 0;
 long opt_jtspare = 0; // --jmptbl-spare: unused jump table entries (jmp 0) after the used ones
@@ -214,6 +215,55 @@ long read_ldmap(const char *map, InputSec **secs) {
 		}
 		*secs = realloc(*secs, (n + 1) * sizeof(InputSec));
 		(*secs)[n++] = (InputSec){ start, size, f };
+	}
+	fclose(fp);
+	return n;
+}
+
+// The object each global symbol comes from, from GNU ld's map MAP: the
+// symbol lines ("   0x...   Name") under an input section line, the
+// objects numbered in the order the map first names them (the link's
+// order, the root first). NAMES gets the symbols' names, OBJS their
+// objects; the number of them, -1 if MAP can't be read.
+long read_ldmap_syms(const char *map, char ***names, int **objs) {
+	FILE *fp = fopen(map, "r");
+	if(!fp) return -1;
+	static char files[1024][512];
+	char line[4096];
+	int nfiles = 0, cur = -1;
+	long n = 0;
+	*names = NULL;
+	*objs = NULL;
+	while(fgets(line, sizeof line, fp)) {
+		char name[256], file[512];
+		unsigned long long a, b;
+		if(line[0] == ' ' && line[1] == '.') {
+			// an input section: " .text 0x.. 0x.. file", or the name
+			// alone, the rest on the next line
+			int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &a, &b, file);
+			if(k == 1 && fgets(line, sizeof line, fp))
+				k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &a, &b, file);
+			cur = -1;
+			if(k != 4) continue;
+			int f;
+			for(f = 0; f < nfiles && strcmp(files[f], file); f++);
+			if(f == nfiles) {
+				if(nfiles == 1024) continue;
+				strcpy(files[nfiles++], file);
+			}
+			cur = f;
+			continue;
+		}
+		if(line[0] != ' ') {
+			cur = -1; // an output section, or the map's other parts
+			continue;
+		}
+		if(cur < 0 || strchr(line, '=') || strchr(line, '(')) continue; // script assignments
+		if(sscanf(line, " 0x%llx %255s", &a, name) != 2) continue;
+		*names = realloc(*names, (n + 1) * sizeof(char*));
+		*objs = realloc(*objs, (n + 1) * sizeof(int));
+		(*names)[n] = strdup(name);
+		(*objs)[n++] = cur;
 	}
 	fclose(fp);
 	return n;
@@ -369,11 +419,14 @@ typedef struct stbsym {
 	uint16_t type;
 	const char *name;
 	size_t rank; // linker symbols: their order; others: after them
+	int obj; // a program symbol's object, in link order (--ld-map; else 0)
 } StbSym;
 
-// By value; at the same value, as l68 lists them: Ultra C's in the order
-// it defines them (linker symbols first, then the others in definition
-// order, which in ROFs is by name), Microware C 3.2's in reverse.
+// By value; at the same value, in the order l68 defines them, Microware C
+// 3.2's listed in reverse: rank, then (program symbols) the object, then
+// the name (definition order in a ROF). Measured 2026-10-18 with both l68s:
+// Ultra C's defines the program's symbols, then its own; C 3.2's the root
+// psect's, then its own, then the other psects' (the ranks give that).
 // A data symbol's value in a symbol module: one in $8000..$FFFF (a module's
 // unbiased data area beyond 32K) sign-extended from 16 bits, as l68 writes
 // it ($FFFF8004); larger ones (a ROM's) and remote data as they are (seen in
@@ -386,7 +439,8 @@ int stb_reverse;
 int cmp_stbsym(const void *a, const void *b) {
 	const StbSym *p = a, *q = b;
 	if(p->value != q->value) return p->value < q->value ? -1 : 1;
-	int c = p->rank != q->rank ? (p->rank < q->rank ? -1 : 1) : strcmp(p->name, q->name);
+	int c = p->rank != q->rank ? (p->rank < q->rank ? -1 : 1)
+		: p->obj != q->obj ? (p->obj < q->obj ? -1 : 1) : strcmp(p->name, q->name);
 	return stb_reverse ? -c : c;
 }
 
@@ -409,6 +463,7 @@ int opt(int *argc, char ***argv) {
 		{ "name-pad", required_argument, NULL, 'P' + 0x100 },
 		{ "ld-map", required_argument, NULL, 'M' + 0x100 },
 		{ "name-pad-byte", required_argument, NULL, 'B' + 0x100 },
+		{ "stb-name-pad-byte", required_argument, NULL, 'b' + 0x100 },
 		{ "irefs-pad", required_argument, NULL, 'I' + 0x100 },
 		{ "jmptbl-spare", required_argument, NULL, 'J' + 0x100 },
 		{ "help",  no_argument,       NULL, 'h' },
@@ -478,6 +533,17 @@ int opt(int *argc, char ***argv) {
 			free(b);
 			break;
 		}
+		case 'b' + 0x100: {
+			unsigned char *b;
+			size_t n;
+			if(!parse_hex_bytes(optarg, &b, &n) || n != 1) {
+				printf("--stb-name-pad-byte=%s: expected one byte in hex (two digits)\n", optarg);
+				return 0;
+			}
+			opt_stbnamepadbyte = b[0];
+			free(b);
+			break;
+		}
 		case 'J' + 0x100: {
 			char *end;
 			opt_jtspare = strtol(optarg, &end, 10);
@@ -539,6 +605,7 @@ int opt(int *argc, char ***argv) {
 			printf("      --ld-map=FILE      GNU ld's map of the link: the initialized data's pointers\n");
 			printf("                         (M$IRefs) by object, the last first, as l68 lists them\n");
 			printf("      --name-pad-byte=HH the byte after an odd-length name (default 00)\n");
+			printf("      --stb-name-pad-byte=HH  the same after the symbol module's name\n");
 			printf("      --irefs-pad=HEX    bytes after the M$IRefs table, before the CRC\n");
 			printf("      --jmptbl-spare=N   N unused jump table entries (jmp 0) after the used ones,\n");
 			printf("                         listed with them (the table must have room)\n");
@@ -1350,6 +1417,10 @@ int main(int argc, char *argv[]) {
 			for(size_t k = 0; k < nlinker; k++) ss[k].rank += 1;
 		}
 		size_t nss = nlinker;
+		char **msym_names = NULL;
+		int *msym_objs = NULL;
+		long nmsyms = opt_ldmap ? read_ldmap_syms(opt_ldmap, &msym_names, &msym_objs) : 0;
+		if(nmsyms < 0) nmsyms = 0;
 		for(long i = 0; i < nsyms; i++) {
 			asymbol *s = syms[i];
 			asection *sec = s->section;
@@ -1370,20 +1441,34 @@ int main(int argc, char *argv[]) {
 			if(type < 2) ss[nss].value = stb_data_value(ss[nss].value);
 			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0);
 			ss[nss].name = bfd_asymbol_name(s);
-			ss[nss].rank = 0;
+			// its object (the map's symbol lines: also a label at an
+			// object's end, where the next one's sections start)
+			int obj = 0;
+			for(long m = 0; m < nmsyms; m++) {
+				if(!strcmp(msym_names[m], bfd_asymbol_name(s))) { obj = msym_objs[m]; break; }
+			}
+			ss[nss].obj = obj;
+			// C 3.2's (in reverse): the root psect's before its own
+			// (rank 0), the other psects' after them (above its own)
+			ss[nss].rank = opt_stb == 2 || obj == 0 ? 0 : 100 + (size_t)obj;
 			nss++;
 		}
 		for(size_t k = 0; k < nlinker; k++) {
 			if((ss[k].type & 0xFF) == 1) ss[k].value = stb_data_value(ss[k].value);
 		}
 		qsort(ss, nss, sizeof(StbSym), cmp_stbsym);
+		for(long m = 0; m < nmsyms; m++) free(msym_names[m]);
+		free(msym_names);
+		free(msym_objs);
 
 		Vec *sv = vec_new(0x1000);
 		vec_zero(sv, 0x30); // data module header
 		char *sname = malloc(strlen(opt_name) + 5);
 		sprintf(sname, "%s.stb", opt_name);
 		size_t isname = vec_append(sv, sname, strlen(sname) + 1);
-		while(sv->len % 2) vec_zero(sv, 1); // word fields must be at even offsets
+		// word fields must be at even offsets; l68 leaves the byte as it
+		// happens to be (--stb-name-pad-byte)
+		if(sv->len % 2) vec_append(sv, &opt_stbnamepadbyte, 1);
 		size_t istb = vec_zero(sv, 2 + 4 + 4 + 4);
 		while(sv->len % 16) vec_zero(sv, 1);
 		size_t ient = vec_zero(sv, nss * 10);

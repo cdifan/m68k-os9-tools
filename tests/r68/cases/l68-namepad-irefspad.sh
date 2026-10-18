@@ -1,7 +1,8 @@
 # m68k-os9-l68 -namepad=<hex>: the byte after an odd-length module name (default 00; some native
 # OS-9 l68 builds copy the name in words, so the pad is whatever followed it); -irefspad=<hex>:
 # bytes after the initialized data's pointer tables (M$IRefs), before the CRC, as some old modules
-# have them. Both in hex, two digits to a byte; anything else is an error.
+# have them. Both in hex, two digits to a byte; anything else is an error. -stbnamepad=<hex>: the
+# byte after the symbol module's odd-length name (-g), which l68 also leaves as it happens to be.
 # fixed: 5b3cec5 2026-10-18 l68: -namepad= and -irefspad= (elf2mod --name-pad-byte, --irefs-pad)
 src np <<'EOF'
  psect np,$101,$8000,1,0,entry
@@ -40,3 +41,12 @@ link e3 np.o -n=ab -irefspad=000
 failed_with e3 "-irefspad=000: expected bytes in hex"
 link e4 np.o -n=ab -irefspad=zz
 failed_with e4 "-irefspad=zz: expected bytes in hex"
+# -stbnamepad=<hex>: the byte after the symbol module's odd-length name ("ab.stb" and its zero)
+link g0 np.o -n=ab -g
+linked g0
+link g1 np.o -n=ab -g -stbnamepad=4f
+linked g1
+has_bytes g0.stb "61622e737462 00 00"
+has_bytes g1.stb "61622e737462 00 4f"
+link e5 np.o -n=ab -g -stbnamepad=4
+failed_with e5 "-stbnamepad=4: expected one byte"

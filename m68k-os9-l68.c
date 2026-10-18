@@ -47,7 +47,7 @@ enum kind {
 enum id {
 	O_A, O_B, O_C, O_E, O_F, O_G, O_GU, O_I, O_J, O_L, O_M, O_MM, O_MT, O_N, O_NN,
 	O_OO, O_O, O_P, O_R, O_RR, O_S, O_SS, O_T, O_V, O_W, O_X, O_Z, O_DIALECT,
-	O_NAMEPAD, O_IREFSPAD, O_JMPTBLPAD,
+	O_NAMEPAD, O_IREFSPAD, O_JMPTBLPAD, O_STBNAMEPAD,
 };
 
 #define C32	1	/* in C 3.2's l68 */
@@ -96,6 +96,7 @@ static const struct option options[] = {
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
 	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
 	{ "namepad", VALUE, "=<hex>", "The byte after an odd-length module name (default 00)", NULL, O_NAMEPAD, OURS },
+	{ "stbnamepad", VALUE, "=<hex>", "With -g, the byte after the symbol module's odd-length name (default 00)", NULL, O_STBNAMEPAD, OURS },
 	{ "jmptblpad", VALUE, "=<n>", "With a jump table (-a), <n> unused entries (jmp 0) after the used ones", NULL, O_JMPTBLPAD, OURS },
 	{ "irefspad", VALUE, "=<hex>", "Bytes after the initialized data's pointer table (M$IRefs), before the CRC", NULL, O_IREFSPAD, OURS },
 };
@@ -131,6 +132,7 @@ static struct {
 	const char *namepad;	/* -namepad= */
 	const char *irefspad;	/* -irefspad= */
 	long jmptblpad;		/* -jmptblpad= */
+	const char *stbnamepad;	/* -stbnamepad= */
 } st;
 
 /* ----- Usage ----- */
@@ -301,6 +303,11 @@ static void apply(const struct option *o, const char *value)
 		if (hex_bytes(value) != 1)
 			error("-namepad=%s: expected one byte in hex (two digits)", value);
 		st.namepad = value;
+		break;
+	case O_STBNAMEPAD:
+		if (hex_bytes(value) != 1)
+			error("-stbnamepad=%s: expected one byte in hex (two digits)", value);
+		st.stbnamepad = value;
 		break;
 	case O_IREFSPAD:
 		if (hex_bytes(value) < 1)
@@ -1043,6 +1050,10 @@ int main(int argc, char **argv)
 	if (st.namepad != NULL) {
 		args_add(&l.mod, "--name-pad-byte");
 		args_add(&l.mod, st.namepad);
+	}
+	if (st.stbnamepad != NULL) {
+		args_add(&l.mod, "--stb-name-pad-byte");
+		args_add(&l.mod, st.stbnamepad);
 	}
 	if (st.irefspad != NULL) {
 		args_add(&l.mod, "--irefs-pad");

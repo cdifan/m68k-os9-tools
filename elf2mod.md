@@ -30,6 +30,7 @@ suitably linked ELF file (see "The ELF input").
 | `--entry=none` | no entry point, whatever `__os9_entry` says |
 | `--ld-map=FILE` | GNU `ld`'s map of the link, for the order of the pointer tables and the jump table |
 | `--name-pad-byte=HH` | the byte after an odd-length module name (default 00) |
+| `--stb-name-pad-byte=HH` | the same after the symbol module's name |
 | `--irefs-pad=HEX` | bytes after the pointer tables, before the CRC |
 | `--jmptbl-spare=N` | N unused jump table entries (`jmp 0`) after the used ones (the table must have room) |
 
@@ -231,6 +232,14 @@ The two `l68`s write this a little differently, and `--stb=STYLE` follows either
   start of the data area) and `_enddata`, and doesn't flag referenced symbols. Symbols with the same
   value are listed the program's first, in link order (within a psect by name), then the linker's
   in the order it makes them (`_bname _btext _bdata _enddata btext bdata end _jmptbl bname`).
+
+For the same input the result is `l68`'s symbol module, except the header parity word in Ultra C's
+format: Ultra C's `l68` writes it at `0x28` and leaves `M$Parity` (`0x2E`) zero; `elf2mod` writes it
+at `0x2E`, as for other modules. The OS-9 kernel accepts either (its header check XORs all 24
+header words and wants `$FFFF`). `0x28` was reserved in CD-i's OS-9; later OS-9 versions use it
+for `M$HdExt`, the module header extension offset. Where the symbol module's name has an odd
+length, `l68` leaves the byte after it as it happens to be; `elf2mod` writes 0, or
+`--stb-name-pad-byte`'s.
 
 ## The source debugger's file
 
