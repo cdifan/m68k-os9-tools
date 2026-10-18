@@ -3,8 +3,8 @@
 # end): C 3.2's lists, in reverse order of definition, the symbols of the psects after the root,
 # then its own (end), then the root psect's; Ultra C's the program's in link order, then its own.
 # Before, C 3.2 style had the program's first, and Ultra C style sorted them by name. The order of
-# fixed: e366146 2026-10-18 elf2mod -g: tie order by object; l68 -stbnamepad= (--stb-name-pad-byte)
 # the names in the symbol module is that of the entries.
+# fixed: e366146 2026-10-18 elf2mod -g: tie order by object; l68 -stbnamepad= (--stb-name-pad-byte)
 src ra <<'EOF'
  psect ra,$E01,$8001,1,0,e
 e rts
