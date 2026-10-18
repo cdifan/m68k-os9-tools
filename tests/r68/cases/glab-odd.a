@@ -2,6 +2,7 @@
 * aligned address, as r68 puts it. Before, r68togas's macros for them put the label on a line of
 * its own, and gas aligned only the statement after it: the label stayed on the odd address (a
 * dbf to it branched there).
+* fixed: 00efcd1 2026-10-18 r68togas: a global label in a conditional or a macro on its statement's line
 * expect text: 6004 6162 6300 7202 51cc fffc 6400 7203 60fc 4e75
 Flag_x equ 1
 mk macro
