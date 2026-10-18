@@ -1,0 +1,15 @@
+* A register's name inside an expression is a symbol, an external where the source doesn't
+* define it (+a1, (+a1), 0+a1, #a1, (+sp)); only at an operand's start is it the register (Ultra
+* C's r68, measured 2026-10-18). Before, the translation left it the register for gas, which
+* refused it ("register value used as expression"). The source's own (+NAME) is noted (gastor68
+* reads r68togas's (+NAME) as Ultra C's =NAME).
+* fixed: 08be2bc 2026-10-19 r68togas, gastor68: round trip closer to the source; -bt with spanreg; -mspanreg
+* expect text: 243900000000 263900000000 283900000000 2a3c00000000 2c3900000000 4e71
+* expect reloc: R_68K_32          sp
+ psect t,0,0,0,0,0
+ move.l +a1,d2
+ move.l (+a1),d3
+ move.l 0+a1,d4
+ move.l #a1,d5
+ move.l (+sp),d6
+ ends

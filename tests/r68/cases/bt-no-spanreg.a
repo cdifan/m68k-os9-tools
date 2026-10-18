@@ -1,0 +1,13 @@
+* -bt on a 68000 without spanreg: a branch to an external stays as without -bt (a word), with a
+* warning naming it (the manual's message for it). Ultra C's r68 writes a broken object there,
+* without a message (measured 2026-10-18).
+* fixed: 08be2bc 2026-10-19 r68togas, gastor68: round trip closer to the source; -bt with spanreg; -mspanreg
+* not r68: Ultra C's r68 writes a broken object for it
+* options: -bt
+* expect text: 61000000 67000000 4e71 4e71
+* expect reloc: R_68K_PC16        ext
+ psect t,0,0,0,0,0
+ bsr ext
+ beq.w ext
+ nop
+ ends

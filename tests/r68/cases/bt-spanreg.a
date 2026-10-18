@@ -1,0 +1,22 @@
+* -bt on a 68000: a branch to an external long whatever its size, through spanreg's register:
+* move.l #ext-(the jsr's or jmp's extension word),Dn (a PC-relative long, addend -6), then
+* jsr/jmp 0(pc,Dn.l); a conditional as the opposite one short around it. Before the first
+* spanreg the file's last one's register (a2 here); an address register as movea.l; a branch to
+* a label of the source as with -b (to the next statement: left out). Ultra C's r68, measured
+* 2026-10-18. Before, -bt was -b: word branches.
+* fixed: 08be2bc 2026-10-19 r68togas, gastor68: round trip closer to the source; -bt with spanreg; -mspanreg
+* options: -bt
+* expect text: 247c00000000 4ebba800 2e3c00000000 4ebb7800 2e3c00000000 4efb7800 660a 2e3c00000000 4efb7800 630a 2e3c00000000 4efb7800 247c00000000 4ebba800 4e71 4e71
+* expect reloc: R_68K_PC32        ext-0x00000006
+ psect t,0,0,0,0,0
+ bsr ext
+ spanreg d7
+ bsr.w ext
+ bra.s ext
+ beq ext
+ bhi ext
+ bsr loc
+ spanreg a2
+loc bsr ext
+ nop
+ ends

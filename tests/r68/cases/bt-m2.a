@@ -1,0 +1,12 @@
+* -bt on a 68020: a branch to an external long (bsr.l, b<cc>.l), whatever its size; no spanreg
+* needed (Ultra C's r68, measured 2026-10-18). Before, -bt was -b: word branches.
+* fixed: 08be2bc 2026-10-19 r68togas, gastor68: round trip closer to the source; -bt with spanreg; -mspanreg
+* options: -bt -m2
+* expect text: 61ff00000000 67ff00000000 60ff00000000 4e71
+* expect reloc: R_68K_PC32        ext
+ psect t,0,0,0,0,0
+ bsr ext
+ beq.s ext
+ bra.w ext
+ nop
+ ends

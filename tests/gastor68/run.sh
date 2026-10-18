@@ -4,8 +4,9 @@
 # (each a text that a line of the translation contains, spaces collapsed); then the translation
 # assembled by m68k-os9-r68 (and by Ultra C's r68.exe when R68 is set, converted by rof2elf)
 # must give the code, data and relocations that gas gives for the source. "| cpu: 68020"
-# makes a case 68020 code with the 68881 (-m2 for the r68s); "| fixed:" names the commit that
-# fixed what a case tests (as in tests/r68).
+# makes a case 68020 code with the 68881 (-m2 for the r68s); "| mode: ucc" translates it with
+# gastor68 -mode=ucc and assembles it with -b (as Ultra C's xcc does: it sizes the unsized
+# branches); "| fixed:" names the commit that fixed what a case tests (as in tests/r68).
 # Settings: TOOLS (a directory put first in PATH: m68k-os9-r68, r68togas, rof2elf), GASTOR68
 # (default gastor68 from PATH), TPREFIX (the binutils' prefix, m68k-elfos9-), R68 (Ultra C's
 # r68.exe, WSL) and R68WORK (a directory on a Windows drive for r68.exe's files, /mnt/c/...;
@@ -35,7 +36,8 @@ contents() {
 		echo >> "$2$s"
 		[ $s = .text ] || ${B}objdump -h "$1" | awk -v s=$s '$2 == s {print "size", $3}' >> "$2$s"
 	done
-	${B}objdump -r "$1" | grep '^[0-9a-f]\{8\} ' > "$2.rel"
+	# the code's and data's (not r68togas's .r68ord records, for elf2rof)
+	${B}objdump -r -j .text -j .data "$1" 2> /dev/null | grep '^[0-9a-f]\{8\} ' > "$2.rel"
 }
 # A's contents against B's (B's .text may have up to 3 bytes of padding more: nop or trapf)
 same() {
@@ -56,7 +58,9 @@ run_case() {	# SOURCE
 	local src=$1 name=$(basename "$1" .s) why= e
 	local m=0 cpu="-m68000"
 	[ "$(header cpu "$src")" = 68020 ] && { m=2; cpu="-m68020 -m68881"; }
-	if ! (cd "$t" && "$G" -o "$name.a" "$src") > "$t/$name.g.log" 2>&1; then
+	local mode= b=; [ -n "$(header mode "$src")" ] && mode=-mode=$(header mode "$src")
+	[ "$mode" = -mode=ucc ] && b=-b
+	if ! (cd "$t" && "$G" $mode -o "$name.a" "$src") > "$t/$name.g.log" 2>&1; then
 		why=" gastor68 failed: $(head -1 "$t/$name.g.log");"
 	else
 		while read -r e; do [ -z "$e" ] && continue
@@ -64,7 +68,7 @@ run_case() {	# SOURCE
 		done <<< "$(header expect "$src")"
 		${B}as $cpu --pcrel -o "$t/$name.gas.o" "$src" > "$t/$name.as.log" 2>&1 || why="$why gas failed;"
 		contents "$t/$name.gas.o" "$t/$name.gas"
-		if (cd "$t" && m68k-os9-r68 "$name.a" -q -m$m -o="$name.o") > "$t/$name.log" 2>&1 < /dev/null; then
+		if (cd "$t" && m68k-os9-r68 "$name.a" -q -m$m $b -o="$name.o") > "$t/$name.log" 2>&1 < /dev/null; then
 			contents "$t/$name.o" "$t/$name.our"
 			e=$(same "$t/$name.gas" "$t/$name.our")
 			[ -n "$e" ] && why="$why m68k-os9-r68 differs from gas:$e"
@@ -74,7 +78,7 @@ run_case() {	# SOURCE
 		if [ -n "${R68:-}" ]; then
 			sed 's/\r*$/\r/' "$t/$name.a" > "$mw/$name.a"
 			local o=; [ $m = 2 ] && o=-m2
-			(cd "$mw" && "$R68" "$name.a" -q $o -o="$name.r") > "$t/$name.r68.log" 2>&1 < /dev/null
+			(cd "$mw" && "$R68" "$name.a" -q $o $b -o="$name.r") > "$t/$name.r68.log" 2>&1 < /dev/null
 			if [ -s "$mw/$name.r" ] && rof2elf -o "$t/$name.mw.o" "$mw/$name.r" > /dev/null 2>&1; then
 				contents "$t/$name.mw.o" "$t/$name.mw"
 				e=$(same "$t/$name.gas" "$t/$name.mw")

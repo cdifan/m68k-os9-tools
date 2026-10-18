@@ -1,0 +1,20 @@
+* Ultra C's = label designator before a register's name: the name is a symbol (=d0 an equate,
+* =a1 an undefined name, so an external; labels sp and pc), where the bare name is the register
+* (move.l d0,d1); after # a name is a symbol either way (Ultra C's r68, tested 2026-10-18).
+* Before, =a1 was taken for the register: "syntax error" for (a1).l.
+* fixed: 08be2bc 2026-10-19 r68togas, gastor68: round trip closer to the source; -bt with spanreg; -mspanreg
+* expect text: 4e71 4e71 2200 223900001234 223c00001234 223c00001234 6100ffe6 6100ffe4 243900000000 41faffd8 4e71
+* expect reloc: R_68K_32          a1
+ psect t,0,0,0,0,0
+d0 equ $1234
+sp nop
+pc: nop
+ move.l d0,d1
+ move.l =d0,d1
+ move.l #=d0,d1
+ move.l #d0,d1
+ bsr =sp
+ bsr =pc
+ move.l =a1,d2
+ lea =sp(pc),a0
+ ends
