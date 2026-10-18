@@ -544,7 +544,7 @@ int os9_link(struct os9link *l)
 		cat_stderr(log);
 		return status;
 	}
-	if (link_elf(l, table, os9_temp(".log")) != 0) {
+	if (link_elf(l, table + 6 * l->jmptbl_spare, os9_temp(".log")) != 0) {
 		cat_stderr(log);
 		return status;
 	}

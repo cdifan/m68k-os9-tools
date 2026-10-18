@@ -73,6 +73,7 @@ struct os9link {
 	const char *name;	/* its module name */
 	struct args mod;	/* more elf2mod options (-e, -s, -g, ...) */
 	int no_jmptbl;		/* fail rather than use a jump table */
+	long jmptbl_spare;	/* unused entries more in a jump table (l68 -jmptblpad=) */
 	const char *who;	/* the program, for messages */
 };
 

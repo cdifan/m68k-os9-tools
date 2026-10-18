@@ -91,6 +91,7 @@ const char *opt_ldmap = NULL; // --ld-map: GNU ld's map of the link, for the ord
 unsigned char opt_namepadbyte = 0; // --name-pad-byte: the byte that pads an odd-length name
 unsigned char *opt_irefspad = NULL; // --irefs-pad: bytes after the M$IRefs table, before the CRC
 size_t opt_nirefspad = 0;
+long opt_jtspare = 0; // --jmptbl-spare: unused jump table entries (jmp 0) after the used ones
 #define DEFAULT_STACK 0x00000C00
 #define DEFAULT_REVS 1
 #define DEFAULT_EDIT 0
@@ -401,6 +402,7 @@ int opt(int *argc, char ***argv) {
 		{ "ld-map", required_argument, NULL, 'M' + 0x100 },
 		{ "name-pad-byte", required_argument, NULL, 'B' + 0x100 },
 		{ "irefs-pad", required_argument, NULL, 'I' + 0x100 },
+		{ "jmptbl-spare", required_argument, NULL, 'J' + 0x100 },
 		{ "help",  no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 },
 	};
@@ -468,6 +470,15 @@ int opt(int *argc, char ***argv) {
 			free(b);
 			break;
 		}
+		case 'J' + 0x100: {
+			char *end;
+			opt_jtspare = strtol(optarg, &end, 10);
+			if(end == optarg || *end || opt_jtspare < 0) {
+				printf("--jmptbl-spare=%s: expected a number of entries\n", optarg);
+				return 0;
+			}
+			break;
+		}
 		case 'I' + 0x100:
 			free(opt_irefspad);
 			if(!parse_hex_bytes(optarg, &opt_irefspad, &opt_nirefspad)) {
@@ -521,6 +532,8 @@ int opt(int *argc, char ***argv) {
 			printf("                         (M$IRefs) by object, the last first, as l68 lists them\n");
 			printf("      --name-pad-byte=HH the byte after an odd-length name (default 00)\n");
 			printf("      --irefs-pad=HEX    bytes after the M$IRefs table, before the CRC\n");
+			printf("      --jmptbl-spare=N   N unused jump table entries (jmp 0) after the used ones,\n");
+			printf("                         listed with them (the table must have room)\n");
 			printf("  A stack, entry point, data area, initialized data or trap entry that is\n");
 			printf("  nonzero but has no field in the chosen header is an error.\n");
 			printf("  -h, --help             show this help\n");
@@ -1007,9 +1020,15 @@ int main(int argc, char *argv[]) {
 				printf("%zu far calls need a jump table of %zu entries (%zu bytes): reserve _jmptbl to _ejmptbl in .data (now %zu entries)\n", nfar, ntargets, ntargets * 6, have_jt ? cap : 0);
 				return 1;
 			}
-			// the entries, with their addresses relocated like pointers
-			drefs = realloc(drefs, (ndrefs + ntargets) * sizeof(IdRef));
-			for(size_t k = 0; k < ntargets; k++) {
+			if(ntargets + (size_t)opt_jtspare > cap) {
+				printf("--jmptbl-spare=%ld: the jump table has %zu entries, %zu used\n", opt_jtspare, cap, ntargets);
+				return 1;
+			}
+			// the entries, with their addresses relocated like pointers;
+			// spare ones (--jmptbl-spare: some l68 -a links have them)
+			// jump to 0, also relocated
+			drefs = realloc(drefs, (ndrefs + ntargets + opt_jtspare) * sizeof(IdRef));
+			for(size_t k = 0; k < ntargets + (size_t)opt_jtspare; k++) {
 				uint32_t eoff = DOFF(jt + 6 * k);
 				unsigned char *e = (unsigned char*)vec->buf + iidata + eoff - idstart;
 				if(eoff < idstart || eoff + 6 > idend) {
@@ -1017,9 +1036,10 @@ int main(int argc, char *argv[]) {
 					return 1;
 				}
 				e[0] = 0x4E; e[1] = 0xF9;
-				uint32_t t = targets[k];
+				// (a spare one: the address that becomes offset 0 below)
+				uint32_t t = k < ntargets ? targets[k] : (uint32_t)(tvma - itext);
 				e[2] = t >> 24; e[3] = t >> 16; e[4] = t >> 8; e[5] = t;
-				if(targets[k] == ETEXT_TARGET) {
+				if(k < ntargets && targets[k] == ETEXT_TARGET) {
 					etext_entry = eoff + 2; // the address, filled in at the end
 				}
 				drefs[ndrefs].addr = eoff + 2;

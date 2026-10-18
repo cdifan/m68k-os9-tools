@@ -31,6 +31,7 @@ suitably linked ELF file (see "The ELF input").
 | `--ld-map=FILE` | GNU `ld`'s map of the link, for the order of the pointer tables and the jump table |
 | `--name-pad-byte=HH` | the byte after an odd-length module name (default 00) |
 | `--irefs-pad=HEX` | bytes after the pointer tables, before the CRC |
+| `--jmptbl-spare=N` | N unused jump table entries (`jmp 0`) after the used ones (the table must have room) |
 
 A stack, entry point, data area, initialized data or trap entry that is non-zero but has no field
 in the chosen header is an error.
@@ -219,6 +220,16 @@ and rof2elf put into a section `.r68dbg`, put together in link order), `-g` also
 
 - `c32`: `$BEEFCAFE`, a zero word, the program module's CRC as a long, the psects' debug areas;
 - `ucc`: `$CAFEBEEF`, the word 3, the CRC, a zero long, the areas.
+
+## Pad bytes
+
+For byte-identical rebuilds of old modules: `--name-pad-byte=HH` gives the byte that pads an
+odd-length module name to a word (default 0, as both Microware linkers on DOS and Windows write it;
+native OS-9 builds of `l68` copy the name in words from the command line, so their pad is whatever
+followed the name there); `--irefs-pad=HEX` writes bytes after the pointer tables, before the CRC,
+as some old modules have them; `--jmptbl-spare=N` writes N unused jump table entries (`jmp 0`, the
+module's start) after the used ones, listed among the pointers to code, as some of Ultra C's `l68
+-a` links have them.
 
 ## The owner
 

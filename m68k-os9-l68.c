@@ -47,7 +47,7 @@ enum kind {
 enum id {
 	O_A, O_B, O_C, O_E, O_F, O_G, O_GU, O_I, O_J, O_L, O_M, O_MM, O_MT, O_N, O_NN,
 	O_OO, O_O, O_P, O_R, O_RR, O_S, O_SS, O_T, O_V, O_W, O_X, O_Z, O_DIALECT,
-	O_NAMEPAD, O_IREFSPAD,
+	O_NAMEPAD, O_IREFSPAD, O_JMPTBLPAD,
 };
 
 #define C32	1	/* in C 3.2's l68 */
@@ -96,6 +96,7 @@ static const struct option options[] = {
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
 	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
 	{ "namepad", VALUE, "=<hex>", "The byte after an odd-length module name (default 00)", NULL, O_NAMEPAD, OURS },
+	{ "jmptblpad", VALUE, "=<n>", "With a jump table (-a), <n> unused entries (jmp 0) after the used ones", NULL, O_JMPTBLPAD, OURS },
 	{ "irefspad", VALUE, "=<hex>", "Bytes after the initialized data's pointer table (M$IRefs), before the CRC", NULL, O_IREFSPAD, OURS },
 };
 #define NOPTIONS (sizeof options / sizeof options[0])
@@ -129,6 +130,7 @@ static struct {
 	int c32;		/* -dialect=c32: library members in archive order */
 	const char *namepad;	/* -namepad= */
 	const char *irefspad;	/* -irefspad= */
+	long jmptblpad;		/* -jmptblpad= */
 } st;
 
 /* ----- Usage ----- */
@@ -305,6 +307,13 @@ static void apply(const struct option *o, const char *value)
 			error("-irefspad=%s: expected bytes in hex (an even number of digits)", value);
 		st.irefspad = value;
 		break;
+	case O_JMPTBLPAD: {
+		char *end;
+		st.jmptblpad = strtol(value, &end, 10);
+		if (end == value || *end != '\0' || st.jmptblpad < 0)
+			error("-jmptblpad=%s: expected a number of entries", value);
+		break;
+	}
 	}
 }
 
@@ -1018,6 +1027,11 @@ int main(int argc, char **argv)
 	l.module = output;
 	l.name = name;
 	l.no_jmptbl = !st.jmptbl;
+	l.jmptbl_spare = st.jmptblpad;
+	if (st.jmptblpad > 0) {
+		args_add(&l.mod, "--jmptbl-spare");
+		args_addf(&l.mod, "%ld", st.jmptblpad);
+	}
 	args_add(&l.mod, "--header");
 	args_add(&l.mod, header);
 	args_add(&l.mod, "--ld-map");
