@@ -2,6 +2,7 @@
 * each '@' counts 1, as r68 counts it. r68togas writes '@' as _at_ (gas takes no '@' in names),
 * and r68L counted that 4: @O was 5 long (move.l, not move.w). r68L now counts _at_ as 1 where
 * the source had an '@' renamed.
+* fixed: 3afabfd 2026-10-18 r68togas: \L of an argument with '@' passed on to a nested macro
 * expect text: 3afc404f 3afc3a23 3afc4142 3afc4f40 3afc4040 2afc00784079 4e71
 Tm macro
  ifgt \L1-1
