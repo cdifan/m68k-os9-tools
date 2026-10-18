@@ -1307,25 +1307,25 @@ int main(int argc, char *argv[]) {
 			if(!strcmp(bfd_asymbol_name(syms[i]), "_jmptbl")) jmptbl = bfd_asymbol_value(syms[i]);
 		}
 		// The ranks give the order at the same value, as in Microware's
-		// symbol modules (2026-10-18, from the original .stb files): Ultra
-		// C's l68 data before code, the underscored names before the plain
-		// ones, each by name (_bdata _enddata bdata end _btext btext); C 3.2's
-		// (listed in reverse) _jmptbl, end, bname, btext.
+		// symbol modules (2026-10-18, from the raw entry order of the
+		// original .stb files): Ultra C's l68 in the order it makes them
+		// (_bname _btext _bdata _enddata btext bdata end _jmptbl bname),
+		// after the program's; C 3.2's (listed in reverse) _jmptbl, end,
+		// bname, btext, before the program's (rank 0).
 		const StbSym ucclinker[] = {
-			{ (int32_t)dvma, 0x2001, "_bdata", 0 }, { (int32_t)(dvma + dend), 0x2001, "_enddata", 1 },
-			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 2 },
-			{ (int32_t)dvma, 0x2001, "bdata", 3 }, { (int32_t)(dvma + dend), 0x2001, "end", 4 },
-			{ (int32_t)iname, 0x2004, "_bname", 5 }, { 0, 0x2004, "_btext", 6 },
-			{ (int32_t)etextoff, 0x2004, "_etext", 7 },
-			{ (int32_t)iname, 0x2004, "bname", 8 }, { 0, 0x2004, "btext", 9 },
-			{ (int32_t)etextoff, 0x2004, "etext", 10 },
+			{ (int32_t)iname, 0x2004, "_bname", 0 }, { 0, 0x2004, "_btext", 1 },
+			{ (int32_t)dvma, 0x2001, "_bdata", 2 }, { (int32_t)(dvma + dend), 0x2001, "_enddata", 3 },
+			{ (int32_t)etextoff, 0x2004, "_etext", 4 },
+			{ 0, 0x2004, "btext", 5 }, { (int32_t)dvma, 0x2001, "bdata", 6 },
+			{ (int32_t)(dvma + dend), 0x2001, "end", 7 }, { (int32_t)jmptbl, 0x2001, "_jmptbl", 8 },
+			{ (int32_t)iname, 0x2004, "bname", 9 }, { (int32_t)etextoff, 0x2004, "etext", 10 },
 		};
 		const StbSym c32linker[] = {
-			{ 0, 0x2004, "btext", 0 },
-			{ (int32_t)iname, 0x2004, "bname", 1 },
-			{ (int32_t)etextoff, 0x2004, "etext", 2 },
-			{ (int32_t)(dvma + dend), 0x2001, "end", 3 },
-			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 4 },
+			{ 0, 0x2004, "btext", 1 },
+			{ (int32_t)iname, 0x2004, "bname", 2 },
+			{ (int32_t)etextoff, 0x2004, "etext", 3 },
+			{ (int32_t)(dvma + dend), 0x2001, "end", 4 },
+			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 5 },
 		};
 		const StbSym *linker0 = opt_stb == 2 ? ucclinker : c32linker;
 		const size_t nlinker0 = opt_stb == 2 ? sizeof(ucclinker) / sizeof(ucclinker[0]) : sizeof(c32linker) / sizeof(c32linker[0]);
@@ -1370,7 +1370,7 @@ int main(int argc, char *argv[]) {
 			if(type < 2) ss[nss].value = stb_data_value(ss[nss].value);
 			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0);
 			ss[nss].name = bfd_asymbol_name(s);
-			ss[nss].rank = opt_stb == 2 ? 0 : nlinker;
+			ss[nss].rank = 0;
 			nss++;
 		}
 		for(size_t k = 0; k < nlinker; k++) {

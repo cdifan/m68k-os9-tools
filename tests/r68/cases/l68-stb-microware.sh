@@ -2,7 +2,7 @@
 # l68, Ultra C's and 424 original .stb files): the symbol module's attr/rev $8001 whatever the
 # module's; _jmptbl only for modules that may have a jump table (programs, trap handlers, -i
 # system modules: not a driver); l68's own symbols at the same value in Microware's order (C 3.2:
-# end before btext; Ultra C: data before code, underscored first: _bdata bdata _btext btext); a
+# end before btext; Ultra C: in its order of making them, _btext _bdata btext bdata); a
 # data symbol in $8000..$FFFF sign-extended ($FFFF8004); a data label that a link-time expression
 # with an external names (Dat+Ext(a6)) flagged $2000 as referenced (C 3.2 style). Before: the
 # module's revision, _jmptbl everywhere, other orders, $00008004, and no flag there.
@@ -52,9 +52,9 @@ linked sys
 has_bytes prg.stb "$(printf '_jmptbl' | od -An -tx1 | hex)"
 lacks_bytes drv.stb "$(printf '_jmptbl' | od -An -tx1 | hex)"
 lacks_bytes drvu.stb "$(printf '_jmptbl' | od -An -tx1 | hex)"
-# (c) at 0 in the driver: end (data) before btext (code); Ultra C: _bdata bdata _btext btext
+# (c) at 0 in the driver: end before btext; Ultra C: _btext _bdata _enddata btext bdata end
 has_bytes drv.stb "00000000 2001 ........ 00000000 2004"
-has_bytes drvu.stb "00000000 2001 ........ 00000000 2001 ........ 00000000 2004 ........ 00000000 2004"
+has_bytes drvu.stb "00000000 2004 ........ 00000000 2001 ........ 00000000 2001 ........ 00000000 2004 ........ 00000000 2001 ........ 00000000 2001"
 # (e) the system module's data end, $8004 bytes from 0: $FFFF8004
 has_bytes sys.stb "ffff8004 2001"
 # (f) Dat5 (only in Dat5+Ext(a6)) flagged, as Dat: two data entries with $2000

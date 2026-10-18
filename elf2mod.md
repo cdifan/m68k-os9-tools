@@ -227,6 +227,10 @@ The two `l68`s write this a little differently, and `--stb=STYLE` follows either
   `end`, `_jmptbl`), then the other psects'; so the other psects' come first (in reverse link
   order), then its own, then the root psect's (within a psect, by name descending). Each symbol's
   object comes from `--ld-map`; without it, all count as the root psect's.
+- **`ucc`:** Ultra C's `l68`. It also defines `_btext`, `_bname`, `_etext`, `_bdata`/`bdata` (the
+  start of the data area) and `_enddata`, and doesn't flag referenced symbols. Symbols with the same
+  value are listed the program's first, in link order (within a psect by name), then the linker's
+  in the order it makes them (`_bname _btext _bdata _enddata btext bdata end _jmptbl bname`).
 
 ## The source debugger's file
 
