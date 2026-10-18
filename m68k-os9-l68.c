@@ -47,6 +47,7 @@ enum kind {
 enum id {
 	O_A, O_B, O_C, O_E, O_F, O_G, O_GU, O_I, O_J, O_L, O_M, O_MM, O_MT, O_N, O_NN,
 	O_OO, O_O, O_P, O_R, O_RR, O_S, O_SS, O_T, O_V, O_W, O_X, O_Z, O_DIALECT,
+	O_NAMEPAD, O_IREFSPAD,
 };
 
 #define C32	1	/* in C 3.2's l68 */
@@ -94,6 +95,8 @@ static const struct option options[] = {
 	{ "z", OPTVALUE, "[=<path>]", "Files and options from standard input or <path>", NULL, O_Z, C32 | UCC },
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
 	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
+	{ "namepad", VALUE, "=<hex>", "The byte after an odd-length module name (default 00)", NULL, O_NAMEPAD, OURS },
+	{ "irefspad", VALUE, "=<hex>", "Bytes after the initialized data's pointer table (M$IRefs), before the CRC", NULL, O_IREFSPAD, OURS },
 };
 #define NOPTIONS (sizeof options / sizeof options[0])
 
@@ -124,6 +127,8 @@ static struct {
 	long xalign;		/* -x= */
 	struct args files;	/* in order */
 	int c32;		/* -dialect=c32: library members in archive order */
+	const char *namepad;	/* -namepad= */
+	const char *irefspad;	/* -irefspad= */
 } st;
 
 /* ----- Usage ----- */
@@ -224,6 +229,20 @@ static long alignment(const char *option, const char *value)
 	return n;
 }
 
+/* The number of bytes in hex digits VALUE (a leading $ or 0x allowed), two
+ * digits to a byte; -1 if they aren't. */
+static long hex_bytes(const char *value)
+{
+	if (*value == '$')
+		value++;
+	else if (value[0] == '0' && (value[1] == 'x' || value[1] == 'X'))
+		value += 2;
+	size_t n = strlen(value);
+	if (n == 0 || n % 2 != 0 || strspn(value, "0123456789abcdefABCDEF") != n)
+		return -1;
+	return (long)(n / 2);
+}
+
 static void apply(const struct option *o, const char *value)
 {
 	switch (o->id) {
@@ -275,6 +294,16 @@ static void apply(const struct option *o, const char *value)
 		if (strcmp(value, "c32") != 0 && strcmp(value, "ucc") != 0)
 			error("-dialect=%s: expected ucc or c32", value);
 		st.c32 = strcmp(value, "c32") == 0;
+		break;
+	case O_NAMEPAD:
+		if (hex_bytes(value) != 1)
+			error("-namepad=%s: expected one byte in hex (two digits)", value);
+		st.namepad = value;
+		break;
+	case O_IREFSPAD:
+		if (hex_bytes(value) < 1)
+			error("-irefspad=%s: expected bytes in hex (an even number of digits)", value);
+		st.irefspad = value;
 		break;
 	}
 }
@@ -988,6 +1017,14 @@ int main(int argc, char **argv)
 		args_add(&l.mod, "-N");
 	if (st.raw)
 		args_add(&l.mod, "--raw");
+	if (st.namepad != NULL) {
+		args_add(&l.mod, "--name-pad-byte");
+		args_add(&l.mod, st.namepad);
+	}
+	if (st.irefspad != NULL) {
+		args_add(&l.mod, "--irefs-pad");
+		args_add(&l.mod, st.irefspad);
+	}
 	long xalign = st.xalign > st.align ? st.xalign : st.align;
 	if (xalign > 2 && type == 0x0B && !st.raw) {
 		/* A trap library's code stays at 0x48; l68 pads after its name

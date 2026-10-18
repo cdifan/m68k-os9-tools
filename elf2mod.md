@@ -29,6 +29,8 @@ suitably linked ELF file (see "The ELF input").
 | `--raw` | the module's body only: no header, name or CRC (see "Raw output") |
 | `--entry=none` | no entry point, whatever `__os9_entry` says |
 | `--ld-map=FILE` | GNU `ld`'s map of the link, for the order of the pointer tables and the jump table |
+| `--name-pad-byte=HH` | the byte after an odd-length module name (default 00) |
+| `--irefs-pad=HEX` | bytes after the pointer tables, before the CRC |
 
 A stack, entry point, data area, initialized data or trap entry that is non-zero but has no field
 in the chosen header is an error.

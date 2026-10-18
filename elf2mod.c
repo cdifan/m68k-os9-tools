@@ -88,6 +88,9 @@ int opt_raw = 0; // --raw: the module's body only, no header, name or CRC
 int opt_noentry = 0; // --entry=none: no entry point, whatever __os9_entry says
 int opt_namepad = 0; // --name-pad: zero bytes after the name (l68 -x on a trap library)
 const char *opt_ldmap = NULL; // --ld-map: GNU ld's map of the link, for the order of M$IRefs
+unsigned char opt_namepadbyte = 0; // --name-pad-byte: the byte that pads an odd-length name
+unsigned char *opt_irefspad = NULL; // --irefs-pad: bytes after the M$IRefs table, before the CRC
+size_t opt_nirefspad = 0;
 #define DEFAULT_STACK 0x00000C00
 #define DEFAULT_REVS 1
 #define DEFAULT_EDIT 0
@@ -302,6 +305,28 @@ size_t make_idrefs(Vec *vec, IdRef *refs, size_t nrefs, int for_text) {
 }
 
 // The OS-9 module CRC of the first len bytes.
+// Hex digits, two to a byte (an optional leading $ or 0x), into a new buffer.
+int parse_hex_bytes(const char *s, unsigned char **out, size_t *len) {
+	if(*s == '$') s++;
+	else if(s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+	size_t n = strlen(s);
+	if(n == 0 || n % 2) return 0;
+	unsigned char *b = malloc(n / 2);
+	for(size_t i = 0; i < n; i++) {
+		int c = s[i];
+		int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+		if(v < 0) {
+			free(b);
+			return 0;
+		}
+		if(i % 2) b[i / 2] |= v;
+		else b[i / 2] = v << 4;
+	}
+	*out = b;
+	*len = n / 2;
+	return 1;
+}
+
 uint32_t module_crc(const char *buf, size_t len) {
 	uint32_t crc = 0x00FFffff;
 	for(size_t i = 0; i < len; i++) {
@@ -368,6 +393,8 @@ int opt(int *argc, char ***argv) {
 		{ "entry", required_argument, NULL, 'E' + 0x100 },
 		{ "name-pad", required_argument, NULL, 'P' + 0x100 },
 		{ "ld-map", required_argument, NULL, 'M' + 0x100 },
+		{ "name-pad-byte", required_argument, NULL, 'B' + 0x100 },
+		{ "irefs-pad", required_argument, NULL, 'I' + 0x100 },
 		{ "help",  no_argument,       NULL, 'h' },
 		{ 0, 0, 0, 0 },
 	};
@@ -424,6 +451,24 @@ int opt(int *argc, char ***argv) {
 				return 0;
 			}
 			break;
+		case 'B' + 0x100: {
+			unsigned char *b;
+			size_t n;
+			if(!parse_hex_bytes(optarg, &b, &n) || n != 1) {
+				printf("--name-pad-byte=%s: expected one byte in hex (two digits)\n", optarg);
+				return 0;
+			}
+			opt_namepadbyte = b[0];
+			free(b);
+			break;
+		}
+		case 'I' + 0x100:
+			free(opt_irefspad);
+			if(!parse_hex_bytes(optarg, &opt_irefspad, &opt_nirefspad)) {
+				printf("--irefs-pad=%s: expected bytes in hex (an even number of digits)\n", optarg);
+				return 0;
+			}
+			break;
 		case 's':
 			opt_stack = strtol(optarg, NULL, 0);
 			break;
@@ -468,6 +513,8 @@ int opt(int *argc, char ***argv) {
 			printf("      --name-pad=BYTES   zero bytes after the name (as l68 -x= pads a trap library)\n");
 			printf("      --ld-map=FILE      GNU ld's map of the link: the initialized data's pointers\n");
 			printf("                         (M$IRefs) by object, the last first, as l68 lists them\n");
+			printf("      --name-pad-byte=HH the byte after an odd-length name (default 00)\n");
+			printf("      --irefs-pad=HEX    bytes after the M$IRefs table, before the CRC\n");
 			printf("  A stack, entry point, data area, initialized data or trap entry that is\n");
 			printf("  nonzero but has no field in the chosen header is an error.\n");
 			printf("  -h, --help             show this help\n");
@@ -793,7 +840,7 @@ int main(int argc, char *argv[]) {
 	if(!opt_raw && !namelast) {
 		iname = vec_append(vec, opt_name, strlen(opt_name) + 1);
 		// pad to align to word
-		vec_zero(vec, (strlen(opt_name) + 1) % 2);
+		if((strlen(opt_name) + 1) % 2) vec_append(vec, &opt_namepadbyte, 1);
 		vec_zero(vec, opt_namepad);
 	}
 	if(!opt_raw && opt_xalign > 1) {
@@ -824,7 +871,7 @@ int main(int argc, char *argv[]) {
 		iname = itext; // no name: bname is the code's start
 	} else if(namelast) {
 		iname = vec_append(vec, opt_name, strlen(opt_name) + 1);
-		vec_zero(vec, (strlen(opt_name) + 1) % 2);
+		if((strlen(opt_name) + 1) % 2) vec_append(vec, &opt_namepadbyte, 1);
 		vec_zero(vec, opt_namepad);
 	}
 
@@ -1036,6 +1083,13 @@ int main(int argc, char *argv[]) {
 	// idrefs
 	size_t iidrefs = has_prog ? make_idrefs(vec, drefs, ndrefs, 1) : 0;
 	if(has_prog) make_idrefs(vec, drefs, ndrefs, 0);
+	if(opt_nirefspad > 0) {
+		if(!has_prog) {
+			printf("--irefs-pad: the module has no M$IRefs table (--header)\n");
+			return 1;
+		}
+		vec_append(vec, opt_irefspad, opt_nirefspad);
+	}
 
 	// crc, with pad on head
 	size_t icrc = opt_raw ? 0 : vec_zero(vec, 4);
