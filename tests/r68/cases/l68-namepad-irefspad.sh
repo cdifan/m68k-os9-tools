@@ -2,6 +2,7 @@
 # OS-9 l68 builds copy the name in words, so the pad is whatever followed it); -irefspad=<hex>:
 # bytes after the initialized data's pointer tables (M$IRefs), before the CRC, as some old modules
 # have them. Both in hex, two digits to a byte; anything else is an error.
+# fixed: 5b3cec5 2026-10-18 l68: -namepad= and -irefspad= (elf2mod --name-pad-byte, --irefs-pad)
 src np <<'EOF'
  psect np,$101,$8000,1,0,entry
  vsect
