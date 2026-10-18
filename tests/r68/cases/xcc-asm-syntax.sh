@@ -4,6 +4,7 @@
 # (asmsyntax.c: the first decisive statement; any line end; undecided: r68). A gas .a goes to
 # GCC's assembler, an r68 one to m68k-os9-r68. -obj=gas or -obj=r68 without -a is an error.
 # Before, -a wrote gas syntax and every .a went to m68k-os9-r68.
+# fixed: f527463 2026-10-18 xcc -a writes r68 syntax (gastor68); -asm= and .a inputs of either syntax
 cat > t.c <<'EOF'
 int g = 3;
 static char buf[10];
