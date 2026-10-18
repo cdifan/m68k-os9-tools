@@ -203,6 +203,14 @@ format is described in appendix A of the *OS-9/68000 User-State Debugger* manual
 - the module header, its symbol field pointing to the STB header; the name;
 - the STB header: the format (0x0100), the program module's CRC (so the debugger can check that the
   symbols belong to the program), and the offset and number of the symbol entries;
+- the symbol entries, by value: a 4-byte value, a 2-byte type (0 uninitialized data, 1 initialized
+  data, 2 uninitialized remote data, 3 initialized remote data, 4 code, 6 absolute) and the 4-byte
+  offset of the name. Code symbols are offsets in the module, data symbols a6-relative; a
+  (non-remote) data symbol's value from `$8000` to `$FFFF` (a module's unbiased data area beyond
+  32 KB) is sign-extended from 16 bits (`$FFFF8004`), larger ones are kept, as `l68` writes them.
+  Static symbols, `__os9_*`, `_ejmptbl`, link-time expressions and section aliases (`r68x_*`,
+  `r68l_*`, see [r68togas.md](r68togas.md)) and equates aren't listed: neither `l68` lists equates,
+  though the format has a type for them;
 - the symbols the linker defines, with type flag 0x2000: `btext` (0), `bname` (the module name),
   `etext` (the module size), `end` (the end of the data area) and, for modules with the program
   header's layout (programs, trap libraries, `-i` system modules), `_jmptbl`;
@@ -211,6 +219,14 @@ The symbol module's own attributes and revision are `$8001` (reentrant, revision
 program module's, as both `l68`s write them.
 
 The two `l68`s write this a little differently, and `--stb=STYLE` follows either:
+
+- **`c32`** (the default): Microware C 3.2's `l68`. The type flag 0x2000 also marks the symbols
+  other psects refer to: `elf2mod` sets it on the symbols relocations refer to, also those named in
+  a link-time expression a relocation uses. Symbols with the same value are listed in reverse order
+  of definition: `l68` defines the root psect's symbols, then its own (`btext`, `bname`, `etext`,
+  `end`, `_jmptbl`), then the other psects'; so the other psects' come first (in reverse link
+  order), then its own, then the root psect's (within a psect, by name descending). Each symbol's
+  object comes from `--ld-map`; without it, all count as the root psect's.
 
 ## The source debugger's file
 

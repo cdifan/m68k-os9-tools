@@ -296,6 +296,8 @@ name (`cdilogo.img`, `font1.ft`; Sony's `.Mod` code modules keep theirs). `m68k-
 ## Limitations
 
 - No `.dbg` source-level debug file; `-g` gives the symbol module (`.stb`).
+- Long data and code offsets (`-k=...l`, `-k=...cl`) and adhesive modules (`-bg`) aren't
+  available.
 - One source file with more than 32 KB of code can't be compiled (see "Linking").
 
 ## Tests

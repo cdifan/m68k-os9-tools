@@ -374,6 +374,14 @@ typedef struct stbsym {
 // By value; at the same value, as l68 lists them: Ultra C's in the order
 // it defines them (linker symbols first, then the others in definition
 // order, which in ROFs is by name), Microware C 3.2's in reverse.
+// A data symbol's value in a symbol module: one in $8000..$FFFF (a module's
+// unbiased data area beyond 32K) sign-extended from 16 bits, as l68 writes
+// it ($FFFF8004); larger ones (a ROM's) and remote data as they are (seen in
+// the original .stb files, 2026-10-18).
+int32_t stb_data_value(int32_t v) {
+	return (uint32_t)v >= 0x8000 && (uint32_t)v <= 0xFFFF ? v - 0x10000 : v;
+}
+
 int stb_reverse;
 int cmp_stbsym(const void *a, const void *b) {
 	const StbSym *p = a, *q = b;
@@ -1259,27 +1267,78 @@ int main(int argc, char *argv[]) {
 	// refer to (here: that relocations refer to); Ultra C's l68 also
 	// defines _btext, _bname, _etext, _bdata, bdata and _enddata.
 	if(opt_stb) {
+		// A symbol in a link-time expression that a relocation uses
+		// (Dat+Ext(a6): the relocation names r68x_..., .r68x has
+		// "r68x_...=Dat+Ext") is referenced too: C 3.2's l68 flags it
+		// (measured 2026-10-18).
+		asection *xsec = bfd_get_section_by_name(abfd, ".r68x");
+		bfd_byte *xbuf = NULL;
+		if(xsec && bfd_malloc_and_get_section(abfd, xsec, &xbuf)) {
+			size_t xlen = bfd_section_size(xsec);
+			for(long i = 0; i < nsyms; i++) {
+				const char *xn = bfd_asymbol_name(syms[i]);
+				if(!refd[i] || strncmp(xn, "r68x_", 5)) continue;
+				size_t nl = strlen(xn);
+				for(size_t p = 0; p + nl < xlen; p++) {
+					if((p > 0 && xbuf[p - 1] != '\n') || memcmp(xbuf + p, xn, nl) || xbuf[p + nl] != '=') continue;
+					// the expression's names, up to the line's end
+					size_t q = p + nl + 1;
+					while(q < xlen && xbuf[q] != '\n') {
+						if(isdigit(xbuf[q]) || xbuf[q] == '$') { // a number (0x10, $1F)
+							q++;
+							while(q < xlen && isalnum(xbuf[q])) q++;
+							continue;
+						}
+						if(!(isalpha(xbuf[q]) || xbuf[q] == '_' || xbuf[q] == '.' || xbuf[q] == '@')) { q++; continue; }
+						size_t st0 = q;
+						while(q < xlen && (isalnum(xbuf[q]) || xbuf[q] == '_' || xbuf[q] == '.' || xbuf[q] == '@' || xbuf[q] == '$')) q++;
+						for(long j = 0; j < nsyms; j++) {
+							const char *jn = bfd_asymbol_name(syms[j]);
+							if(strlen(jn) == q - st0 && !memcmp(jn, xbuf + st0, q - st0)) refd[j] = 1;
+						}
+					}
+					break;
+				}
+			}
+			free(xbuf);
+		}
 		bfd_vma jmptbl = dvma + dend;
 		for(long i = 0; i < nsyms; i++) {
 			if(!strcmp(bfd_asymbol_name(syms[i]), "_jmptbl")) jmptbl = bfd_asymbol_value(syms[i]);
 		}
+		// The ranks give the order at the same value, as in Microware's
+		// symbol modules (2026-10-18, from the original .stb files): Ultra
+		// C's l68 data before code, the underscored names before the plain
+		// ones, each by name (_bdata _enddata bdata end _btext btext); C 3.2's
+		// (listed in reverse) _jmptbl, end, bname, btext.
 		const StbSym ucclinker[] = {
-			{ (int32_t)dvma, 0x2001, "_bdata", 0 }, { (int32_t)dvma, 0x2001, "bdata", 1 },
-			{ (int32_t)(dvma + dend), 0x2001, "_enddata", 2 }, { (int32_t)(dvma + dend), 0x2001, "end", 3 },
-			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 4 },
-			{ 0, 0x2004, "_btext", 5 }, { 0, 0x2004, "btext", 6 },
-			{ (int32_t)iname, 0x2004, "_bname", 7 }, { (int32_t)iname, 0x2004, "bname", 8 },
-			{ (int32_t)etextoff, 0x2004, "_etext", 9 }, { (int32_t)etextoff, 0x2004, "etext", 10 },
+			{ (int32_t)dvma, 0x2001, "_bdata", 0 }, { (int32_t)(dvma + dend), 0x2001, "_enddata", 1 },
+			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 2 },
+			{ (int32_t)dvma, 0x2001, "bdata", 3 }, { (int32_t)(dvma + dend), 0x2001, "end", 4 },
+			{ (int32_t)iname, 0x2004, "_bname", 5 }, { 0, 0x2004, "_btext", 6 },
+			{ (int32_t)etextoff, 0x2004, "_etext", 7 },
+			{ (int32_t)iname, 0x2004, "bname", 8 }, { 0, 0x2004, "btext", 9 },
+			{ (int32_t)etextoff, 0x2004, "etext", 10 },
 		};
 		const StbSym c32linker[] = {
-			{ (int32_t)(dvma + dend), 0x2001, "end", 0 },
-			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 1 },
-			{ 0, 0x2004, "btext", 2 },
-			{ (int32_t)iname, 0x2004, "bname", 3 },
-			{ (int32_t)etextoff, 0x2004, "etext", 4 },
+			{ 0, 0x2004, "btext", 0 },
+			{ (int32_t)iname, 0x2004, "bname", 1 },
+			{ (int32_t)etextoff, 0x2004, "etext", 2 },
+			{ (int32_t)(dvma + dend), 0x2001, "end", 3 },
+			{ (int32_t)jmptbl, 0x2001, "_jmptbl", 4 },
 		};
-		const StbSym *linker = opt_stb == 2 ? ucclinker : c32linker;
-		const size_t nlinker = opt_stb == 2 ? sizeof(ucclinker) / sizeof(ucclinker[0]) : sizeof(c32linker) / sizeof(c32linker[0]);
+		const StbSym *linker0 = opt_stb == 2 ? ucclinker : c32linker;
+		const size_t nlinker0 = opt_stb == 2 ? sizeof(ucclinker) / sizeof(ucclinker[0]) : sizeof(c32linker) / sizeof(c32linker[0]);
+		// _jmptbl only where the module may have a jump table: programs,
+		// trap handlers and -i system modules, the program header's layout
+		// (both l68s, measured 2026-10-18; drivers, descriptors, file
+		// managers and other system modules have none)
+		StbSym linker[16];
+		size_t nlinker = 0;
+		for(size_t k = 0; k < nlinker0; k++) {
+			if(!strcmp(linker0[k].name, "_jmptbl") && !opt_raw && opt_header < 0x48) continue;
+			linker[nlinker++] = linker0[k];
+		}
 		const char *const reserved[] = { "_bdata", "bdata", "_enddata", "end", "_jmptbl", "_btext", "btext", "_bname", "bname", "_etext", "etext", "_ejmptbl", "__jmptbl_size" };
 		stb_reverse = opt_stb == 1;
 		StbSym *ss = malloc((nsyms + nlinker) * sizeof(StbSym));
@@ -1308,10 +1367,14 @@ int main(int argc, char *argv[]) {
 			else if(sec && sec == rbss) type = 2;
 			else continue; // equates: both l68s list none (checked 2026-10-12 with -g)
 			ss[nss].value = type == 4 ? (int32_t)(itext + bfd_asymbol_value(s) - tvma) : (int32_t)bfd_asymbol_value(s);
+			if(type < 2) ss[nss].value = stb_data_value(ss[nss].value);
 			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0);
 			ss[nss].name = bfd_asymbol_name(s);
 			ss[nss].rank = opt_stb == 2 ? 0 : nlinker;
 			nss++;
+		}
+		for(size_t k = 0; k < nlinker; k++) {
+			if((ss[k].type & 0xFF) == 1) ss[k].value = stb_data_value(ss[k].value);
 		}
 		qsort(ss, nss, sizeof(StbSym), cmp_stbsym);
 
@@ -1348,8 +1411,10 @@ int main(int argc, char *argv[]) {
 		sh->accs = BE16(0x0555);
 		sh->type = 4; // data
 		sh->lang = 0;
+		// reentrant, revision 1, whatever the module's: as both l68s write
+		// it (367 of 424 original symbol modules; the rest fixmod'ed later)
 		sh->attr = 0x80;
-		sh->revs = mh->revs;
+		sh->revs = 1;
 		sh->edit = mh->edit;
 		finish_module(sv, isname, iscrc);
 
