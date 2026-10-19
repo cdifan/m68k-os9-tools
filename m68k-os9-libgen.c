@@ -614,8 +614,8 @@ static void read_rofs(const char *path, struct rpsect **ps, int *nps)
 		r->idata = rget(&in, 4);
 		r->code = rget(&in, 4);
 		r->stack = rget(&in, 4);
-		if (rget(&in, 4) != 0 || rget(&in, 4) != 0)
-			;		/* entry points: libgen doesn't keep them */
+		rget(&in, 4);		/* entry offset, */
+		rget(&in, 4);		/* trap offset: libgen doesn't keep them */
 		r->rstatics = rget(&in, 4);
 		r->ridata = rget(&in, 4);
 		r->debug = rget(&in, 4);
