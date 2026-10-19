@@ -1893,12 +1893,27 @@ static void gl_split(const char *line, struct gline *g)
 	while (*t == ' ' || *t == '\t')
 		t++;
 	if (starts(t, ";[r68: ")) {
-		/* the first ] before a blank or the line's end (a ] in the
-		 * comment after it is the comment's: argv[0] method?) */
-		const char *s = t + 7, *end = NULL;
-		for (const char *c = s; *c && end == NULL; c++)
-			if (*c == ']' && (c[1] == '\0' || isspace((unsigned char)c[1])))
-				end = c;
+		/* the first ] before a blank or the line's end outside the
+		 * statement's strings ("[%2d] " is a string's; a ] in the comment
+		 * after the note is the comment's: argv[0] method?); where a quote
+		 * is left open, the first such ] at all */
+		const char *s = t + 7, *end = NULL, *first = NULL;
+		char quote = 0;
+		for (const char *c = s; *c && end == NULL; c++) {
+			if (quote) {
+				if (*c == quote)
+					quote = 0;
+			} else if (*c == '"' || *c == '\'')
+				quote = *c;
+			if (*c == ']' && (c[1] == '\0' || isspace((unsigned char)c[1]))) {
+				if (first == NULL)
+					first = c;
+				if (!quote)
+					end = c;
+			}
+		}
+		if (end == NULL)
+			end = first;
 		if (end != NULL) {
 			g->tag = xstrndup(s, end - s);
 			q = end + 1;
