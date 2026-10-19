@@ -1,0 +1,10 @@
+* A statement r68togas keeps in a note (;[r68: ...], here for the empty string) whose string
+* holds a ] before a blank: gastor68 ends the note at the first such ] outside the statement's
+* strings, so the round trip gives the statement back whole (it cut it at the string's ]: dc.b
+* "[%2d ",$00,""], which r68 refuses).
+* fixed: f0be8bc 2026-10-19 gastor68: a note's end outside the statement's strings
+* expect text: 5b253264 5d20005b 785d2000 61004e71
+ psect t,0,0,0,0,0
+ dc.b "[%2d] ",$00,""
+ dc.b "[x] ",0,"",'a'
+ ends
