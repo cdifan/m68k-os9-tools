@@ -22,9 +22,11 @@
 
 BFDPATH=/usr/x86_64-pc-linux-gnu/m68k-elfos9
 DESTDIR=/usr
-EXE=elf2mod
-EXE_ROF2ELF=rof2elf
-EXE_ELF2ROF=elf2rof
+# The programs' file name suffix: .exe for Windows (mingw-w64) builds
+EXEEXT=
+EXE=elf2mod$(EXEEXT)
+EXE_ROF2ELF=rof2elf$(EXEEXT)
+EXE_ELF2ROF=elf2rof$(EXEEXT)
 # Source translators between Microware's r68 and gas
 TRANSLATORS=r68togas gastor68
 # The front ends for Microware's tools (xcc, l68, ...), on code they share;
@@ -42,23 +44,30 @@ CFLAGS=-g -I$(BFDPATH)/include -Wall -Wextra
 LDFLAGS=
 LIBS=$(BFDPATH)/lib/libbfd.a -liberty -lz -ldl
 INSTALL=install
+# How a program is installed (a cross build may need its own strip:
+# install --strip-program=x86_64-w64-mingw32-strip -s)
+INSTALL_PROGRAM=$(INSTALL) -s
+# How install makes the other names of a program, in $(DESTDIR)/bin:
+# cp where there are no symbolic links (Windows)
+LN=ln -sf
 RM=rm
 
-.PHONY: all clean
+TRANSLATORS_X=$(TRANSLATORS:%=%$(EXEEXT))
+FRONTENDS_X=$(FRONTENDS:%=%$(EXEEXT))
+PROGRAMS=$(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS_X) $(FRONTENDS_X)
 
-all: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
+.PHONY: all install clean
 
-install: $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
-	$(INSTALL) -s $(EXE) $(DESTDIR)/bin/$(EXE)
-	$(INSTALL) -s $(EXE_ROF2ELF) $(DESTDIR)/bin/$(EXE_ROF2ELF)
-	$(INSTALL) -s $(EXE_ELF2ROF) $(DESTDIR)/bin/$(EXE_ELF2ROF)
-	for t in $(TRANSLATORS) $(FRONTENDS); do $(INSTALL) -s $$t $(DESTDIR)/bin/$$t; done
-	for t in $(OS9_TOOLS); do ln -sf m68k-elfos9-$$t $(DESTDIR)/bin/m68k-os9-$$t; done
+all: $(PROGRAMS)
+
+install: $(PROGRAMS)
+	for p in $(PROGRAMS); do $(INSTALL_PROGRAM) $$p $(DESTDIR)/bin/$$p; done
+	cd $(DESTDIR)/bin && for t in $(OS9_TOOLS); do $(LN) m68k-elfos9-$$t$(EXEEXT) m68k-os9-$$t$(EXEEXT); done
 	# m68k-os9-xcc in Ultra C mode
-	ln -sf m68k-os9-xcc $(DESTDIR)/bin/m68k-os9-ucc
+	cd $(DESTDIR)/bin && $(LN) m68k-os9-xcc$(EXEEXT) m68k-os9-ucc$(EXEEXT)
 
 clean:
-	-$(RM) $(EXE) $(EXE_ROF2ELF) $(EXE_ELF2ROF) $(TRANSLATORS) $(FRONTENDS)
+	-$(RM) $(PROGRAMS)
 
 $(EXE): elf2mod.c r68x_note.c r68x_note.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c $(LIBS)
@@ -70,8 +79,8 @@ $(EXE_ROF2ELF): rof2elf.c r68x_note.c r68x_note.h
 $(EXE_ELF2ROF): elf2rof.c r68x_note.c r68x_note.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c
 
-$(TRANSLATORS): %: %.c r68x_note.c r68x_note.h
+$(TRANSLATORS_X): %$(EXEEXT): %.c r68x_note.c r68x_note.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< r68x_note.c
 
-$(FRONTENDS): %: %.c $(FE_SRCS) $(FE_HDRS)
+$(FRONTENDS_X): %$(EXEEXT): %.c $(FE_SRCS) $(FE_HDRS)
 	$(CC) $(CFLAGS) $(LIBIBERTY_CFLAGS) $(LDFLAGS) -o $@ $< $(FE_SRCS) -liberty
