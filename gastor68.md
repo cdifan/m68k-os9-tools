@@ -221,5 +221,8 @@ been checked for either.
 
       TOOLS=<dir> GASTOR68=<gastor68> [R68=<r68.exe> R68WORK=/mnt/c/...] bash tests/gastor68/run.sh
 
+- **`tests/r68`**: every assembler case is also translated by r68togas and given back by
+  gastor68; the text must be the source's (but for blanks and parentheses) and, with `R68`, the
+  object Ultra C's `r68` makes of it the source's own.
 - **`make check-gastor68`** in `test/abi-exec`: each test's C side compiled with `-S`, translated by
   gastor68, translated back by r68togas, assembled by `gas`, linked and run, at `-O0` and `-O2`.
