@@ -222,6 +222,9 @@ format is described in appendix A of the *OS-9/68000 User-State Debugger* manual
 - the symbols the linker defines, with type flag 0x2000: `btext` (0), `bname` (the module name),
   `etext` (the module size), `end` (the end of the data area) and, for modules with the program
   header's layout (programs, trap libraries, `-i` system modules), `_jmptbl`;
+- the type flag 0x1000 on each name a far reference uses through the jump table; an alias at the
+  same address that isn't used so doesn't get it;
+- the names, then the module CRC.
 
 The symbol module's own attributes and revision are `$8001` (reentrant, revision 1), whatever the
 program module's, as both `l68`s write them.

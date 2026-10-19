@@ -924,6 +924,7 @@ int main(int argc, char *argv[]) {
 	arelent **trels = malloc(trelsz);
 	long ntrels = bfd_canonicalize_reloc(abfd, text, trels, syms);
 	char *refd = calloc(nsyms + 1, 1); // symbols that relocations refer to (for -g)
+	char *jtrefd = calloc(nsyms + 1, 1); // symbols that far references reach through _jmptbl (for -g)
 	LsRef *tls = NULL, *dls = NULL; // references to linker symbols in .text, data
 	size_t ntls = 0, ndls = 0;
 	CodeRef *crefs = NULL; // absolute references from the code to code labels
@@ -1272,6 +1273,7 @@ int main(int argc, char *argv[]) {
 				}
 				continue;
 			}
+			if(rel->sym_ptr_ptr >= syms && rel->sym_ptr_ptr < syms + nsyms) jtrefd[rel->sym_ptr_ptr - syms] = 1;
 			bfd_vma evma = jt + 6 * k;
 			int32_t d = (int32_t)(evma + extra);
 			if(d < -0x8000 || 0x7FFF < d) {
@@ -1616,7 +1618,11 @@ int main(int argc, char *argv[]) {
 	// added, flagged 0x2000: Microware C 3.2's l68 defines btext, bname,
 	// etext, end and _jmptbl, and also flags the symbols that other psects
 	// refer to (here: that relocations refer to); Ultra C's l68 also
-	// defines _btext, _bname, _etext, _bdata, bdata and _enddata.
+	// defines _btext, _bname, _etext, _bdata, bdata and _enddata. Both
+	// flag 0x1000 each name that a far reference uses through the jump
+	// table (an alias at the same address that is not used so stays
+	// unflagged; measured 2026-10-19 on both and the native l68 eds. 50,
+	// 62, 64).
 	if(opt_stb) {
 		// A symbol in a link-time expression that a relocation uses
 		// (Dat+Ext(a6): the relocation names r68x_..., .r68x has
@@ -1723,7 +1729,7 @@ int main(int argc, char *argv[]) {
 			else continue; // equates: both l68s list none (checked 2026-10-12 with -g)
 			ss[nss].value = type == 4 ? (int32_t)(itext + bfd_asymbol_value(s) - tvma) : (int32_t)bfd_asymbol_value(s);
 			if(type < 2) ss[nss].value = stb_data_value(ss[nss].value);
-			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0);
+			ss[nss].type = type | (opt_stb == 1 && refd[i] ? 0x2000 : 0) | (jtrefd[i] ? 0x1000 : 0);
 			ss[nss].name = bfd_asymbol_name(s);
 			// its object (the map's symbol lines: also a label at an
 			// object's end, where the next one's sections start)
