@@ -5146,7 +5146,9 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		free(unesc);
 		return;
 	}
-	char base[32], size;
+	/* longer than any mnemonic or directive (ftrapngle: 9), so a macro
+	 * name cut to fit never equals one */
+	char base[16], size;
 	if (l.op)
 		op_parts(l.op, base, sizeof base, &size);
 	else
@@ -6104,7 +6106,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		if (st.ext_long && is_branch(base) && symstart((unsigned char)l.args[0]) &&
 		    strspn(l.args, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$@.") == strlen(l.args) &&
 		    external_name(l.args, strlen(l.args))) {
-			char opb_bt[16];
+			char opb_bt[sizeof base + 4]; /* base with a prefix or suffix */
 			/* -bt: a branch to an external long, whatever its size
 			 * (Ultra C's r68, measured 2026-10-18): bra.l, bsr.l,
 			 * b<cc>.l from the 68020 on; on a 68000 or 68010 through
@@ -6169,7 +6171,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 		int absolute = strcmp(base, "jsr") == 0 || strcmp(base, "jmp") == 0 || strcmp(base, "lea") == 0 ||
 			strcmp(base, "pea") == 0;
 		const char *op = l.op;
-		char opb[16];
+		char opb[sizeof base + 4]; /* base with a prefix or suffix */
 		size_t an = strlen(l.args);
 		if ((strcmp(base, "ori") == 0 || strcmp(base, "andi") == 0 || strcmp(base, "eori") == 0) && size == 'w' &&
 		    an > 4 && strcasecmp(l.args + an - 4, ",ccr") == 0) {
