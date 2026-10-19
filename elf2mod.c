@@ -202,6 +202,34 @@ typedef struct inputsec {
 	int text;
 } InputSec;
 
+// A number "0x..." of GNU ld's map into V, as wide as ld wrote it (a 64-bit
+// ld writes addresses sign-extended, as BFD's own values are). 0 if S isn't
+// such a number.
+static int map_hex(const char *s, uint64_t *v) {
+	if(s[0] != '0' || (s[1] != 'x' && s[1] != 'X') || !isxdigit((unsigned char)s[2])) return 0;
+	char *end;
+	*v = strtoull(s + 2, &end, 16);
+	return *end == '\0';
+}
+
+// An input section's line in GNU ld's map (" .data  0x... 0x... file", or
+// the name alone, the rest on the next line, which this then reads; also,
+// as before, when no number follows the name): NAME, START, SIZE, FILE; the
+// number of these found in order, as sscanf counts them (4: all).
+static int map_insec(FILE *fp, char *line, int linesz, char *name, uint64_t *start, uint64_t *size, char *file) {
+	char a[32], b[32];
+	int n = sscanf(line, " %255s %31s %31s %511s", name, a, b, file);
+	int k = n >= 1;
+	if((n == 1 || (n >= 2 && !map_hex(a, start))) && fgets(line, linesz, fp)) {
+		n = 1 + sscanf(line, " %31s %31s %511s", a, b, file);
+	}
+	if(n >= 2 && map_hex(a, start)) {
+		k = 2;
+		if(n >= 3 && map_hex(b, size)) k = n >= 4 ? 4 : 3;
+	}
+	return k;
+}
+
 // The objects' parts of .data and .remote.data in GNU ld's map MAP (with
 // ALL, of every output section): their input sections (" .data  0x... 0x...
 // file", the name alone on a line when long, the rest on the next); the
@@ -226,10 +254,8 @@ long read_ldmap(const char *map, InputSec **secs, int all) {
 			continue;
 		}
 		if(line[0] != ' ' || line[1] != '.') continue;
-		unsigned long long start, size;
-		int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &start, &size, file);
-		if(k == 1 && fgets(line, sizeof line, fp))
-			k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &start, &size, file);
+		uint64_t start, size;
+		int k = map_insec(fp, line, sizeof line, name, &start, &size, file);
 		if(k != 4) continue;
 		int f;
 		for(f = 0; f < nseen && strcmp(seen[f], file); f++);
@@ -248,10 +274,8 @@ long read_ldmap(const char *map, InputSec **secs, int all) {
 		}
 		if(!in_data || line[0] != ' ' || line[1] != '.') continue;
 		char name[256], file[512];
-		unsigned long long start = 0, size = 0;
-		int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &start, &size, file);
-		if(k == 1 && fgets(line, sizeof line, fp))
-			k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &start, &size, file);
+		uint64_t start = 0, size = 0;
+		int k = map_insec(fp, line, sizeof line, name, &start, &size, file);
 		if(k != 4 || size == 0) continue;
 		int s, l;
 		for(s = 0; s < nseen && strcmp(seen[s], file); s++);
@@ -299,10 +323,8 @@ long read_ldmap_text(const char *map, const char *ranksfile, InputSec **secs, in
 		}
 		if(!in_text || line[0] != ' ' || line[1] != '.') continue;
 		char name[256], file[512];
-		unsigned long long start = 0, size = 0;
-		int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &start, &size, file);
-		if(k == 1 && fgets(line, sizeof line, fp))
-			k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &start, &size, file);
+		uint64_t start = 0, size = 0;
+		int k = map_insec(fp, line, sizeof line, name, &start, &size, file);
 		if(k != 4 || size == 0) continue;
 		int f;
 		for(f = 0; f < nfiles && strcmp(files[f], file); f++);
@@ -340,14 +362,12 @@ long read_ldmap_syms(const char *map, char ***names, int **objs) {
 	*names = NULL;
 	*objs = NULL;
 	while(fgets(line, sizeof line, fp)) {
-		char name[256], file[512];
-		unsigned long long a, b;
+		char name[256], file[512], h[32];
+		uint64_t a, b;
 		if(line[0] == ' ' && line[1] == '.') {
 			// an input section: " .text 0x.. 0x.. file", or the name
 			// alone, the rest on the next line
-			int k = sscanf(line, " %255s 0x%llx 0x%llx %511s", name, &a, &b, file);
-			if(k == 1 && fgets(line, sizeof line, fp))
-				k = 1 + sscanf(line, " 0x%llx 0x%llx %511s", &a, &b, file);
+			int k = map_insec(fp, line, sizeof line, name, &a, &b, file);
 			cur = -1;
 			if(k != 4) continue;
 			int f;
@@ -364,7 +384,7 @@ long read_ldmap_syms(const char *map, char ***names, int **objs) {
 			continue;
 		}
 		if(cur < 0 || strchr(line, '=') || strchr(line, '(')) continue; // script assignments
-		if(sscanf(line, " 0x%llx %255s", &a, name) != 2) continue;
+		if(sscanf(line, " %31s %255s", h, name) != 2 || !map_hex(h, &a)) continue;
 		*names = realloc(*names, (n + 1) * sizeof(char*));
 		*objs = realloc(*objs, (n + 1) * sizeof(int));
 		(*names)[n] = strdup(name);
@@ -947,7 +967,7 @@ int main(int argc, char *argv[]) {
 			// measured 2026-10-15; as a code label's, see CodeRef)
 			if(rel->howto->type != 4 /* R_68K_PC32 */ && rel->howto->type != 5 /* R_68K_PC16 */ &&
 			   rel->howto->type != 1 /* R_68K_32 */ && rel->howto->type != 2 /* R_68K_16 */) {
-				printf("%s at .text+%08lx: only PC-relative and 16- and 32-bit references to %s are supported\n", rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name);
+				printf("%s at .text+%08lx: only PC-relative and 16- and 32-bit references to %s are supported\n", rel->howto->name, (unsigned long)rel->address, rel->sym_ptr_ptr[0]->name);
 				return 1;
 			}
 			tls = realloc(tls, (ntls + 1) * sizeof(LsRef));
@@ -955,7 +975,7 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 		if(bfd_is_und_section(ssec)) {
-			printf("undefined symbol %s (.text+%08lx)\n", rel->sym_ptr_ptr[0]->name, rel->address);
+			printf("undefined symbol %s (.text+%08lx)\n", rel->sym_ptr_ptr[0]->name, (unsigned long)rel->address);
 			return 1;
 		}
 		if(!opt_raw && ssec == text && (rel->howto->type == 1 /* R_68K_32 */ || rel->howto->type == 2 /* R_68K_16 */
@@ -968,7 +988,7 @@ int main(int argc, char *argv[]) {
 		int constant =bfd_is_abs_section(ssec) || ssec == data || ssec == bss || (ssec && (ssec == rdata || ssec == rbss));
 		if(!(ssec == text || rel->howto->type == 2 /* R_68K_16(%a6) */
 		     || ((rel->howto->type == 1 /* R_68K_32 */ || rel->howto->type == 3 /* R_68K_8 */) && constant))) {
-			printf(".text inter-section relocation not allowed: %s %08lx %s@%s+%08lx\n", rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name, rel->sym_ptr_ptr[0]->section->name, rel->addend);
+			printf(".text inter-section relocation not allowed: %s %08lx %s@%s+%08lx\n", rel->howto->name, (unsigned long)rel->address, rel->sym_ptr_ptr[0]->name, rel->sym_ptr_ptr[0]->section->name, (unsigned long)rel->addend);
 			return 1;
 		}
 		// The value must fit its field: a6-relative 16 bits (more than 64K
@@ -984,7 +1004,7 @@ int main(int argc, char *argv[]) {
 			case 6: /* R_68K_PC8 */ v -= (int64_t)(int32_t)(tvma + rel->address); bad = v < -0x80 || v > 0x7F; break;
 			}
 			if(bad) {
-				printf("%s at .text+%08lx doesn't fit: %s%+ld = %lld\n", rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name, (long)rel->addend, (long long)v);
+				printf("%s at .text+%08lx doesn't fit: %s%+ld = %ld\n", rel->howto->name, (unsigned long)rel->address, rel->sym_ptr_ptr[0]->name, (long)rel->addend, (long)v);
 				return 1;
 			}
 		}
@@ -1004,7 +1024,7 @@ int main(int argc, char *argv[]) {
 		for(long i = 0; i < ndrels; i++) {
 			arelent *rel = drels[i];
 			if(rel->howto->type != 1 /* R_68K_32 */) {
-				printf("%s relocation other than R_68K_32 not allowed: %s %08lx %s@%s+%08lx\n", sec->name, rel->howto->name, rel->address, rel->sym_ptr_ptr[0]->name, rel->sym_ptr_ptr[0]->section->name, rel->addend);
+				printf("%s relocation other than R_68K_32 not allowed: %s %08lx %s@%s+%08lx\n", sec->name, rel->howto->name, (unsigned long)rel->address, rel->sym_ptr_ptr[0]->name, rel->sym_ptr_ptr[0]->section->name, (unsigned long)rel->addend);
 				return 1;
 			}
 			if(rel->sym_ptr_ptr >= syms && rel->sym_ptr_ptr < syms + nsyms) refd[rel->sym_ptr_ptr - syms] = 1;
@@ -1031,7 +1051,7 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 			if(bfd_is_und_section(ssec)) {
-				printf("undefined symbol %s (%s+%08lx)\n", s->name, sec->name, rel->address);
+				printf("undefined symbol %s (%s+%08lx)\n", s->name, sec->name, (unsigned long)rel->address);
 				return 1;
 			}
 			if(!(ssec == text || ssec == data || ssec == bss || (ssec && (ssec == rdata || ssec == rbss)))) {
@@ -1099,8 +1119,8 @@ int main(int argc, char *argv[]) {
 		int64_t off = (int64_t)c->value - (int64_t)tvma + (int64_t)itext;
 		int size = c->type == 1 ? 4 : c->type == 2 ? 2 : 1;
 		if(size < 4 && (off < 0 || off > (size == 2 ? 0xFFFF : 0xFF))) {
-			printf("%s at .text+%08x: the code label's module offset %lld doesn't fit\n",
-			       size == 2 ? "R_68K_16" : "R_68K_8", c->addr, (long long)off);
+			printf("%s at .text+%08x: the code label's module offset %ld doesn't fit\n",
+			       size == 2 ? "R_68K_16" : "R_68K_8", c->addr, (long)off);
 			return 1;
 		}
 		unsigned char *p = (unsigned char*)vec->buf + itext + c->addr;
@@ -1211,11 +1231,11 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 			if(late && ls != LSYM_ETEXT) {
-				printf("far reference to %s at .text+%08lx: only etext can go through the jump table\n", rel->sym_ptr_ptr[0]->name, rel->address);
+				printf("far reference to %s at .text+%08lx: only etext can go through the jump table\n", rel->sym_ptr_ptr[0]->name, (unsigned long)rel->address);
 				return 1;
 			}
 			if(ls == LSYM_ETEXT && rel->addend != 0) {
-				printf("far reference to %s%+ld at .text+%08lx: only etext itself can go through the jump table\n", rel->sym_ptr_ptr[0]->name, (long)rel->addend, rel->address);
+				printf("far reference to %s%+ld at .text+%08lx: only etext itself can go through the jump table\n", rel->sym_ptr_ptr[0]->name, (long)rel->addend, (unsigned long)rel->address);
 				return 1;
 			}
 			// Done here, not with the near ones below.
@@ -1226,7 +1246,7 @@ int main(int argc, char *argv[]) {
 			}
 			nfar++;
 			if(rel->address < 2) {
-				printf("far PC-relative reference at .text+%08lx can't be patched\n", rel->address);
+				printf("far PC-relative reference at .text+%08lx can't be patched\n", (unsigned long)rel->address);
 				return 1;
 			}
 			unsigned char *ins = (unsigned char*)vec->buf + itext + rel->address - 2;
@@ -1236,7 +1256,7 @@ int main(int argc, char *argv[]) {
 			if(rel->address >= 4) {
 				uint16_t prev = (ins[-2] << 8) | ins[-1];
 				if((prev & 0xFFBF) == 0x4CBA || (prev & 0xFF3F) == 0x083A) {
-					printf("far PC-relative reference at .text+%08lx (instruction %04x %04x) can't be patched: target %s\n", rel->address, prev, op, rel->sym_ptr_ptr[0]->name);
+					printf("far PC-relative reference at .text+%08lx (instruction %04x %04x) can't be patched: target %s\n", (unsigned long)rel->address, prev, op, rel->sym_ptr_ptr[0]->name);
 					return 1;
 				}
 			}
@@ -1245,7 +1265,7 @@ int main(int argc, char *argv[]) {
 			else if((op & 0xF1FF) == 0x41FA) { newop = 0x206E | (op & 0x0E00); extra = 2; }	// lea d(pc),An -> movea.l d(a6),An
 			else if(op == 0x487A) { newop = 0x2F2E; extra = 2; }		// pea d(pc) -> move.l d(a6),-(sp)
 			else {
-				printf("far PC-relative reference at .text+%08lx (instruction %04x) can't be patched: target %s\n", rel->address, op, rel->sym_ptr_ptr[0]->name);
+				printf("far PC-relative reference at .text+%08lx (instruction %04x) can't be patched: target %s\n", (unsigned long)rel->address, op, rel->sym_ptr_ptr[0]->name);
 				return 1;
 			}
 			size_t k;
@@ -1277,7 +1297,7 @@ int main(int argc, char *argv[]) {
 			bfd_vma evma = jt + 6 * k;
 			int32_t d = (int32_t)(evma + extra);
 			if(d < -0x8000 || 0x7FFF < d) {
-				printf("_jmptbl entry %zu is out of a6's reach\n", k);
+				printf("_jmptbl entry %lu is out of a6's reach\n", (unsigned long)k);
 				return 1;
 			}
 			ins[0] = newop >> 8; ins[1] = newop;
@@ -1292,11 +1312,11 @@ int main(int argc, char *argv[]) {
 		if(ntargets) {
 			size_t cap = have_jt && have_ejt && (int32_t)(ejt - jt) >= 0 ? (size_t)(int32_t)(ejt - jt) / 6 : 0;
 			if(!have_jt || !have_ejt || ntargets > cap) {
-				printf("%zu far calls need a jump table of %zu entries (%zu bytes): reserve _jmptbl to _ejmptbl in .data (now %zu entries)\n", nfar, ntargets, ntargets * 6, have_jt ? cap : 0);
+				printf("%lu far calls need a jump table of %lu entries (%lu bytes): reserve _jmptbl to _ejmptbl in .data (now %lu entries)\n", (unsigned long)nfar, (unsigned long)ntargets, (unsigned long)(ntargets * 6), (unsigned long)(have_jt ? cap : 0));
 				return 1;
 			}
 			if(ntargets + (size_t)opt_jtspare > cap) {
-				printf("--jmptbl-spare=%ld: the jump table has %zu entries, %zu used\n", opt_jtspare, cap, ntargets);
+				printf("--jmptbl-spare=%ld: the jump table has %lu entries, %lu used\n", opt_jtspare, (unsigned long)cap, (unsigned long)ntargets);
 				return 1;
 			}
 			// the entries, with their addresses relocated like pointers;
@@ -1321,7 +1341,7 @@ int main(int argc, char *argv[]) {
 				ndrefs++;
 			}
 			qsort(drefs, ndrefs, sizeof(IdRef), cmp_idref);
-			printf("_jmptbl: %zu of %zu entries used, for %zu far references\n", ntargets, cap, nfar);
+			printf("_jmptbl: %lu of %lu entries used, for %lu far references\n", (unsigned long)ntargets, (unsigned long)cap, (unsigned long)nfar);
 		}
 		free(targets);
 	}
@@ -1492,7 +1512,7 @@ int main(int argc, char *argv[]) {
 			unsigned char *p = (unsigned char*)vec->buf + itext + r->addr;
 			if(r->type == 2) {
 				if(v < -0x8000 || v > 0xFFFF) {
-					printf("R_68K_16 at .text+%08x: the module symbol's offset %lld doesn't fit\n", r->addr, (long long)v);
+					printf("R_68K_16 at .text+%08x: the module symbol's offset %ld doesn't fit\n", r->addr, (long)v);
 					return 1;
 				}
 				p[0] = v >> 8; p[1] = v;
@@ -1581,8 +1601,8 @@ int main(int argc, char *argv[]) {
 			if(size < 4 && (v >> (8 * size - 1)) & 1) v -= (int64_t)1 << (8 * size); // signed
 			v += delta;
 			if(size < 4 && (v < -((int64_t)1 << (8 * size - 1)) || v >= ((int64_t)1 << (8 * size)))) {
-				printf("%s at %s+%08x: the value %lld doesn't fit its %d-byte field\n",
-				       xn, xrefs[i].data ? "data" : ".text", xrefs[i].addr, (long long)v, size);
+				printf("%s at %s+%08x: the value %ld doesn't fit its %d-byte field\n",
+				       xn, xrefs[i].data ? "data" : ".text", xrefs[i].addr, (long)v, size);
 				return 1;
 			}
 			for(int k = size - 1; k >= 0; k--, v >>= 8) f[k] = (unsigned char)v;
@@ -1834,13 +1854,13 @@ int main(int argc, char *argv[]) {
 				asection *ssec = rel->sym_ptr_ptr[0]->section;
 				int size = rel->howto->type == 1 ? 4 : rel->howto->type == 2 ? 2 : rel->howto->type == 3 ? 1 : 0;
 				if(bfd_is_und_section(ssec)) {
-					printf("undefined symbol %s (.r68dbg+%08lx)\n", rel->sym_ptr_ptr[0]->name, rel->address);
+					printf("undefined symbol %s (.r68dbg+%08lx)\n", rel->sym_ptr_ptr[0]->name, (unsigned long)rel->address);
 					return 1;
 				}
 				if(ssec != text)
 					continue; // data, equates: as the link resolved them
 				if(!size || rel->address + size > gsize) {
-					printf("%s at .r68dbg+%08lx: not supported\n", rel->howto->name, rel->address);
+					printf("%s at .r68dbg+%08lx: not supported\n", rel->howto->name, (unsigned long)rel->address);
 					return 1;
 				}
 				int64_t off = (int64_t)(bfd_asymbol_value(rel->sym_ptr_ptr[0]) + rel->addend) - (int64_t)tvma + (int64_t)itext;

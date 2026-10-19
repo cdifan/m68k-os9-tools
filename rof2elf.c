@@ -1381,8 +1381,8 @@ main (int argc, char **argv)
       if (longnames.len)
 	{
 	  char hdr[80];
-	  snprintf (hdr, sizeof hdr, "%-16s%-12s%-6s%-6s%-8s%-10zu`\n", "//",
-		    "", "", "", "", longnames.len);
+	  snprintf (hdr, sizeof hdr, "%-16s%-12s%-6s%-6s%-8s%-10lu`\n", "//",
+		    "", "", "", "", (unsigned long) longnames.len);
 	  fwrite (hdr, 1, 60, f);
 	  fwrite (longnames.buf, 1, longnames.len, f);
 	  if (longnames.len & 1)
@@ -1395,11 +1395,11 @@ main (int argc, char **argv)
 	    snprintf (nm, sizeof nm, "%s/", names[i]);
 	  else
 	    {
-	      snprintf (nm, sizeof nm, "/%zu", lnoff);
+	      snprintf (nm, sizeof nm, "/%lu", (unsigned long) lnoff);
 	      lnoff += strlen (names[i]) + 2;
 	    }
-	  snprintf (hdr, sizeof hdr, "%-16s%-12d%-6d%-6d%-8o%-10zu`\n", nm, 0,
-		    0, 0, 0644, objs[i].len);
+	  snprintf (hdr, sizeof hdr, "%-16s%-12d%-6d%-6d%-8o%-10lu`\n", nm, 0,
+		    0, 0, 0644, (unsigned long) objs[i].len);
 	  fwrite (hdr, 1, 60, f);
 	  fwrite (objs[i].buf, 1, objs[i].len, f);
 	  if (objs[i].len & 1)

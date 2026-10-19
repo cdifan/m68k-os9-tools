@@ -6271,7 +6271,7 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 							len++;
 						}
 					}
-					bprintf(&line_before, "r68__L%d set %zu\n", a + 1, len);
+					bprintf(&line_before, "r68__L%d set %lu\n", a + 1, (unsigned long)len);
 				}
 				put_marker(&line_before);
 				struct buf nm = { 0 };
