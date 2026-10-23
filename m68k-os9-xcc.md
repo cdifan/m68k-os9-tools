@@ -137,6 +137,8 @@ whatever the suffix, the first bytes decide.
 ### Compiling
 
 - **`-std=gnu89`** takes K&R code.
+- **`-mos9newline`:** `'\n'` is a carriage return, as in Microware's compilers, and `\l` a line
+  feed (see GCC's manual).
 
 | `xcc` | C 3.2 | GCC |
 |---|---|---|

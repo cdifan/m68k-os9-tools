@@ -1,6 +1,7 @@
 # Psect statements in both branches of a conditional: the ROF is named by the psect assembled,
 # as both Microware assemblers name it (C 3.2's R68 and Ultra C's r68); before, by the last psect
 # statement in the source, assembled or not.
+# fixed: 4bd611a 2026-10-23 r68togas: the ROF name of the psect statement assembled
 src cond <<'EOF'
  ifdef X
  psect Aaa,0,0,1,0,0

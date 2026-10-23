@@ -838,7 +838,7 @@ static const char *ucc_stdarg_dir(void)
 }
 
 /* GCC's options for Ultra C's code generation: its convention (variadic
- * calls' unnamed arguments on the stack), ANSI '\n'. */
+ * calls' unnamed arguments on the stack), '\n' a CR as in C 3.2. */
 static void ucc_compile_flags(struct args *a)
 {
 	args_add(a, "-mpcrel");
@@ -858,6 +858,10 @@ static void ucc_compile_flags(struct args *a)
 		args_add(a, "-Dfreopen=__ansi_freopen");
 	}
 	args_add(a, "-mbuiltin=os9call");
+	/* '\n' is a CR in every mode, as in Ultra C's compiler (measured: its
+	 * default, -bc and -a modes); -a also makes '\r' a line feed, which
+	 * -mos9newline doesn't (it stays a CR) */
+	args_add(a, "-mos9newline");
 	if (st.ansi)
 		args_add(a, st.cq ? "-std=gnu89" : "-std=c89");
 	else
