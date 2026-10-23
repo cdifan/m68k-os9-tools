@@ -2,6 +2,7 @@
 # from pointer types: a value read through a pointer of another type after a store is read again,
 # not taken from before the store. And without -fcommon: an uninitialized global is defined, not
 # common, so two files defining it clash at the link, as with C 3.2's l68 ("duplicate symbol names").
+# fixed: ef2add5 2026-10-23 m68k-os9-xcc: -fno-strict-aliasing in C 3.2 mode; -fcommon not needed
 cat > al.c <<'EOF'
 int get(i, f) int *i; short *f; { *i = 1; *f = 2; return *i; }
 EOF

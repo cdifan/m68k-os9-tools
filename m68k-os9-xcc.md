@@ -150,6 +150,7 @@ whatever the suffix, the first bytes decide.
 
 | `xcc` | C 3.2 | GCC |
 |---|---|---|
+| (none), `-o=1` | `c68`, then `o68`'s peephole pass: the compact default | `-Os` |
 | `-o=0`, `-o` alone | `c68` only, no optimizer | `-O0` |
 
 The last `-o` given counts. `-Os` gives the smallest code: on a large set of old C 3.2 programs

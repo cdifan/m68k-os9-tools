@@ -82,7 +82,7 @@ static const struct option options[] = {
 	{ "n", VALUE, "=<name>", "Module name (default: unsuffixed output file name)", NULL, O_N, COMPAT },
 	{ "nl", FLAG, "", "Don't link default libraries", NULL, O_NL, COMPAT },
 	{ "nv", FLAG, "", "No vsect directives (OS-9000 only)", "ignored", O_NV, COMPAT },
-	{ "o", OPTVALUE, "[=<n>]", "Optimization level, 0 to 2", "-O<n>; -O2 by default", O_O, COMPAT },
+	{ "o", OPTVALUE, "[=<n>]", "Optimization level, 0 to 2 (0 without <n>)", "0: -O0, 1 (the default): -Os, 2: -O2", O_O, COMPAT },
 	{ "q", FLAG, "", "No progress messages", NULL, O_Q, COMPAT },
 	{ "r", OPTVALUE, "[=<dir>]", "Stop at object files (.r), in <dir> if given", "ELF in .r files; see -obj", O_R, COMPAT },
 	{ "s", FLAG, "", "Leave out stack checks", NULL, O_S, COMPAT },
@@ -213,7 +213,7 @@ static struct {
 	/* Files, in order. */
 	struct args files;
 
-} st = { .opt = 2 };
+} st = { .opt = 1 };
 
 #define OBJ_KINDS ((1u << OBJ_ELF) | (1u << OBJ_ROF) | (1u << OBJ_UCC))
 #define error os9_error
@@ -419,8 +419,11 @@ static void apply(const struct option *o, const char *value)
 	case O_NL: st.nolibs = 1; break;
 	case O_NV: break;
 	case O_O:
+		/* As C 3.2's xcc (xcc -bp): -o alone and -o=0 no optimizer,
+		 * 1 (the default) c68 and o68, 2 c68 -c (more in registers,
+		 * not smaller) and o68 */
 		if (value == NULL)
-			st.opt = 2;
+			st.opt = 0;
 		else if (strcmp(value, "0") == 0 || strcmp(value, "1") == 0 || strcmp(value, "2") == 0)
 			st.opt = *value - '0';
 		else
@@ -933,7 +936,12 @@ static void compile_flags(struct args *a)
 		args_add(a, "-msoft-float");
 	if (st.math && !st.fpu)
 		args_add(a, "-mos9math");
-	args_addf(a, "-O%d", st.opt);
+	/* level 1, C 3.2's compact default (o68, a peephole pass): GCC's
+	 * -Os, the smallest code; 2, which C 3.2 makes no smaller: -O2 */
+	if (st.opt == 1)
+		args_add(a, "-Os");
+	else
+		args_addf(a, "-O%d", st.opt);
 	if (st.debug)
 		args_add(a, "-g");
 	if (st.comments && st.asm_only)
