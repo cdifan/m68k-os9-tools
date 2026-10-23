@@ -862,9 +862,9 @@ static void ucc_compile_flags(struct args *a)
 	}
 	args_add(a, "-mbuiltin=os9call");
 	/* '\n' is a CR in every mode, as in Ultra C's compiler (measured: its
-	 * default, -bc and -a modes); -a also makes '\r' a line feed, which
-	 * -mos9newline doesn't (it stays a CR) */
-	args_add(a, "-mos9newline");
+	 * default, -bc and -a modes); -a also makes '\r' a line feed and '\l'
+	 * the letter l (-mos9newline=swapped) */
+	args_add(a, st.ansi ? "-mos9newline=swapped" : "-mos9newline");
 	if (st.ansi)
 		args_add(a, st.cq ? "-std=gnu89" : "-std=c89");
 	else
@@ -915,6 +915,8 @@ static void compile_flags(struct args *a)
 	args_add(a, "-mos9call");
 	args_add(a, "-mbuiltin=os9call");
 	args_add(a, "-mos9newline");
+	/* register on a function declared in a block, which C 3.2 ignores */
+	args_add(a, "-mos9regfunc");
 	args_add(a, "-std=gnu89");
 	args_add(a, "-w");
 	/* C 3.2 assumes nothing from pointer types, and old code reads one

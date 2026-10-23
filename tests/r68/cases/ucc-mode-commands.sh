@@ -45,7 +45,7 @@ has kr "M/OS9/68000/LIB/cstart.r"
 has kr "-l=M/OS9/68000/LIB/sys_clib.l -l=M/OS9/68000/LIB/clib.l -l=M/OS9/68000/LIB/os_lib.l -l=math.l -l=M/OS9/68000/LIB/sys.l"
 
 cmds ansi -a=err -i -o=3 -s=5 hi.c
-has ansi "-mos9newline -std=c89 -pedantic-errors"
+has ansi "-mos9newline=swapped -std=c89 -pedantic-errors"
 has ansi "-Os"
 has ansi "-D_SPACE_FACTOR=5"
 has ansi "-o=hi -c -f=orowoe"

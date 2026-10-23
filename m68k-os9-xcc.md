@@ -137,9 +137,16 @@ whatever the suffix, the first bytes decide.
 
 ### Compiling
 
+GCC gets `-mpcrel -ma6rel -mos9call -mbuiltin=os9call -mos9newline -mos9regfunc -std=gnu89
+-fno-strict-aliasing -w`, the CPU and floating-point options, and `-mos9stkchk` (stack checking,
+with `cstart.r`'s `_stkcheck`, as C 3.2 does) unless `-s`. C 3.2's predefined names come from GCC
+itself on `m68k-elfos9`.
+
 - **`-std=gnu89`** takes K&R code.
 - **`-mos9newline`:** `'\n'` is a carriage return, as in Microware's compilers, and `\l` a line
   feed (see GCC's manual).
+- **`-mos9regfunc`:** `register` on a function declared inside a block (`register char *p,
+  *f();`), which C 3.2 accepts and ignores, is accepted; the function is an ordinary external.
 - **`-fno-strict-aliasing`:** C 3.2 assumes nothing from pointer types, and old code often reads a
   value through a pointer to another type, which GCC's optimizer may otherwise reorder or drop.
   The code is about 0.1% bigger for it.
@@ -328,6 +335,9 @@ directories, then `MWOS/SRC/DEFS` and `MWOS/OS9/SRC/DEFS`.
 
 - **`-mos9call=ucc`:** Ultra C's convention, in which a variadic call's unnamed arguments go on
   the stack (see GCC's manual).
+- **`-mos9newline`:** Ultra C's compiler makes `'\n'` a carriage return in all its modes, as C 3.2
+  does. With `-a` it also makes `'\r'` a line feed and `\l` the letter `l`: GCC gets
+  `-mos9newline=swapped` then.
 - **ANSI mode renames four calls:** Ultra C's compiler calls `printf`, `scanf`, `fopen` and
   `freopen` as `__ansi_printf`, `__ansi_scanf`, `__ansi_fopen` and `__ansi_freopen` (in the
   default mode and with `-a`, not with `-bc`), which the library has besides the plain ones: the

@@ -2,6 +2,7 @@
 # Microware assemblers write them and rof2elf reads them, so objects from either link together
 # (r68togas writes '@' as _at_, which gas needs, and m68k-os9-r68 gives the names back). A name
 # with _at_ of its own in a source without '@' names keeps it.
+# fixed: 90e8f01 2026-10-23 m68k-os9-r68: names with @ given back (global and undefined symbols)
 src ata <<'EOF'
  psect ata,0,0,0,0,0
 Lab@1: bsr Ext@2
