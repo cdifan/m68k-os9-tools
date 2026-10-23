@@ -2,6 +2,7 @@
 # takes it too): accepted and left out, as it changes nothing in C 3.2. Only where it is a storage
 # class, before another word: struct direct (a tag, as in Microware's dir.h), a variable named
 # direct and the word in strings and comments stay. Before, GCC rejected it.
+# fixed: 5856914 2026-10-23 m68k-os9-xcc: C 3.2's @ lines, #asm blocks and storage class direct
 cat > dv.c <<'EOF'
 struct direct { int d; };
 struct direct *pd;

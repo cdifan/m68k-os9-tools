@@ -327,13 +327,14 @@ static char *psect_name(const char *path, const char *fallback)
 }
 
 /* Symbols named like a gas register (val, tc, ...) are NAME__r68 in
- * r68togas's output, since gas can't have a symbol of that name; the
- * object's global and undefined ones get their names back. */
+ * r68togas's output, since gas can't have a symbol of that name, a dot in
+ * a name __dot__, and an '@' (legal in r68, not in gas) _at_ where the
+ * output sets r68__at; the object's global and undefined ones get their
+ * names back, as the Microware assemblers and rof2elf have them. */
 static void register_names(const char *object)
 {
 	struct args argv = { 0 };
 	args_add(&argv, NM);
-	args_add(&argv, "-g");
 	args_add(&argv, object);
 	char *out = os9_temp(".out");
 	int show = os9_show;
@@ -344,27 +345,49 @@ static void register_names(const char *object)
 	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
 	if (fp == NULL)
 		error("%s %s failed", NM, object);
-	struct args renames = { 0 };
+	/* the global and undefined names (nm's type letter in upper case),
+	 * and whether an '@' was renamed */
+	struct args globals = { 0 };
+	int at = 0;
 	char line[1024];
 	while (fgets(line, sizeof line, fp) != NULL) {
+		line[strcspn(line, "\r\n")] = '\0';
 		char *name = strrchr(line, ' ');
-		name = name != NULL ? name + 1 : line;
-		name[strcspn(name, "\r\n")] = '\0';
+		if (name == NULL || name - line < 2)
+			continue;
+		char type = name[-1];
+		name++;
+		if (strcmp(name, "r68__at") == 0)
+			at = 1;
+		else if (isupper((unsigned char)type))
+			args_add(&globals, name);
+	}
+	fclose(fp);
+	struct args renames = { 0 };
+	for (int i = 0; i < globals.n; i++) {
+		const char *name = globals.v[i];
 		size_t n = strlen(name);
+		char *orig = xstrdup(name), *p;
 		if (n > 5 && strcmp(name + n - 5, "__r68") == 0 && strncmp(name, "r68__", 5) != 0) {
 			/* and a dot in the name was __dot__ (see r68togas's put_symbol) */
-			char *orig = xstrdup(name), *p;
 			orig[n - 5] = '\0';
 			while ((p = strstr(orig, "__dot__")) != NULL) {
 				*p = '.';
 				memmove(p + 1, p + 7, strlen(p + 7) + 1);
 			}
+		}
+		if (at && strncmp(orig, "r68", 3) != 0)
+			while ((p = strstr(orig, "_at_")) != NULL) {
+				*p = '@';
+				memmove(p + 1, p + 4, strlen(p + 4) + 1);
+			}
+		if (strcmp(orig, name) != 0) {
 			args_add(&renames, "--redefine-sym");
 			args_addf(&renames, "%s=%s", name, orig);
-			free(orig);
 		}
+		free(orig);
 	}
-	fclose(fp);
+	args_free(&globals);
 	if (renames.n == 0)
 		return;
 	args_add(&argv, OBJCOPY);

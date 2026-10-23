@@ -5,6 +5,7 @@
 # conditional left out is left out; -a writes r68 source with the text in place; -r assembles it.
 # Also C 3.2's storage class direct, accepted (it changes nothing in C 3.2). Before, GCC rejected
 # all three.
+# fixed: 5856914 2026-10-23 m68k-os9-xcc: C 3.2's @ lines, #asm blocks and storage class direct
 cat > part.a <<'EOF'
 inceq: equ 4
 EOF
