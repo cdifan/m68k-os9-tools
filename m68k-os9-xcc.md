@@ -152,6 +152,7 @@ whatever the suffix, the first bytes decide.
 | `xcc` | C 3.2 | GCC |
 |---|---|---|
 | (none), `-o=1` | `c68`, then `o68`'s peephole pass: the compact default | `-Os` |
+| `-o=2` | also `c68 -c` (more values in registers; the code no smaller) | `-O2` |
 | `-o=0`, `-o` alone | `c68` only, no optimizer | `-O0` |
 
 The last `-o` given counts. `-Os` gives the smallest code: on a large set of old C 3.2 programs
@@ -180,6 +181,39 @@ out, so the common `#ifndef __GNUC__` / `#asm` / `#include "x.a"` / `#endasm` / 
 
 C 3.2's storage class **`direct`**, which changes nothing in C 3.2's code, is removed where it is
 one (not in `struct direct`).
+
+### Registers across calls
+
+With `-mos9call`, GCC assumes that a function declared with a prototype preserves a0 and a1, as
+Microware C 3.2's functions and libraries do, and keeps values in them across such calls; d0, d1
+and, with `-m68881`, fp0/fp1 are assumed changed. A call through an unprototyped (K&R)
+declaration, as in Microware's own headers, assumes a0 and a1 changed as well. For assembler
+routines called from GCC code:
+
+- A routine declared with a prototype must preserve a0, a1 and d2-d7, and d1 unless it carries an
+  argument or the result, as Microware's own routines do.
+- A value can't be passed from one call to the next in a register by itself. GCC decides the
+  order in which it evaluates a call's arguments and which registers it uses in between, so a
+  routine that leaves a value in a register for a later call to pick up (a pointer in a1 for the
+  system call the next library function makes, say) works only with Microware's compilers, which
+  happen to leave that register alone. The workaround is to reserve the register in the source
+  files that use such a routine, with a file-scope register variable, for example in the
+  routine's header:
+
+  ```c
+  #ifdef __GNUC__
+  register void *os9_a1_reserved __asm__("a1");  /* a1 carries a value between calls */
+  #endif
+  ```
+
+  GCC then never uses a1 in those files, not for variables, temporaries or spills (as
+  `-ffixed-a1` would do), so the value stays in it until the next call, in whatever order the
+  arguments are evaluated; functions called in between preserve it (Microware's do, and
+  `-mos9call` functions save a1 if they use it). The cost is one address register less in those
+  files. Not covered: a GCC runtime routine called in between (for example `memcpy` for a struct
+  passed by value) may still change the register, and a built-in system call
+  (`-mbuiltin=os9call`) that needs a1 for a parameter may conflict with the reservation.
+  Otherwise, wrap the calls in one assembler routine.
 
 ### Options
 
