@@ -48,6 +48,7 @@ Where the converted files go:
 
 | Setting | `DIR/cstart.r` → | `DIR/clib.l` → |
 |---|---|---|
+| `cache` (default) | `CACHE/m68k-os9-elf/DIR/cstart.o` | `CACHE/m68k-os9-elf/DIR/clib.a` |
 | `beside` | `DIR/cstart.o` | `DIR/libclib.a` |
 | `subdir` | `DIR/m68k-os9-elf/cstart.o` | `DIR/m68k-os9-elf/clib.a` |
 

@@ -2,6 +2,7 @@
 # compact level, c68 and o68's peephole pass: GCC's -Os; -o=2, more in registers but no smaller:
 # -O2; -o alone and -o=0 no optimizer: -O0. A later -o= wins; another level is an error, with a
 # failing exit status.
+# fixed: 2e6f983 2026-10-23 m68k-os9-xcc: C 3.2's -o levels: the default -Os, -o alone -O0
 cat > lv.c <<'EOF'
 int sum(a, n) int *a; int n; { int s = 0; while (n--) s += *a++; return s; }
 EOF

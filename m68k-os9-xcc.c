@@ -263,7 +263,7 @@ static void usage(void)
 		: "compat (C 3.2, the default here), or ucc or c89 (Ultra C, as m68k-os9-ucc)");
 	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
 		"or the prefix of their names (default m68k-elfos9)");
-	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
+	usage_line("-elf-save=<s>", "where files converted to ELF go: cache (default), beside, subdir");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
 	usage_line("-obj=<kind>", "what -r writes into .r files: elf (default), rof or ucc (ROF, for Microware's l68);\n"

@@ -105,7 +105,7 @@ static void usage(void)
 		"                      ucc (libgen's format)");
 	usage_line("-gnu-prefix=<p>", "the GNU tools: a directory of them under their short names,\n"
 		"                      or the prefix of their names (default m68k-elfos9)");
-	usage_line("-elf-save=<s>", "where files converted to ELF go: beside (default), subdir, cache");
+	usage_line("-elf-save=<s>", "where files converted to ELF go: cache (default), beside, subdir");
 	usage_line("-elf-dir=<name>", "subdirectory, and directory in cache (default m68k-os9-elf)");
 	usage_line("-elf-cache=<dir>", "cache directory (default $XDG_CACHE_HOME or ~/.cache)");
 	printf("Files: ELF and ROF objects, and libraries of any kind (ar, concatenated ROFs,\n");

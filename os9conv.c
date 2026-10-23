@@ -26,7 +26,9 @@
 const char *os9_who = "m68k-os9";
 int os9_quiet;
 
-struct os9conv os9conv = { .save = SAVE_BESIDE, .elfdir = "m68k-os9-elf", .obj = OBJ_ELF };
+/* The cache by default: converted Microware objects and libraries land in no
+ * SDK directory unless asked (save=beside or subdir). */
+struct os9conv os9conv = { .save = SAVE_CACHE, .elfdir = "m68k-os9-elf", .obj = OBJ_ELF };
 
 void os9_error(const char *format, ...)
 {
