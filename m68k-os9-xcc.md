@@ -160,12 +160,26 @@ The last `-o` given counts. `-Os` gives the smallest code: on a large set of old
 
 ### C 3.2's assembler text
 
+A line starting with `@` (the rest of the line) and the lines between `#asm` and `#endasm` go
+into the assembler output where they stand, at file level or inside a function, as in C 3.2.
+`#include` is expanded inside `#asm`; macros are not. The driver:
+
 1. replaces each such line or block with a numbered marker (a basic `asm` statement), keeping the
    source's line numbers for GCC's messages;
+2. compiles to assembler with `-fno-toplevel-reorder`, so that file-level markers stay in order;
 3. converts GCC's output to r68 syntax with [gastor68](gastor68.md);
 4. puts each kept text in place of its marker;
 5. assembles the result with `m68k-os9-r68`, as C 3.2 assembles `c68`'s output; with `-a` that
    r68 source is the output (`-obj=gas` is then an error).
+
+Text inside a function can't rely on C 3.2's registers or stack frame, and gets a note. Such a
+file is compiled without inlining and loop header copying, which would copy the text and its
+labels; any other copy GCC makes is an error naming the block's line (then `-o=0`). Files without
+such text are compiled to objects directly. A block in a part the preprocessor leaves out stays
+out, so the common `#ifndef __GNUC__` / `#asm` / `#include "x.a"` / `#endasm` / `#endif` works.
+
+C 3.2's storage class **`direct`**, which changes nothing in C 3.2's code, is removed where it is
+one (not in `struct direct`).
 
 ### Options
 
@@ -285,6 +299,9 @@ directories, then `MWOS/SRC/DEFS` and `MWOS/OS9/SRC/DEFS`.
   default mode and with `-a`, not with `-bc`), which the library has besides the plain ones: the
   plain `printf` and `scanf` take the first argument after the format from d1, C 3.2's placement,
   the `__ansi_` ones from the stack. GCC gets `-Dprintf=__ansi_printf` and so on.
+- **K&R mode (`-bc`)** calls the plain names, so GCC gets `-mos9call`, C 3.2's placement, instead
+  of `-mos9call=ucc`. `direct` is removed there as in C 3.2 mode. Ultra C has no `@` lines or
+  `#asm` blocks, in any mode.
 - **`va_start`** is a builtin of Ultra C's compiler: a `stdarg.h` in a temporary directory,
   searched first, includes GCC's instead (with `_VA_LIST`, Ultra C's name for the type, defined as
   `va_list`). Under `-mos9call=ucc` GCC's `va_list` is a plain pointer to the stack arguments, as
@@ -337,6 +354,9 @@ name (`cdilogo.img`, `font1.ft`; Sony's `.Mod` code modules keep theirs). `m68k-
 
 ## Tests
 
+- **`tests/r68`** cases for the driver: the commands it runs in both modes, the `-o` levels,
+  `'\n'` in every mode, aliasing and common symbols, `@` lines, `#asm` blocks and `direct`, the
+  conversion cache, `.a` files of either syntax, tools found by their short names.
 - **On CD-i Emulator's 605**, with C 3.2's `CLIB` and `CDEF`: programs built with the default
   options, `-x`, `-r` then linking ELF or ROF `.r` files, `-m=`, `-e=`, `-n=`, `-i`, a program of
   six source files with 124 KB of code through a jump table (`-j` then an error), and programs in

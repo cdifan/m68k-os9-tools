@@ -1,6 +1,7 @@
 # The ELF conversion of a ROF goes to the cache by default (save=cache): nothing is written into
 # the ROF's directory, the conversion lands below the cache's root (M68K_OS9_ELF's cache= or
 # -elf-cache=); save=beside still writes beside it. Before, the default was beside.
+# fixed: 06b45ff 2026-10-23 os9conv: converted ROF files go to the cache by default (save=cache)
 src dc <<'EOF'
  psect dc,$101,$8000,1,0,entry
 entry rts

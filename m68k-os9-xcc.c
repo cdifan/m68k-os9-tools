@@ -954,13 +954,439 @@ static void compile_flags(struct args *a)
 		args_addf(a, "-I%s", cdef);
 }
 
+/* ----- C 3.2's assembler text ----- */
+
+/* C 3.2 passes two kinds of text straight into its assembler output, where
+ * they stand, at file level or inside a function (measured with its xcc -a):
+ * a line starting with @ (the rest of the line) and the lines between #asm
+ * and #endasm, in which #include is expanded but no macro. Ultra C has
+ * neither. The wrapper puts a marker in their place, the label r68__blk<n>
+ * in a basic asm statement, which GCC keeps where it stands
+ * (-fno-toplevel-reorder at file level); compiles to assembler; converts it
+ * to r68 syntax (gastor68), which keeps the marker as a line of its own; puts
+ * the text there; and has r68 assemble the whole, as C 3.2 does. Inside a
+ * function the text can't rely on c68's registers or stack frame: a note. */
+
+static struct {
+	int n;
+	char **text;	/* each one's r68 text; NULL where an #include failed */
+	char **why;	/* that failure */
+	int *line;	/* its first line in the source */
+	int inside;	/* whether one is inside a function */
+} blocks;
+
+/* Appends LEN bytes of TEXT to *S (of *N bytes so far, kept terminated). */
+static void cat(char **s, size_t *n, const char *text, size_t len)
+{
+	*s = xrealloc(*s, *n + len + 1);
+	memcpy(*s + *n, text, len);
+	*n += len;
+	(*s)[*n] = '\0';
+}
+
+/* The contents of file PATH (allocated, terminated), or NULL. */
+static char *read_text(const char *path)
+{
+	FILE *f = fopen(path, "rb");
+	if (f == NULL)
+		return NULL;
+	char *s = NULL, chunk[4096];
+	size_t n = 0, got;
+	cat(&s, &n, "", 0);
+	while ((got = fread(chunk, 1, sizeof chunk, f)) > 0)
+		cat(&s, &n, chunk, got);
+	fclose(f);
+	return s;
+}
+
+/* The next line of *P (its end CR LF, CR or LF, as OS-9 and DOS files have
+ * them): its start and length; *P moves past its end. 0 at the end. */
+static int next_line(const char **p, const char **line, size_t *len)
+{
+	const char *s = *p;
+	if (*s == '\0')
+		return 0;
+	const char *e = s + strcspn(s, "\r\n");
+	*line = s;
+	*len = (size_t)(e - s);
+	if (*e == '\r' && e[1] == '\n')
+		e += 2;
+	else if (*e != '\0')
+		e++;
+	*p = e;
+	return 1;
+}
+
+/* Whether LINE (LEN bytes) is preprocessor directive WORD: # and WORD, with
+ * blanks before and after the #, then the end or a blank. The text after it
+ * in *REST if REST. */
+static int directive(const char *line, size_t len, const char *word, const char **rest)
+{
+	const char *p = line, *end = line + len;
+	while (p < end && (*p == ' ' || *p == '\t'))
+		p++;
+	if (p == end || *p++ != '#')
+		return 0;
+	while (p < end && (*p == ' ' || *p == '\t'))
+		p++;
+	size_t w = strlen(word);
+	if ((size_t)(end - p) < w || strncmp(p, word, w) != 0)
+		return 0;
+	p += w;
+	if (p < end && *p != ' ' && *p != '\t')
+		return 0;
+	if (rest != NULL)
+		*rest = p;
+	return 1;
+}
+
+/* Header NAME (ANGLE: <NAME>) of a file in directory FROM: as C 3.2's cpp
+ * searches, "NAME" there first, then the -v directories and CDEF
+ * (allocated), or NULL. */
+static char *find_header(const char *name, int angle, const char *from)
+{
+	if (host_is_sep(name[0]) || (isalpha((unsigned char)name[0]) && name[1] == ':'))
+		return host_mtime(name) != (time_t)-1 ? xstrdup(name) : NULL;
+	struct args dirs = { 0 };
+	if (!angle)
+		args_add(&dirs, *from != '\0' ? from : ".");
+	args_append(&dirs, &st.vdirs);
+	const char *cdef = getenv("CDEF");
+	if (cdef != NULL && *cdef != '\0')
+		args_add(&dirs, cdef);
+	char *found = NULL;
+	for (int i = 0; i < dirs.n && found == NULL; i++) {
+		char *path = concat(dirs.v[i], "/", name, NULL);
+		if (host_mtime(path) != (time_t)-1)
+			found = path;
+		else
+			free(path);
+	}
+	args_free(&dirs);
+	return found;
+}
+
+/* Appends block line LINE (LEN bytes) of file FILE to *S: as it is, but for
+ * an #include, whose file's lines go in instead (their own #includes too).
+ * 0, or -1 with the failure in *WHY (allocated). */
+static int block_line(char **s, size_t *n, const char *line, size_t len, const char *file, int depth,
+	char **why)
+{
+	const char *rest;
+	if (!directive(line, len, "include", &rest)) {
+		cat(s, n, line, len);
+		cat(s, n, "\n", 1);
+		return 0;
+	}
+	const char *end = line + len;
+	while (rest < end && (*rest == ' ' || *rest == '\t'))
+		rest++;
+	char close = rest < end && *rest == '<' ? '>' : '"';
+	const char *name = rest + 1, *stop = rest < end ? memchr(name, close, (size_t)(end - name)) : NULL;
+	if (rest == end || (*rest != '"' && *rest != '<') || stop == NULL) {
+		*why = xasprintf("%s: a malformed #include in an assembler block", file);
+		return -1;
+	}
+	char *header = xstrndup(name, (size_t)(stop - name));
+	char *dir = path_dir(file);
+	char *path = depth < 16 ? find_header(header, close == '>', dir) : NULL;
+	char *text = path != NULL ? read_text(path) : NULL;
+	free(dir);
+	if (text == NULL) {
+		*why = xasprintf("%s: cannot include %s in an assembler block", file, header);
+		free(header);
+		free(path);
+		return -1;
+	}
+	free(header);
+	const char *p = text, *l;
+	size_t ll;
+	int status = 0;
+	while (status == 0 && next_line(&p, &l, &ll))
+		status = block_line(s, n, l, ll, path, depth + 1, why);
+	free(text);
+	free(path);
+	return status;
+}
+
+/* Adds a block (TEXT, or the failure WHY) from line LINE, inside a function
+ * if INSIDE, and writes its marker to OUT. */
+static void add_block(FILE *out, char *text, char *why, int line, int inside)
+{
+	blocks.text = xrealloc(blocks.text, (blocks.n + 1) * sizeof *blocks.text);
+	blocks.why = xrealloc(blocks.why, (blocks.n + 1) * sizeof *blocks.why);
+	blocks.line = xrealloc(blocks.line, (blocks.n + 1) * sizeof *blocks.line);
+	blocks.text[blocks.n] = text;
+	blocks.why[blocks.n] = why;
+	blocks.line[blocks.n] = line;
+	blocks.inside |= inside;
+	fprintf(out, "__asm__(\"r68__blk%d:\");", blocks.n);
+	blocks.n++;
+}
+
+static int is_word(int c) { return isalnum(c) || c == '_'; }
+
+/* Copies LINE (LEN bytes, outside a block) to OUT, with C 3.2's storage class
+ * direct left out (blanks in its place), which changes nothing there
+ * (measured: the same vsect, order and addressing as without, with word and
+ * long data offsets; Ultra C takes it in K&R mode only): the word direct
+ * before another word, unless after struct, union or enum (Microware's dir.h
+ * has a struct direct). Only in the C file itself, not its headers. Tracks the comment state (*COMMENT) and the braces' depth outside
+ * comments, strings and characters (*DEPTH). Whether a direct went. */
+static int copy_line(FILE *out, const char *line, size_t len, int *comment, int *depth, char *prev,
+	size_t prev_size)
+{
+	char *copy = xstrndup(line, len);
+	int changed = 0;
+	for (size_t i = 0; i < len; i++) {
+		char c = copy[i];
+		if (*comment) {
+			if (c == '*' && i + 1 < len && copy[i + 1] == '/') {
+				*comment = 0;
+				i++;
+			}
+		} else if (c == '/' && i + 1 < len && copy[i + 1] == '*') {
+			*comment = 1;
+			i++;
+		} else if (c == '/' && i + 1 < len && copy[i + 1] == '/') {
+			break;
+		} else if (c == '"' || c == '\'') {
+			for (i++; i < len && copy[i] != c; i++)
+				if (copy[i] == '\\')
+					i++;
+			prev[0] = '\0';
+		} else if (c == '{') {
+			(*depth)++;
+			prev[0] = '\0';
+		} else if (c == '}') {
+			if (*depth > 0)
+				(*depth)--;
+			prev[0] = '\0';
+		} else if (is_word((unsigned char)c) && !isdigit((unsigned char)c)) {
+			size_t s = i;
+			while (i < len && is_word((unsigned char)copy[i]))
+				i++;
+			size_t w = i - s;
+			size_t j = i;
+			while (j < len && (copy[j] == ' ' || copy[j] == '\t'))
+				j++;
+			if (w == 6 && strncmp(copy + s, "direct", 6) == 0 && j < len &&
+				(isalpha((unsigned char)copy[j]) || copy[j] == '_') && strcmp(prev, "struct") != 0 &&
+				strcmp(prev, "union") != 0 && strcmp(prev, "enum") != 0) {
+				memset(copy + s, ' ', 6);
+				changed = 1;
+			} else {
+				snprintf(prev, prev_size, "%.*s", (int)(w < prev_size ? w : prev_size - 1), copy + s);
+			}
+			i--;
+		} else if (c != ' ' && c != '\t') {
+			prev[0] = '\0';
+		}
+	}
+	fwrite(copy, 1, len, out);
+	fputc('\n', out);
+	free(copy);
+	return changed;
+}
+
+/* C file SOURCE prepared for GCC: C 3.2's storage class direct left out and
+ * (BLOCKS) its @ lines and #asm blocks replaced by markers, each on its first
+ * line, the line count kept, so GCC's line numbers are the source's. A
+ * temporary file, or NULL when there's nothing to change. */
+static char *prepare_source(const char *source, int with_blocks)
+{
+	char *text = read_text(source);
+	if (text == NULL)
+		return NULL;
+	char *prepared = os9_temp(".c");
+	FILE *out = fopen(prepared, "wb");
+	if (out == NULL)
+		error("cannot write %s", prepared);
+	fprintf(out, "# 1 \"%s\"\n", source);
+	int depth = 0, comment = 0, number = 0, changed = 0;
+	char prev[16] = "";
+	const char *p = text, *line;
+	size_t len;
+	while (next_line(&p, &line, &len)) {
+		number++;
+		if (with_blocks && !comment && len > 0 && *line == '@') {
+			if (depth > 0)
+				note("%s:%d: @ inside a function: it can't rely on C 3.2's registers or stack frame",
+					source, number);
+			char *t = xstrndup(line + 1, len - 1);
+			char *nl = concat(t, "\n", NULL);
+			free(t);
+			add_block(out, nl, NULL, number, depth > 0);
+			fputc('\n', out);
+			changed = 1;
+			continue;
+		}
+		if (with_blocks && !comment && directive(line, len, "asm", NULL)) {
+			int first = number;
+			char *s = NULL, *why = NULL;
+			size_t n = 0;
+			cat(&s, &n, "", 0);
+			int closed = 0, lines = 1;
+			while (next_line(&p, &line, &len)) {
+				number++;
+				lines++;
+				if (directive(line, len, "endasm", NULL)) {
+					closed = 1;
+					break;
+				}
+				if (why == NULL && block_line(&s, &n, line, len, source, 0, &why) != 0) {
+					free(s);
+					s = NULL;
+				}
+			}
+			if (!closed)
+				error("%s:%d: #asm without #endasm", source, first);
+			if (depth > 0)
+				note("%s:%d: #asm inside a function: it can't rely on C 3.2's registers or stack frame",
+					source, first);
+			add_block(out, s, why, first, depth > 0);
+			for (int i = 0; i < lines; i++)
+				fputc('\n', out);
+			changed = 1;
+			continue;
+		}
+		changed |= copy_line(out, line, len, &comment, &depth, prev, sizeof prev);
+	}
+	if (fclose(out) != 0)
+		error("cannot write %s", prepared);
+	free(text);
+	if (!changed) {
+		remove(prepared);
+		return NULL;
+	}
+	return prepared;
+}
+
+/* Puts the blocks' text into r68 file FROM (gastor68's output) in place of
+ * their markers, into TO; a marker GCC copied (an optimization that copies
+ * code) is an error, since the text, labels and all, can be there only once:
+ * C file SOURCE's line named. */
+static void splice_blocks(const char *source, const char *from, const char *to)
+{
+	int *seen = xcalloc(blocks.n > 0 ? (size_t)blocks.n : 1, sizeof *seen);
+	char *text = read_text(from);
+	if (text == NULL)
+		error("cannot read %s", from);
+	FILE *out = fopen(to, "wb");
+	if (out == NULL)
+		error("cannot write %s", to);
+	const char *p = text, *line;
+	size_t len;
+	while (next_line(&p, &line, &len)) {
+		while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t'))
+			len--;
+		int k, used = 0;
+		if (len > 8 && strncmp(line, "r68__blk", 8) == 0 && sscanf(line + 8, "%d%n", &k, &used) == 1 &&
+			(size_t)used == len - 8 && k >= 0 && k < blocks.n) {
+			if (blocks.text[k] == NULL)
+				error("%s", blocks.why[k]);
+			if (seen[k]++)
+				error("%s:%d: GCC copied this assembler text (an optimization); compile %s with -o=0",
+					source, blocks.line[k], lbasename(source));
+			fputs(blocks.text[k], out);
+			continue;
+		}
+		fwrite(line, 1, len, out);
+		fputc('\n', out);
+	}
+	if (fclose(out) != 0)
+		error("cannot write %s", to);
+	free(seen);
+	free(text);
+}
+
+static void assemble_as(const char *source, const char *shown, const char *output, int rof);
+
+/* GCC's options for a prepared copy of C file SOURCE (prepare_source): the
+ * source's own directory for its "" headers, since the copy is elsewhere. */
+static void prepared_flags(struct args *a, const char *source)
+{
+	char *dir = path_dir(source);
+	args_add(a, "-iquote");
+	args_add(a, *dir != '\0' ? dir : ".");
+	free(dir);
+}
+
+/* Compiles C file SOURCE, whose C 3.2 assembler text MARKED has in markers
+ * (prepare_source), to OUTPUT: r68 source with the text in place (-a), else
+ * assembled by r68 into an object or (ROF) a ROF. */
+static void compile_blocks(const char *source, const char *marked, const char *output, int assembler,
+	int rof)
+{
+	int syntax = st.asm_syntax != 0 ? st.asm_syntax : st.asm_files;
+	if (assembler && syntax == 'g')
+		error("%s: -a in gas syntax: its @ lines and #asm blocks are r68 syntax", source);
+	struct args argv = { 0 };
+	args_add(&argv, GCC);
+	compile_flags(&argv);
+	args_add(&argv, "-fno-toplevel-reorder");
+	/* text inside a function: kept from GCC's copies of code (inlining,
+	 * loop header copying), which would repeat its labels; splice_blocks
+	 * reports any other copy */
+	if (blocks.inside) {
+		args_add(&argv, "-fno-inline");
+		args_add(&argv, "-fno-tree-ch");
+	}
+	prepared_flags(&argv, source);
+	args_add(&argv, "-S");
+	args_add(&argv, "-o");
+	char *gas = os9_temp(".s");
+	args_add(&argv, gas);
+	args_add(&argv, marked);
+	if (!os9_quiet && !os9_show)
+		printf("'%s'\n", source);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("compiling %s failed", source);
+	args_free(&argv);
+
+	char *name = stem(source, 0);
+	char *r68 = os9_temp(".a");
+	args_add(&argv, GASTOR68);
+	args_add(&argv, "-mode=c32");
+	if (st.cpu != 0)
+		args_add(&argv, "-m2");
+	args_addf(&argv, "-n=%s_c", name);
+	args_add(&argv, "-o");
+	args_add(&argv, r68);
+	args_add(&argv, gas);
+	free(name);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("translating %s to r68 syntax failed", source);
+	args_free(&argv);
+	if (os9_dry_run)
+		return;
+	char *spliced = assembler ? (char *)output : os9_temp(".a");
+	splice_blocks(source, r68, spliced);
+	if (!assembler)
+		assemble_as(spliced, source, output, rof);
+}
+
 /* Compiles C file SOURCE: to OUTPUT, as assembler (-a), an object, or a
  * ROF (-obj=rof). */
 static void compile(const char *source, const char *output, int assembler, int rof)
 {
+	/* C 3.2 mode: direct, @ lines and #asm blocks; Ultra C's K&R mode:
+	 * direct (it has no assembler text) */
+	char *prepared = NULL;
+	if (!ucc_mode || st.kandr) {
+		blocks.n = 0;
+		blocks.inside = 0;
+		prepared = prepare_source(source, !ucc_mode);
+		if (prepared != NULL && blocks.n > 0) {
+			compile_blocks(source, prepared, output, assembler, rof);
+			return;
+		}
+	}
 	struct args argv = { 0 };
 	args_add(&argv, GCC);
 	compile_flags(&argv);
+	if (prepared != NULL)
+		prepared_flags(&argv, source);
 	args_add(&argv, assembler ? "-S" : "-c");
 	args_add(&argv, "-o");
 	/* -a: GCC's gas syntax, then r68's through gastor68 (as Microware's
@@ -969,7 +1395,7 @@ static void compile(const char *source, const char *output, int assembler, int r
 	int r68 = assembler && syntax != 'g';
 	char *object = rof ? os9_temp(".o") : r68 ? os9_temp(".s") : (char *)output;
 	args_add(&argv, object);
-	args_add(&argv, source);
+	args_add(&argv, prepared != NULL ? prepared : source);
 	if (!os9_quiet && !os9_show)
 		printf("'%s'\n", source);
 	if (os9_run(&argv, NULL, NULL) != 0)
@@ -1079,6 +1505,13 @@ static void assemble_gas(const char *source, const char *output, int rof)
  * an ELF object is wanted is converted. */
 static void assemble(const char *source, const char *output, int rof)
 {
+	assemble_as(source, source, output, rof);
+}
+
+/* assemble, the progress line naming SHOWN (a C file whose assembler source,
+ * SOURCE, is a temporary file). */
+static void assemble_as(const char *source, const char *shown, const char *output, int rof)
+{
 	struct args argv = { 0 };
 	args_add(&argv, R68);
 	if (ucc_mode) {
@@ -1099,7 +1532,8 @@ static void assemble(const char *source, const char *output, int rof)
 	args_addf(&argv, "-o=%s", output);
 	if (os9_quiet)
 		args_add(&argv, "-q");
-	if (!os9_quiet && !os9_show)
+	/* (a C file's name already shown as it was compiled) */
+	if (!os9_quiet && !os9_show && shown == source)
 		printf("'%s'\n", source);
 	const char *env = getenv("M68K_OS9_ELF");
 	char *saved = env != NULL ? xstrdup(env) : NULL;
@@ -1111,7 +1545,7 @@ static void assemble(const char *source, const char *output, int rof)
 	free(obj);
 	free(saved);
 	if (status != 0)
-		error("assembling %s failed", source);
+		error("assembling %s failed", shown);
 	args_free(&argv);
 	if (!rof && !os9_dry_run && !file_is_elf(output)) {
 		/* a ROF, from Microware's r68: into ELF in its place (the ROF
@@ -1128,7 +1562,7 @@ static void assemble(const char *source, const char *output, int rof)
 		remove(rof_copy);
 		free(rof_copy);
 		if (converted != 0)
-			error("converting %s's ROF to ELF failed", source);
+			error("converting %s's ROF to ELF failed", shown);
 		args_free(&argv);
 	}
 }

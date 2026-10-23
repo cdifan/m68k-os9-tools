@@ -1,5 +1,14 @@
 # gastor68
 
+`gastor68` translates GCC's assembler output (`gas` syntax) into Microware r68 syntax, the
+reverse of [r68togas](r68togas.md). It is a tool in a chain, not a converter of hand-written GNU
+sources: it takes the small, regular subset of `gas` that GCC writes, so that GCC's code can be
+assembled by Microware's `r68` or by [m68k-os9-r68](m68k-os9-r68.md), and read like Microware's
+own compiler output. [m68k-os9-xcc](m68k-os9-xcc.md) uses it for `-a`, which writes r68 syntax
+as Microware's `xcc -a` does, and to put C 3.2's assembler text (`@` lines, `#asm` blocks) into a
+compiled file. Given r68togas's own output, it gives back the r68 source that output was made
+from.
+
 ## Usage
 
     gastor68 [-mode=c32|ucc] [-m<n>] [-n=<psect>] [-o <output>] <source>
