@@ -914,6 +914,11 @@ static void compile_flags(struct args *a)
 	args_add(a, "-mos9newline");
 	args_add(a, "-std=gnu89");
 	args_add(a, "-w");
+	/* C 3.2 assumes nothing from pointer types, and old code reads one
+	 * type through a pointer to another; GCC's -O2 and -Os otherwise do
+	 * (measured on 399 newlib files: 16-20 compiled differently, the code
+	 * 0.1% bigger without) */
+	args_add(a, "-fno-strict-aliasing");
 	if (!st.nostack)
 		args_add(a, "-mos9stkchk");
 	if (st.cpu == 2)

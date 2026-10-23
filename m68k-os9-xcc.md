@@ -139,6 +139,14 @@ whatever the suffix, the first bytes decide.
 - **`-std=gnu89`** takes K&R code.
 - **`-mos9newline`:** `'\n'` is a carriage return, as in Microware's compilers, and `\l` a line
   feed (see GCC's manual).
+- **`-fno-strict-aliasing`:** C 3.2 assumes nothing from pointer types, and old code often reads a
+  value through a pointer to another type, which GCC's optimizer may otherwise reorder or drop.
+  The code is about 0.1% bigger for it.
+- **Common symbols:** an uninitialized global defined in two files (`int x;` in both) is an
+  error, as with C 3.2, whose `l68` reports "duplicate symbol names"; GCC's default `-fno-common`
+  does the same.
+
+**Optimization** follows C 3.2's levels, which select its optimizer passes:
 
 | `xcc` | C 3.2 | GCC |
 |---|---|---|

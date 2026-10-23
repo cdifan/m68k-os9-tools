@@ -1,6 +1,7 @@
 # '\n' in m68k-os9-ucc's code: a CR (13) in Ultra C's default, K&R (-bc) and ANSI (-a) modes, as
 # Ultra C's compiler makes it, and in m68k-os9-xcc (C 3.2); before, ucc left it a line feed. (Ultra
 # C's -a also makes '\r' a line feed; GCC's -mos9newline leaves it a CR.) A fake MWOS tree.
+# fixed: e8fb219 2026-10-23 m68k-os9-ucc: '\n' a CR in every mode (-mos9newline)
 mkdir -p mw/SRC/DEFS mw/OS9/SRC/DEFS mw/OS9/68000/LIB
 cat > nl.c <<'EOF'
 char s[] = "ab\ncd";
