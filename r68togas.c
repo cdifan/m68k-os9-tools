@@ -6802,7 +6802,8 @@ static int macro_name_clash(const char *name)
 
 static void usage(void)
 {
-	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-b] [-r] [-y] [-s] [-x EXT] [-u DIR]... [-o OUTPUT] SOURCE\n", progname);
+	printf("usage: %s [-a SYM[=VAL]]... [-m N] [-d D] [-b [-B] | -bt] [-r] [-y] [-s] [-x EXT] [-u DIR]...\n"
+		"       [-o OUTPUT] SOURCE\n", progname);
 	printf("  Translates a Microware r68 source to a gas source for m68k-elfos9-as --mri\n");
 	printf("  (\".mri 1\" inside), keeping its line numbers; see r68togas.md.\n");
 	printf("  -a SYM[=VAL]  define SYM (1 without VAL) in the prelude (r68's -a=)\n");
