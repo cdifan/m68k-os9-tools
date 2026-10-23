@@ -7139,7 +7139,20 @@ int main(int argc, char **argv)
 	}
 	/* psect name,type/lang,attr/rev,edition,stack,entry[,trap entry]: the
 	 * module header symbols, as rof2elf makes them; of the psect statement
-	 * assembled (r68__psn) where there are more */
+	 * assembled (r68__psn) where there are more; so is its name, where
+	 * they differ (psect statements in ifdef X / else): a .file in each
+	 * one's conditional instead of the prelude's */
+	int names_differ = 0;
+	for (int j = 0; j < st.npsects; j++) {
+		const char *pieces[8];
+		size_t lens[8];
+		int k = split_commas(st.ps_all[j], strlen(st.ps_all[j]), pieces, lens, 8);
+		char *nm = k >= 1 && lens[0] > 0 ? xstrndup(pieces[0], lens[0]) : xstrdup("program");
+		if (psect_name != NULL && strcmp(psect_name, nm) != 0)
+			names_differ = 1;
+		free(psect_name);
+		psect_name = nm;
+	}
 	for (int j = 0; j < st.npsects; j++) {
 		const char *pieces[8];
 		size_t lens[8];
@@ -7149,6 +7162,9 @@ int main(int argc, char **argv)
 		memcpy(st.ps_captured, st.ps_all_captured[j], sizeof st.ps_captured);
 		if (st.npsects > 1)
 			fprintf(out, " ifeq r68__psn-%d\n", j + 1);
+		if (names_differ)
+			fprintf(out, " .mri 0\n .file \"%.*s\"\n .mri 1\n", k >= 1 && lens[0] > 0 ? (int)lens[0] : 7,
+				k >= 1 && lens[0] > 0 ? pieces[0] : "program");
 		if (k >= 2) {
 			/* r68__ps<n>: the values at the psect statement where
 			 * they were known there (expr_complete), else the
@@ -7190,13 +7206,11 @@ int main(int argc, char **argv)
 		}
 		if (st.npsects > 1)
 			fprintf(out, " endc\n");
-		/* without a name (a bare psect), "program", as both Microware
-		 * assemblers name it in the ROF (measured 2026-10-17) */
-		if (j == st.npsects - 1)
-			psect_name = k >= 1 && lens[0] > 0 ? xstrndup(pieces[0], lens[0]) : xstrdup("program");
 	}
 	fprintf(final, "# 1 \"r68.prelude\"\n");
-	if (psect_name != NULL)
+	/* without a name (a bare psect), "program", as both Microware
+	 * assemblers name it in the ROF (measured 2026-10-17) */
+	if (psect_name != NULL && !names_differ)
 		fprintf(final, " .file \"%s\"\n", psect_name);
 	if (r68x_notes.s != NULL)
 		/* the link-time expressions' definitions (r68x_note.h), not loaded */
