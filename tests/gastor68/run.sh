@@ -64,7 +64,7 @@ run_case() {	# SOURCE
 		why=" gastor68 failed: $(head -1 "$t/$name.g.log");"
 	else
 		while read -r e; do [ -z "$e" ] && continue
-			collapse < "$t/$name.a" | grep -q -F -- "$(echo "$e" | collapse)" || why="$why no line \"$e\";"
+			grep -v '^\*' "$t/$name.a" | collapse | grep -q -F -- "$(echo "$e" | collapse)" || why="$why no line \"$e\";"
 		done <<< "$(header expect "$src")"
 		${B}as $cpu --pcrel -o "$t/$name.gas.o" "$src" > "$t/$name.as.log" 2>&1 || why="$why gas failed;"
 		contents "$t/$name.gas.o" "$t/$name.gas"

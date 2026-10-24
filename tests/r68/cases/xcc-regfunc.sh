@@ -1,6 +1,7 @@
 # m68k-os9-xcc (C 3.2 mode) compiles with -mos9regfunc: register on a function declared in a block
 # (register char *p, *find();), which C 3.2's compiler ignores, is accepted, and the call is an
 # ordinary call of the external function; before, GCC refused the declaration.
+# fixed: f8ef720 2026-10-24 m68k-os9-xcc: -mos9regfunc in C 3.2 mode; Ultra C's -a with -mos9newline=swapped
 cat > rf.c <<'EOF'
 char *first(s) char *s; { register char *p, *find(); p = find(s, 'x'); return p; }
 EOF

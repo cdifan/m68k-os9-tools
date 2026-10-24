@@ -2,6 +2,7 @@
 | the register to r68 (spanreg d7, after the psect line) and leaves every branch unsized, to an
 | external too, so that r68 -bt makes a far one long through d7. Without -bt the branches come
 | out as gas makes GCC's (words), so the objects stay the same.
+| fixed: 08be2bc 2026-10-19 r68togas, gastor68: round trip closer to the source; -bt with spanreg; -mspanreg
 | mode: ucc
 | expect: spanreg d7
 | expect: bra f2
