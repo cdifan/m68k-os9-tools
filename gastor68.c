@@ -751,9 +751,35 @@ static const char *branch(const char *op)
 	return NULL;
 }
 
-/* Translates the instruction OP ARGS. */
-static void instruction(const char *label, const char *op, const char *args)
+/* ARGS without blanks outside strings, in a new string: GCC writes some
+ * operands with a blank after the comma (subq.l #8, %sp), and so may inline
+ * assembly, where r68's operand field ends at the first blank. (gas's 'c has
+ * no closing quote; a blank as #' ' would be lost, but GCC writes numbers.) */
+static char *squeezed(const char *args)
 {
+	char *s = xstrdup(args), *d = s;
+	int quote = 0;
+	for (const char *p = args; *p; p++) {
+		if (quote) {
+			if (*p == '\\' && p[1])
+				*d++ = *p++;
+			else if (*p == '"')
+				quote = 0;
+		} else if (*p == '"') {
+			quote = 1;
+		} else if (*p == ' ' || *p == '\t') {
+			continue;
+		}
+		*d++ = *p;
+	}
+	*d = '\0';
+	return s;
+}
+
+/* Translates the instruction OP ARGS. */
+static void instruction(const char *label, const char *op, const char *args_text)
+{
+	char *args = squeezed(args_text);
 	char lower[32];
 	size_t i;
 	for (i = 0; op[i] && i + 1 < sizeof lower; i++)
@@ -792,6 +818,7 @@ static void instruction(const char *label, const char *op, const char *args)
 		}
 	}
 	bputc(&out, '\n');
+	free(args);
 }
 
 /* The label of a line, as r68 writes it: global with ':', column 1. */
