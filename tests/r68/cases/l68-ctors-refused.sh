@@ -1,7 +1,7 @@
 # m68k-os9-l68: a GCC object's constructors and destructors (.ctors, .dtors, .init_array,
 # .fini_array, as __attribute__((constructor)) makes them) are an error: cstart doesn't call
 # them, and the module silently lost their tables. The same objects without them link.
-# fixed: 2026-11-01 m68k-os9-l68: constructors and destructors are an error
+# fixed: a117e6e 2026-11-01 m68k-os9-l68: constructors and destructors are an error
 src sr <<'EOF'
  psect sr,$101,$8000,1,0,entry
 entry rts
