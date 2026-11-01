@@ -6207,6 +6207,13 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			snprintf(opb, sizeof opb, "%s", base);
 			op = opb;
 			annotate_op = 1;
+		} else if (base[0] == 'f' && base[1] == 'b' && base[2] && (size == 'w' || size == 'l')) {
+			/* fb<cc>.w, fb<cc>.l (gastor68 writes GCC's fj<cc> as
+			 * fb<cc>.w): gas has no size suffix on them; its fb<cc> is
+			 * the word form, fb<cc>l the long one */
+			snprintf(opb, sizeof opb, "%s%s", base, size == 'l' ? "l" : "");
+			op = opb;
+			annotate_op = 1;
 		} else if (strcmp(base, "addi") == 0 || strcmp(base, "subi") == 0) {
 			/* r68 makes addi/subi #1..8 addq/subq; gas does that for
 			 * add/sub. */

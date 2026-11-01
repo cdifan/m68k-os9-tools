@@ -1,0 +1,13 @@
+* The 68881's branches with a size, fb<cc>.w (gastor68's form of GCC's fj<cc>) and fb<cc>.l:
+* gas takes no size suffix on them (its fb<cc> is the word form, fb<cc>l the long one), so they
+* were errors ("Unknown operator").
+* fixed: 2026-11-01 r68togas: fb<cc>.w and fb<cc>.l
+* options: -m2
+* expect text: f28e000e f292000a f2c100000006 4e71 4e71 51fc
+ psect t,0,0,0,0,0
+ fbne.w L1
+ fbgt.w L1
+ fbeq.l L1
+ nop
+L1 nop
+ ends

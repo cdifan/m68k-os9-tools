@@ -2054,7 +2054,8 @@ static void undo_line(struct buf *b, const char *line)
 	if (g.tag != NULL) {
 		/* noted: the operation alone, or the statement */
 		/* the operation alone: where r68togas notes only it (ori.w
-		 * to ccr, addi, movea, exg.l, swap.l, ifp1, -y's branches) */
+		 * to ccr, addi, movea, exg.l, swap.l, ifp1, -y's branches,
+		 * fb<cc>.w and .l) */
 		static const char *const ops[] = { "ori", "andi", "eori", "addi", "subi", "movea", "exg", "swap", "ifp1",
 			NULL };
 		char tb[16];
@@ -2069,6 +2070,9 @@ static void undo_line(struct buf *b, const char *line)
 			size_t on = strlen(g.op);
 			if (tb[0] == 'b' && tolower((unsigned char)g.op[0]) == 'b' && on > 2 && g.op[on - 2] == '.' &&
 			    tolower((unsigned char)g.op[on - 1]) == 'l')
+				op_only = 1;
+			if (tb[0] == 'f' && tb[1] == 'b' && tolower((unsigned char)g.op[0]) == 'f' &&
+			    tolower((unsigned char)g.op[1]) == 'b')
 				op_only = 1;
 		}
 		int wrapped = strcasecmp(g.op, "r68glab") == 0 || strcasecmp(g.op, "r68xlab") == 0 ||
