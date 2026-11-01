@@ -1,7 +1,7 @@
 * A floating-point immediate in hex (.s, .d, .x) has its digits from the left in r68: fmove.d
 * #$1 is $1000000000000000 (Ultra C's r68, measured 2026-11-01); gas took them as a number, so
 * fewer digits than the size gave another value. An integer size (fmove.l #$1) stays a number.
-* fixed: 2026-11-01 r68togas, gastor68: floating-point hex immediates as r68 reads them
+* fixed: fe4cba3 2026-11-01 r68togas, gastor68: floating-point hex immediates as r68 reads them
 * options: -m2
 * expect text: f23c5400 1000000000000000 f23c4480 80000000 f23c4800 100000000000000000000000 f23c5422 01a56e1fc2f8f359 f23c4000 00000001
  psect t,0,0,0,0,0
