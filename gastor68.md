@@ -137,8 +137,10 @@ GCC writes `jbsr`, `jra` and `j<cc>`, which `gas` sizes itself; r68 has no such 
 
 ### Dropped
 
-`.type`, `.size`, `.ident`, `.file` (read for the psect's name), `.loc` and the other debug and
-CFI directives, `.swbeg`, and the DWARF sections. Inline assembly arrives between `#APP` and
+`.type`, `.size`, `.hidden`, `.local`, `.ident`, `.file` (read for the psect's name), `.loc` and
+the other debug and CFI directives, `.swbeg`, and the DWARF sections. A ROF symbol is global or
+local, with no type, size or visibility, so none of them change the code or data; `.ident`'s
+string goes to `.comment`, which is never loaded. Inline assembly arrives between `#APP` and
 `#NO_APP`, with `| <line> "<file>"` comments; it is translated like the rest, and
 `.pushsection`/`.popsection` keep a section stack.
 
@@ -150,7 +152,9 @@ recognised without an option and given back as the r68 source it came from:
 - `r68togas | gastor68 | r68 == r68`: the source given back, assembled by Microware's `r68`,
   gives the same object as the source itself (the ROF but for its date);
 - `gastor68 | r68togas | as == as`: for GCC's output, gastor68's r68 translated back by r68togas
-  and assembled by `gas` gives GCC's own object;
+  and assembled by `gas` gives the code and data of GCC's own object, with the read-only data in
+  `.text` after the code, where gastor68 puts it (references to it resolved, not relocated), and
+  symbols without type, size or visibility (see "Dropped");
 - the text is the source's but for blanks and parentheses (r68's precedence may need others).
 
 How:
@@ -207,9 +211,10 @@ been checked for either.
   GCC's subset (see "What it accepts"). C 3.2's `ttl` lines (one per function in `c68`'s output)
   aren't written.
 - **Merged strings:** GCC puts its strings in a mergeable section (`.rodata.str1.1`), so when
-  `gas` assembles GCC's output, `ld` can keep one copy of a string that several files share.
-  gastor68's output has them as `dc.b` lines in the code, like any other read-only data, so each
-  file keeps its own copy: the code is a few bytes longer where strings repeat across files.
+  `gas` assembles GCC's output, `ld` can keep one copy of a string that several files share, and
+  share a string's tail (`""` as the end of another string). gastor68's output has them as `dc.b`
+  lines in the code, like any other read-only data, so each string keeps its own copy: the code
+  is a few bytes longer where strings repeat.
 - **r68 fills unused register fields** where `gas` writes zeros: `ftst`'s destination field and
   the unused Dh field of 32-bit `muls.l`, `mulu.l` and `divs.l`. The instructions are the same.
 - **A 16-bit relocation's addend** beyond 16 bits (a6-relative data beyond 32 KB): the ROF holds
