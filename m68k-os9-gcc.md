@@ -39,6 +39,10 @@ assembler resolves the calls itself and fails; such a file has to be split.
 On OS-9, `malloc` has 16 KB plus what the shell's `#` modifier adds (`hello #64k`); the module's
 other defaults are in `os9.ld` in newlib's `libgloss/m68k`.
 
+Constructors and destructors (`__attribute__((constructor))`, with priorities, and `destructor`)
+run: `os9.ld` gathers their tables and newlib's startup and `exit` call them. `-fexceptions` isn't
+supported: `os9.ld` doesn't place the unwind tables (`.eh_frame`), so the module has none.
+
 ## Finding the tools
 
 GCC and `elf2mod` are found as the other front ends find their tools (see "Finding the tools" in

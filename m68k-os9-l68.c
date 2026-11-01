@@ -962,6 +962,14 @@ static char *write_script(const char *base, long align, int plain, const char *d
 		if (plain)
 			fprintf(fp, "    PROVIDE (dsize = _dsize); PROVIDE (edata = ADDR(.text));\n");
 	}
+	/* GCC's constructors and destructors (__attribute__((constructor)),
+	 * C++'s static objects): nothing calls them (cstart doesn't, and l68 has
+	 * no mechanism), and elf2mod would drop their tables silently. Without
+	 * them the section is empty and isn't written. */
+	fprintf(fp, "    .os9ctors : { KEEP (*(.ctors .ctors.* .dtors .dtors.* .init_array .init_array.*"
+		" .fini_array .fini_array.* .preinit_array)) }\n"
+		"    ASSERT (SIZEOF (.os9ctors) == 0, \"constructors and destructors (.ctors, .dtors,"
+		" .init_array, .fini_array) are not supported: cstart doesn't call them\")\n");
 	fprintf(fp, "}\n");
 	if (fclose(fp) != 0)
 		error("cannot write %s", path);

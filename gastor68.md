@@ -36,9 +36,10 @@ own headers (`os9math.h`'s math traps, newlib's `os9-sys.h` system calls).
 
 Not accepted: hand-written GNU sources beyond that subset (`.macro`, `.irp`, `.rept` with
 expressions, `.weak`, `.uleb128`, section tricks), which have no r68 equivalent or need an
-assembler to resolve, and sections r68 has no form for, such as `.ctors` (C constructors). The
-asymmetry with r68togas is deliberate: r68togas takes everything real r68 sources use, gastor68
-only what GCC writes.
+assembler to resolve, and sections r68 has no form for, such as `.ctors` and `.dtors` (C
+constructors and destructors) and `-fexceptions`'s `.gcc_except_table`. The asymmetry with
+r68togas is deliberate: r68togas takes everything real r68 sources use, gastor68 only what GCC
+writes.
 
 ## Translation
 

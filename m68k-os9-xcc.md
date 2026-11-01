@@ -395,6 +395,9 @@ name (`cdilogo.img`, `font1.ft`; Sony's `.Mod` code modules keep theirs). `m68k-
 - Long data and code offsets (`-k=...l`, `-k=...cl`) and adhesive modules (`-bg`) aren't
   available.
 - One source file with more than 32 KB of code can't be compiled (see "Linking").
+- Constructors and destructors (`__attribute__((constructor))`, `destructor`) aren't supported:
+  `cstart` doesn't call them, and the link refuses them (see m68k-os9-l68.md). Nor is
+  `-fexceptions`: the module has no unwind tables.
 
 ## Tests
 
