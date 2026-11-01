@@ -271,6 +271,15 @@ static void tokens(struct buf *b, const char *s, size_t n)
 					bputc(b, '=');
 			/* A size after a name (sym:w) is GNU's; r68 needs none. */
 			put_symbol(b, s + i, j - i);
+			/* GNU's PLT operator after the name (bsr.w g@PLTPC with
+			 * -mbsrw): in a static link the symbol itself; r68 would
+			 * take g@PLTPC as a name */
+			if (j + 6 <= n && strncmp(s + j, "@PLTPC", 6) == 0 &&
+			    (j + 6 == n || !symchar((unsigned char)s[j + 6])))
+				j += 6;
+			else if (j + 4 <= n && strncmp(s + j, "@PLT", 4) == 0 &&
+				 (j + 4 == n || !symchar((unsigned char)s[j + 4])))
+				j += 4;
 			i = j;
 		} else if (c == ':' && i + 1 < n && strchr("wlWL", s[i + 1]) && (i + 2 == n || !isalnum((unsigned char)s[i + 2]))) {
 			/* (sym:w,%pc): the size of a displacement */

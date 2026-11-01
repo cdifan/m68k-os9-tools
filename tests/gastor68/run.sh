@@ -36,8 +36,10 @@ contents() {
 		echo >> "$2$s"
 		[ $s = .text ] || ${B}objdump -h "$1" | awk -v s=$s '$2 == s {print "size", $3}' >> "$2$s"
 	done
-	# the code's and data's (not r68togas's .r68ord records, for elf2rof)
-	${B}objdump -r -j .text -j .data "$1" 2> /dev/null | grep '^[0-9a-f]\{8\} ' > "$2.rel"
+	# the code's and data's (not r68togas's .r68ord records, for elf2rof); gas's PLT
+	# relocations (g@PLTPC) are PC-relative ones in our static links
+	${B}objdump -r -j .text -j .data "$1" 2> /dev/null | grep '^[0-9a-f]\{8\} ' |
+	  awk '{sub(/^R_68K_PLT/, "R_68K_PC", $2); print $1, $2, $3}' > "$2.rel"
 }
 # A's contents against B's (B's .text may have up to 3 bytes of padding more: nop or trapf)
 same() {
