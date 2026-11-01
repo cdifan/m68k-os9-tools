@@ -16,6 +16,9 @@ options: it runs `m68k-elfos9-gcc` with newlib's OS-9 runtime (`-specs=os9.specs
 
 - **GCC's options** go to `m68k-elfos9-gcc` as they are, with `-specs=os9.specs` added. With
   `-c`, `-S`, `-E`, `-M` (and the others after which GCC doesn't link) it only runs GCC.
+- **The C dialect** is that GCC's default, as no `-std` is added: `gnu17` with GCC 11, `gnu23`
+  with GCC 16 (where `int f();` declares a function without parameters and `bool` is a keyword);
+  `-std=gnu17` gives the earlier one. (`m68k-os9-xcc` sets Microware C's dialect itself.)
 - **`-Wm,<option>,...`** passes options to `elf2mod`, comma-separated: `-Wm,-g` for a symbol
   module, `-Wm,-e,<edition>`, `-Wm,-s,<stack>`, `-Wm,-n,<name>` and so on (see
   [elf2mod.md](elf2mod.md)).
