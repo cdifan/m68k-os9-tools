@@ -6234,6 +6234,24 @@ static void translate_line(const char *text, struct buf *out, const char *path, 
 			l.args = a.s;
 			annotate = 1;
 		}
+		if (base[0] == 'f' && (size == 's' || size == 'd' || size == 'x') && l.args[0] == '#' &&
+		    l.args[1] == '$') {
+			/* fmove.d #$1,fp0: r68 takes a floating-point
+			 * immediate's hex digits from the left (Ultra C's r68,
+			 * measured 2026-11-01: #$1 is $1000000000000000), gas
+			 * as a number: the digits are padded on the right */
+			size_t w = size == 's' ? 8 : size == 'd' ? 16 : 24, d = 0;
+			while (isxdigit((unsigned char)l.args[2 + d]))
+				d++;
+			if (d > 0 && d < w && (l.args[2 + d] == ',' || l.args[2 + d] == '\0')) {
+				struct buf a = { 0 };
+				bprintf(&a, "#$%.*s%.*s%s", (int)d, l.args + 2, (int)(w - d), "000000000000000000000000",
+					l.args + 2 + d);
+				free(l.args);
+				l.args = a.s;
+				annotate = 1;
+			}
+		}
 		/* move.l #n,Dn: r68 doesn't make it moveq, gas would. */
 		int no_moveq = strcmp(base, "move") == 0 && size == 'l';
 		/* move.b with a negative immediate: r68 writes the extension

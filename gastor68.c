@@ -216,6 +216,12 @@ static int register_name(const char *s, size_t n, struct buf *b)
 /* Translates text S (N chars), an operand or expression, token by token:
  * %reg to reg, 0x to $, symbols renamed, MIT and Motorola address modes as
  * r68's (done by the caller). */
+/* The hex digits of the current floating-point instruction's operand size
+ * (8, 16, 24), 0 for others: an immediate is written with all of them, as
+ * r68 takes a floating-point immediate's digits from the left (#$1 in
+ * fmove.d is $1000000000000000) and GCC writes no leading zeros. */
+static size_t fp_imm_digits;
+
 static void tokens(struct buf *b, const char *s, size_t n)
 {
 	size_t i = 0;
@@ -238,6 +244,9 @@ static void tokens(struct buf *b, const char *s, size_t n)
 			while (j < n && isxdigit((unsigned char)s[j]))
 				j++;
 			bputc(b, '$');
+			if (fp_imm_digits && i > 0 && s[i - 1] == '#')
+				for (size_t z = j - i - 2; z < fp_imm_digits; z++)
+					bputc(b, '0');
 			bput(b, s + i + 2, j - i - 2);
 			i = j;
 		} else if (isdigit((unsigned char)c)) {
@@ -819,11 +828,15 @@ static void instruction(const char *label, const char *op, const char *args_text
 			const char *pieces[8];
 			size_t lens[8];
 			int k = split_commas(args, strlen(args), pieces, lens, 8);
+			const char *dot = strrchr(lower, '.');
+			if (lower[0] == 'f' && dot != NULL && dot[2] == '\0')
+				fp_imm_digits = dot[1] == 's' ? 8 : dot[1] == 'd' ? 16 : dot[1] == 'x' ? 24 : 0;
 			for (int j = 0; j < k; j++) {
 				if (j)
 					bputc(&out, ',');
 				operand(&out, pieces[j], lens[j]);
 			}
+			fp_imm_digits = 0;
 		}
 	}
 	bputc(&out, '\n');
