@@ -94,7 +94,7 @@ static const struct option options[] = {
 	{ "x", VALUE, "=<n>", "Align the execution offset to <n> (2, 4, 8, 16)", NULL, O_X, UCC },
 	{ "z", OPTVALUE, "[=<path>]", "Files and options from standard input or <path>", NULL, O_Z, C32 | UCC },
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
-	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
+	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's; its common symbols' places too)", NULL, O_DIALECT, OURS },
 	{ "namepad", VALUE, "=<hex>", "The byte after an odd-length module name (default 00)", NULL, O_NAMEPAD, OURS },
 	{ "dbgversion", VALUE, "=<n>", "With -g, the .dbg's word after the magic (default: 3 Ultra C style, 0 C 3.2's)", NULL, O_DBGVERSION, OURS },
 	{ "stbnamepad", VALUE, "=<hex>", "With -g, the byte after the symbol module's odd-length name (default 00)", NULL, O_STBNAMEPAD, OURS },
@@ -888,7 +888,16 @@ static void sect_inputs(FILE *fp, const char *sect, const char *patterns, long a
 	fprintf(fp, "\n        *(%s)\n   ", patterns);
 }
 
-static char *write_script(const char *base, long align, int plain, const char *data, int raw, const struct args *files)
+/* COMMONS, if not null: C 3.2's placement of common symbols (see
+ * place_commons): BSS names every input in link order (its script name),
+ * SECTS each one's section of COMMONS (the object), or "" */
+struct commons {
+	const char *object;
+	struct args bss, sects;
+};
+
+static char *write_script(const char *base, long align, int plain, const char *data, int raw, const struct args *files,
+			  const struct commons *commons)
 {
 	char *path = os9_temp(".ld");
 	FILE *fp = fopen(path, "w");
@@ -943,7 +952,17 @@ static char *write_script(const char *base, long align, int plain, const char *d
 		 * before ends (at the address ., not aligned to its inputs': an
 		 * assembler's are 4, rof2elf's 2) */
 		fprintf(fp, "    %s%s%s :%s {", outs[i].sect, align > 2 && files != NULL ? " ." : "", outs[i].flags, sub);
-		sect_inputs(fp, outs[i].sect, outs[i].patterns, align, files);
+		if (i == 0 && commons != NULL) {
+			/* each input's vsect, then the commons it is the first to
+			 * define; the rest (libgcc's members) after them */
+			for (int k = 0; k < commons->bss.n; k++) {
+				fprintf(fp, "\n        \"%s\"(.bss .bss.*)", commons->bss.v[k]);
+				if (commons->sects.v[k][0] != '\0')
+					fprintf(fp, " \"%s\"(%s)", commons->object, commons->sects.v[k]);
+			}
+			fprintf(fp, "\n        *(.bss .bss.*)\n   ");
+		} else
+			sect_inputs(fp, outs[i].sect, outs[i].patterns, align, files);
 		if (i == 0)
 			fprintf(fp, " *(COMMON)");	/* after all .bss, as before */
 		fprintf(fp, " ");
@@ -974,6 +993,273 @@ static char *write_script(const char *base, long align, int plain, const char *d
 	if (fclose(fp) != 0)
 		error("cannot write %s", path);
 	return path;
+}
+
+/* ----- Common symbols (C 3.2's l68) ----- */
+
+/* An input of the link: KEY as GNU ld's map names it (a path, or
+ * "archive(member)"), its .bss size, its new commons' section number. */
+struct cinput {
+	char *key;
+	long bss;
+	int sect;
+};
+
+/* A common symbol: its name, size, the input (index) that first defines it. */
+struct csym {
+	char *name;
+	long size;
+	int input;
+};
+
+static int cinput_find(const struct cinput *in, int n, const char *key)
+{
+	for (int i = 0; i < n; i++)
+		if (strcmp(in[i].key, key) == 0)
+			return i;
+	return -1;
+}
+
+/* C 3.2's l68 allocates the common symbols (ROF definitions of type 0x0100,
+ * their value the size: what the ROF-writing GCCs of the 1990s made of C's
+ * tentative definitions and C++'s static members) with the uninitialized
+ * data of the first psect that defines them, in link order: each psect's
+ * block is its vsect, then the commons it is the first to define, in its
+ * order of definitions, each at the next multiple of 4 from the block's
+ * start; the block ends at the last one's end, rounded up to even (measured
+ * 2026-11-05 on the map, l68 -m -s, of a 301-psect program: every psect as
+ * that; and on small links). Not copied: when a psect has a common that a
+ * later psect defines, l68 puts its other new commons at the block's offset
+ * 1, over its vsect, and the block keeps the vsect's size (a bug: they share
+ * storage). GNU ld puts all commons after all .bss instead. Here: a probe link
+ * (LINK, the full command, with its map in MAP) gives the inputs in link order
+ * and their .bss sizes, nm their commons in their order; an assembled object
+ * defines each common once, in a section per input, padded so, and the script
+ * places that section right after the input's .bss (write_script). A
+ * definition overrides a common, so the inputs' common symbols resolve to it.
+ * Returns 0 with C filled in, or -1 when there are no commons. */
+static int place_commons(const struct args *link, const char *map, struct commons *c)
+{
+	struct args argv = { 0 };
+	args_add(&argv, GCC);
+	args_append(&argv, link);
+	args_add(&argv, "-o");
+	args_add(&argv, os9_temp(".elf"));
+	args_add(&argv, "-Wl,--noinhibit-exec");
+	os9_run(&argv, NULL, os9_temp(".log"));
+	args_free(&argv);
+
+	/* the map: the inputs in link order (every one has a .text, also an
+	 * empty one), their .bss sizes */
+	FILE *fp = fopen(map, "r");
+	if (fp == NULL)
+		return -1;
+	struct cinput *in = NULL;
+	int nin = 0;
+	char line[4096], sect[256], path[4096], prev[256] = "";
+	int started = 0;
+	while (fgets(line, sizeof line, fp) != NULL) {
+		line[strcspn(line, "\r\n")] = '\0';
+		if (!started) {
+			started = strncmp(line, "Linker script and memory map", 28) == 0;
+			continue;
+		}
+		unsigned long addr, size;
+		int ok = 0;
+		if (sscanf(line, " %255s 0x%lx 0x%lx %4095[^\n]", sect, &addr, &size, path) == 4 && sect[0] == '.')
+			ok = 1;
+		else if (prev[0] != '\0' && sscanf(line, " 0x%lx 0x%lx %4095[^\n]", &addr, &size, path) == 3) {
+			strcpy(sect, prev);
+			ok = 1;
+		}
+		prev[0] = '\0';
+		if (!ok) {
+			/* a long section name alone on its line */
+			if (line[0] == ' ' && line[1] == '.' && sscanf(line, " %255s", sect) == 1 && strchr(line + 1, ' ') == NULL)
+				strcpy(prev, sect);
+			continue;
+		}
+		int text = strcmp(sect, ".text") == 0, bss = strcmp(sect, ".bss") == 0;
+		if (!text && !bss)
+			continue;
+		int k = cinput_find(in, nin, path);
+		if (k < 0) {
+			if (!text)
+				continue;
+			in = xrealloc(in, (nin + 1) * sizeof *in);
+			in[nin] = (struct cinput){ xstrdup(path), 0, -1 };
+			k = nin++;
+		}
+		if (bss)
+			in[k].bss += (long)size;
+	}
+	fclose(fp);
+
+	/* the commons, input by input in link order (nm -p: in their order of
+	 * definition); names defined elsewhere as code or data aren't commons */
+	struct csym *cs = NULL;
+	int ncs = 0;
+	struct args defined = { 0 }, files = { 0 };
+	for (int i = 0; i < nin; i++) {
+		char *file = xstrdup(in[i].key);
+		size_t len = strlen(file);
+		char *lp = strrchr(file, '(');
+		if (len > 0 && file[len - 1] == ')' && lp != NULL)
+			*lp = '\0';
+		int seen = 0;
+		for (int j = 0; j < files.n && !seen; j++)
+			seen = strcmp(files.v[j], file) == 0;
+		if (!seen)
+			args_add(&files, file);
+		free(file);
+	}
+	for (int f = 0; f < files.n; f++) {
+		char *out = os9_temp(".nm");
+		args_add(&argv, NM);
+		args_add(&argv, "-p");
+		args_add(&argv, "-S");
+		args_add(&argv, files.v[f]);
+		int status = os9_run(&argv, out, os9_temp(".log"));
+		args_free(&argv);
+		FILE *np = status == 0 ? fopen(out, "r") : NULL;
+		if (np == NULL)
+			continue;
+		char *key = xstrdup(files.v[f]);
+		while (fgets(line, sizeof line, np) != NULL) {
+			line[strcspn(line, "\r\n")] = '\0';
+			size_t len = strlen(line);
+			if (len == 0)
+				continue;
+			if (line[len - 1] == ':' && strchr(line, ' ') == NULL) {
+				/* an archive member's header */
+				line[len - 1] = '\0';
+				free(key);
+				key = concat(files.v[f], "(", line, ")", NULL);
+				continue;
+			}
+			/* value, size (not always), type, name, by fields (a
+			 * type letter can read as a hex digit); only the linked
+			 * members, only global definitions (a static of the same
+			 * name is another symbol) */
+			char fld[4][1024];
+			int nf = sscanf(line, "%1023s %1023s %1023s %1023s", fld[0], fld[1], fld[2], fld[3]);
+			if (nf < 3 || strlen(fld[nf - 2]) != 1)
+				continue;
+			char type = fld[nf - 2][0];
+			const char *name = fld[nf - 1];
+			int k = cinput_find(in, nin, key);
+			if (k < 0)
+				continue;
+			if (type == 'C' && nf == 4) {
+				cs = xrealloc(cs, (ncs + 1) * sizeof *cs);
+				cs[ncs++] = (struct csym){ xstrdup(name), strtol(fld[1], NULL, 16), k };
+			} else if (isupper((unsigned char)type) && type != 'U' && type != 'C')
+				args_add(&defined, name);
+		}
+		free(key);
+		fclose(np);
+	}
+	args_free(&files);
+
+	/* each common once: where it is first defined in link order, the size
+	 * the largest definition gives it */
+	int nsect = 0;
+	char *src = os9_temp(".s");
+	FILE *sp = fopen(src, "w");
+	if (sp == NULL)
+		error("cannot write %s", src);
+	for (int i = 0; i < nin; i++) {
+		/* the section is word aligned (as the commons are: GNU ld warns
+		 * of a smaller alignment), the input's .bss ends even */
+		long rel = (in[i].bss + 1) & ~1L;
+		int any = 0;
+		for (int k = 0; k < ncs; k++) {
+			if (cs[k].input != i || cs[k].name == NULL)
+				continue;
+			int skip = 0;
+			for (int j = 0; j < defined.n && !skip; j++)
+				skip = strcmp(defined.v[j], cs[k].name) == 0;
+			long size = cs[k].size;
+			for (int j = 0; j < ncs; j++) {
+				if (j == k || cs[j].name == NULL || strcmp(cs[j].name, cs[k].name) != 0)
+					continue;
+				/* defined again (here or in a later input): one symbol */
+				if (cs[j].input < cs[k].input || (cs[j].input == cs[k].input && j < k)) {
+					skip = 1;
+					break;
+				}
+				if (cs[j].size > size)
+					size = cs[j].size;
+			}
+			if (skip)
+				continue;
+			if (!any) {
+				in[i].sect = nsect++;
+				fprintf(sp, "\t.section .bss.os9com.%d,\"aw\",@nobits\n\t.balign 2\n", in[i].sect);
+				any = 1;
+			}
+			long pad = ((rel + 3) & ~3L) - rel;
+			if (pad > 0)
+				fprintf(sp, "\t.space %ld\n", pad);
+			rel += pad;
+			fprintf(sp, "\t.globl \"%s\"\n\"%s\":\n\t.space %ld\n", cs[k].name, cs[k].name, size);
+			rel += size;
+		}
+		if (any && (rel & 1))
+			fprintf(sp, "\t.space 1\n");
+	}
+	fclose(sp);
+	args_free(&defined);
+	for (int k = 0; k < ncs; k++)
+		free(cs[k].name);
+	free(cs);
+	if (nsect == 0) {
+		for (int i = 0; i < nin; i++)
+			free(in[i].key);
+		free(in);
+		return -1;
+	}
+
+	char *obj = os9_temp(".o");
+	args_add(&argv, os9_gnu("as"));
+	args_add(&argv, "-o");
+	args_add(&argv, obj);
+	args_add(&argv, src);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("assembling the common symbols (%s) failed", src);
+	args_free(&argv);
+	/* without the empty .text, .data, .bss: aligned to 4 by as, they would
+	 * pad the end of the code or of the data */
+	args_add(&argv, OBJCOPY);
+	args_add(&argv, "-R");
+	args_add(&argv, ".text");
+	args_add(&argv, "-R");
+	args_add(&argv, ".data");
+	args_add(&argv, "-R");
+	args_add(&argv, ".bss");
+	args_add(&argv, obj);
+	if (os9_run(&argv, NULL, NULL) != 0)
+		error("removing the empty sections of %s failed", obj);
+	args_free(&argv);
+	c->object = obj;
+	for (int i = 0; i < nin; i++) {
+		/* the script's name: archive:member */
+		char *key = in[i].key;
+		size_t len = strlen(key);
+		char *lp = strrchr(key, '(');
+		if (len > 0 && key[len - 1] == ')' && lp != NULL) {
+			key[len - 1] = '\0';
+			*lp = ':';
+		}
+		args_add(&c->bss, key);
+		if (in[i].sect >= 0)
+			args_addf(&c->sects, ".bss.os9com.%d", in[i].sect);
+		else
+			args_add(&c->sects, "");
+		free(key);
+	}
+	free(in);
+	return 0;
 }
 
 /* Adds input PATH to the link; the driver would take a .r file for a Ratfor
@@ -1090,12 +1376,12 @@ int main(int argc, char **argv)
 		args_append(&files, &order);
 	}
 	args_add(&l.link, "-T");
+	int script_arg = l.link.n;
 	char *base = st.raw ? concat("0x", st.base != NULL ? st.base : "0", NULL) : xstrdup("0x400000");
 	/* Raw output (-r) isn't biased either, whatever the type (as l68). */
 	int biased = !st.raw && (type == 0x01 || type == 0x0B);
 	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw,
-				       pad_each ? &files : NULL));
-	free(base);
+				       pad_each ? &files : NULL, NULL));
 	args_free(&files);
 	for (int i = 0; pad_each && i < nroot_members; i++)
 		add_input(&l.link, members_path(i));
@@ -1116,6 +1402,18 @@ int main(int argc, char **argv)
 	args_free(&libs);
 	args_free(&order);
 	args_add(&l.link, "-lgcc");
+	/* C 3.2's placement of common symbols (Ultra C's l68 not measured yet):
+	 * the script again, with them, and their definitions as an input */
+	struct commons commons = { 0 };
+	if (st.c32 && !os9_dry_run && place_commons(&l.link, map, &commons) == 0) {
+		free(l.link.v[script_arg]);
+		l.link.v[script_arg] = write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw,
+						    NULL, &commons);
+		add_input(&l.link, commons.object);
+		args_free(&commons.bss);
+		args_free(&commons.sects);
+	}
+	free(base);
 
 	char *elf = concat(output, ".elf", NULL);
 	l.elf = elf;

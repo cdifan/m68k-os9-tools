@@ -121,7 +121,8 @@ address order. `m68k-os9-l68` passes the map.
 Calls and address loads are PC-relative with 16-bit displacements, so they reach ±32 KB. For larger
 programs, `elf2mod` builds a jump table, as Microware's linker does: each target that's too far
 gets an entry `jmp target` in `_jmptbl`, in the data area (relocated when OS-9 loads the module),
-and each far reference is redirected through it, keeping its size:
+one per global name (two names of one address get two, as in Microware's linkers), and each far
+reference is redirected through it, keeping its size:
 
 | Instruction | Becomes |
 |---|---|
@@ -272,8 +273,8 @@ odd-length module name to a word (default 0, as both Microware linkers on DOS an
 native OS-9 builds of `l68` copy the name in words from the command line, so their pad is whatever
 followed the name there); `--irefs-pad=HEX` writes bytes after the pointer tables, before the CRC,
 as some old modules have them; `--jmptbl-spare=N` writes N unused jump table entries (`jmp 0`, the
-module's start) after the used ones, listed among the pointers to code, as some of Ultra C's `l68
--a` links have them.
+module's start) after the used ones, listed among the pointers to code, as some `l68 -a` links of
+both Microware linkers have them.
 
 ## The owner
 

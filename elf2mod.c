@@ -1190,7 +1190,7 @@ int main(int argc, char *argv[]) {
 		int *objranks = NULL;
 		long ntsecs = opt_ldmap ? read_ldmap_text(opt_ldmap, opt_ldranks, &tsecs, &objranks) : -1;
 		int *tobjs = NULL, *tranks = NULL;
-		const char **tnames = NULL;
+		const char **tnames = NULL, **tglobs = NULL;
 		for(int pass = 0; pass < 2; pass++) {
 		if(pass == 1 && ntargets > 1) {
 			// a stable insertion sort
@@ -1204,6 +1204,7 @@ int main(int argc, char *argv[]) {
 					int to = tobjs[b - 1]; tobjs[b - 1] = tobjs[b]; tobjs[b] = to;
 					int tr = tranks[b - 1]; tranks[b - 1] = tranks[b]; tranks[b] = tr;
 					const char *tn = tnames[b - 1]; tnames[b - 1] = tnames[b]; tnames[b] = tn;
+					const char *tg = tglobs[b - 1]; tglobs[b - 1] = tglobs[b]; tglobs[b] = tg;
 				}
 			}
 		}
@@ -1268,9 +1269,16 @@ int main(int argc, char *argv[]) {
 				printf("far PC-relative reference at .text+%08lx (instruction %04x) can't be patched: target %s\n", (unsigned long)rel->address, op, rel->sym_ptr_ptr[0]->name);
 				return 1;
 			}
+			// An entry per global name, as both Microware linkers (measured
+			// 2026-11-05: two names of one address get two entries); else
+			// per address.
+			const asymbol *ts = rel->sym_ptr_ptr[0];
+			const char *gname = (ts->flags & BSF_GLOBAL) && !(ts->flags & BSF_SECTION_SYM) ? bfd_asymbol_name(ts) : NULL;
 			size_t k;
-			for(k = 0; k < ntargets && targets[k] != target; k++)
-				;
+			for(k = 0; k < ntargets; k++) {
+				if(targets[k] == target && (tglobs[k] == NULL ? gname == NULL : gname != NULL && !strcmp(tglobs[k], gname)))
+					break;
+			}
 			if(pass == 0) {
 				if(k == ntargets) {
 					// the object of this first reference (by its place in
@@ -1286,9 +1294,11 @@ int main(int argc, char *argv[]) {
 					tobjs = realloc(tobjs, (ntargets + 1) * sizeof(int));
 					tranks = realloc(tranks, (ntargets + 1) * sizeof(int));
 					tnames = realloc(tnames, (ntargets + 1) * sizeof(char *));
+					tglobs = realloc(tglobs, (ntargets + 1) * sizeof(char *));
 					targets[ntargets] = target;
 					tobjs[ntargets] = obj;
 					tranks[ntargets] = rank;
+					tglobs[ntargets] = gname;
 					tnames[ntargets++] = bfd_asymbol_name(rel->sym_ptr_ptr[0]);
 				}
 				continue;
@@ -1309,6 +1319,7 @@ int main(int argc, char *argv[]) {
 		free(tobjs);
 		free(tranks);
 		free(tnames);
+		free(tglobs);
 		if(ntargets) {
 			size_t cap = have_jt && have_ejt && (int32_t)(ejt - jt) >= 0 ? (size_t)(int32_t)(ejt - jt) / 6 : 0;
 			if(!have_jt || !have_ejt || ntargets > cap) {
