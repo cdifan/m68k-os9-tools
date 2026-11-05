@@ -538,10 +538,12 @@ int os9_link(struct os9link *l)
 	/* Link anyway, and let elf2mod say how large a table it needs. */
 	char *out = os9_temp(".out");
 	link_elf(l, 0, os9_temp(".log"));
-	make_module(l, out);
+	int mstatus = make_module(l, out);
 	long table = table_size(out);
 	if (table < 0) {
-		cat_stderr(log);
+		/* elf2mod failed for another reason (a short branch out of
+		 * reach): its message, not the far calls' */
+		cat_stderr(mstatus != 0 ? out : log);
 		return status;
 	}
 	if (link_elf(l, table + 6 * l->jmptbl_spare, os9_temp(".log")) != 0) {
