@@ -162,6 +162,7 @@ typedef struct idref {
 	int vs; // its vsect's place in the .r68ord records (INT_MAX: none)
 	asymbol *sym; // the global symbol it refers to (NULL: none)
 	const char *ext; // that symbol's name, if another object defines it (--ld-map)
+	int extlib; // that object is a -l= library's member (--ld-ranks)
 } IdRef;
 
 int cmp_idref(const void *a, const void *b) {
@@ -180,12 +181,17 @@ int cmp_idref(const void *a, const void *b) {
 // each first (measured 2026-10-19 on a ROM link's 709). So: the jump table's
 // entries, the last first; then by object, the last first; in one, its
 // local pointers, then those to other objects' symbols by name and address,
-// both the last first.
+// both the last first. Ultra C's l68 lists those to symbols that -l=
+// libraries' members define before those to the given files' (measured
+// 2026-11-05 on a 260 KB program's link: all 49 objects; as if it resolved a
+// file's names first and the libraries' later, each new one first), C 3.2's
+// l68 all by name; with --ld-ranks (Ultra C's order) so.
 int cmp_idref_obj(const void *a, const void *b) {
 	const IdRef *p = a, *q = b;
 	if(p->obj != q->obj) return p->obj > q->obj ? -1 : 1;
 	if(p->obj == INT_MAX) return -cmp_idref(a, b);
 	if(!p->ext != !q->ext) return p->ext ? 1 : -1;
+	if(p->ext && p->extlib != q->extlib) return p->extlib ? -1 : 1;
 	if(p->ext) {
 		int c = strcmp(p->ext, q->ext);
 		return c ? -c : -cmp_idref(a, b);
@@ -200,6 +206,7 @@ typedef struct inputsec {
 	uint64_t start, size;
 	int obj;
 	int text;
+	int lib; // a -l= library's member (read_ldmap with a ranks file)
 } InputSec;
 
 // A number "0x..." of GNU ld's map into V, as wide as ld wrote it (a 64-bit
@@ -236,9 +243,10 @@ static int map_insec(FILE *fp, char *line, int linesz, char *name, uint64_t *sta
 // objects numbered in the link's order: by their LOAD line's place (an
 // archive member's: its archive's), then by where the map first names them
 // in any section (an object with remote data only is named in .data's part
-// only when it has some). The number of input sections, -1 if MAP can't be
-// read.
-long read_ldmap(const char *map, InputSec **secs, int all) {
+// only when it has some); with RANKSFILE (lines "RANK PATH", see
+// read_ldmap_text), each marked as a library's member when it's there with
+// a rank above 0. The number of input sections, -1 if MAP can't be read.
+long read_ldmap(const char *map, const char *ranksfile, InputSec **secs, int all) {
 	FILE *fp = fopen(map, "r");
 	if(!fp) return -1;
 	static char loads[1024][512], seen[4096][512];
@@ -246,6 +254,17 @@ long read_ldmap(const char *map, InputSec **secs, int all) {
 	int nloads = 0, nseen = 0, in_data = 0;
 	long n = 0;
 	*secs = NULL;
+	char (*members)[512] = NULL;
+	int nmembers = 0;
+	FILE *rf = ranksfile ? fopen(ranksfile, "r") : NULL;
+	while(rf && fgets(line, sizeof line, rf)) {
+		int r;
+		char path[512];
+		if(sscanf(line, "%d %511[^\n]", &r, path) != 2 || r <= 0) continue;
+		members = realloc(members, (nmembers + 1) * sizeof *members);
+		strcpy(members[nmembers++], path);
+	}
+	if(rf) fclose(rf);
 	while(fgets(line, sizeof line, fp)) {
 		char name[256], file[512];
 		if(!strncmp(line, "LOAD ", 5)) {
@@ -281,10 +300,14 @@ long read_ldmap(const char *map, InputSec **secs, int all) {
 		for(s = 0; s < nseen && strcmp(seen[s], file); s++);
 		size_t alen = strchr(file, '(') ? (size_t)(strchr(file, '(') - file) : strlen(file);
 		for(l = 0; l < nloads && (strlen(loads[l]) != alen || strncmp(loads[l], file, alen)); l++);
+		int lib = 0;
+		for(int r = 0; r < nmembers && !lib; r++)
+			lib = !strcmp(members[r], file);
 		*secs = realloc(*secs, (n + 1) * sizeof(InputSec));
-		(*secs)[n++] = (InputSec){ start, size, l * 4096 + s, in_text };
+		(*secs)[n++] = (InputSec){ start, size, l * 4096 + s, in_text, lib };
 	}
 	fclose(fp);
+	free(members);
 	return n;
 }
 
@@ -337,7 +360,7 @@ long read_ldmap_text(const char *map, const char *ranksfile, InputSec **secs, in
 			strcpy(files[nfiles++], file);
 		}
 		*secs = realloc(*secs, (n + 1) * sizeof(InputSec));
-		(*secs)[n++] = (InputSec){ start, size, f, 1 };
+		(*secs)[n++] = (InputSec){ start, size, f, 1, 0 };
 	}
 	fclose(fp);
 	free(rpaths);
@@ -1041,7 +1064,7 @@ int main(int argc, char *argv[]) {
 			if(ls) {
 				// A pointer into the module, relocated at load time; its
 				// value is set once the module's layout is known.
-				drefs[ndrefs] = (IdRef){ DOFF(bfd_section_vma(sec)) + rel->address, 1, 0, 0, NULL, NULL };
+				drefs[ndrefs] = (IdRef){ DOFF(bfd_section_vma(sec)) + rel->address, 1, 0, 0, NULL, NULL, 0 };
 				ndrefs++;
 				dls = realloc(dls, (ndls + 1) * sizeof(LsRef));
 				dls[ndls++] = (LsRef){ DOFF(bfd_section_vma(sec)) + rel->address, ls, rel->howto->type, rel->addend };
@@ -1059,7 +1082,7 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 			drefs[ndrefs] = (IdRef){ DOFF(bfd_section_vma(sec)) + rel->address, ssec == text, 0, 0,
-						 (s->flags & BSF_GLOBAL) && !(s->flags & BSF_SECTION_SYM) ? s : NULL, NULL };
+						 (s->flags & BSF_GLOBAL) && !(s->flags & BSF_SECTION_SYM) ? s : NULL, NULL, 0 };
 			ndrefs++;
 		}
 	}
@@ -1348,7 +1371,7 @@ int main(int argc, char *argv[]) {
 				if(k < ntargets && targets[k] == ETEXT_TARGET) {
 					etext_entry = eoff + 2; // the address, filled in at the end
 				}
-				drefs[ndrefs] = (IdRef){ eoff + 2, 1, 0, 0, NULL, NULL };
+				drefs[ndrefs] = (IdRef){ eoff + 2, 1, 0, 0, NULL, NULL, 0 };
 				ndrefs++;
 			}
 			qsort(drefs, ndrefs, sizeof(IdRef), cmp_idref);
@@ -1367,7 +1390,7 @@ int main(int argc, char *argv[]) {
 	// object's others (see cmp_idref_obj).
 	if(opt_ldmap) {
 		InputSec *isecs;
-		long nisecs = read_ldmap(opt_ldmap, &isecs, 1);
+		long nisecs = read_ldmap(opt_ldmap, opt_ldranks, &isecs, 1);
 		if(nisecs < 0) {
 			printf("cannot read the map %s\n", opt_ldmap);
 			return 1;
@@ -1405,14 +1428,17 @@ int main(int argc, char *argv[]) {
 			if(drefs[i].sym && drefs[i].obj != INT_MAX) {
 				bfd_vma v = bfd_asymbol_value(drefs[i].sym);
 				int intext = drefs[i].sym->section == text;
-				int sobj = -1;
+				int sobj = -1, slib = 0;
 				for(long k = 0; k < nisecs; k++)
 					if(isecs[k].text == intext && v >= isecs[k].start && v - isecs[k].start < isecs[k].size) {
 						sobj = isecs[k].obj;
+						slib = isecs[k].lib;
 						break;
 					}
-				if(sobj != drefs[i].obj)
+				if(sobj != drefs[i].obj) {
 					drefs[i].ext = bfd_asymbol_name(drefs[i].sym);
+					drefs[i].extlib = slib;
+				}
 			}
 		}
 		free(ob);

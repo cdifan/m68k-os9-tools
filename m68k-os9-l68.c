@@ -94,7 +94,7 @@ static const struct option options[] = {
 	{ "x", VALUE, "=<n>", "Align the execution offset to <n> (2, 4, 8, 16)", NULL, O_X, UCC },
 	{ "z", OPTVALUE, "[=<path>]", "Files and options from standard input or <path>", NULL, O_Z, C32 | UCC },
 	{ "N", OPTVALUE, "[=<name>]", "Module name after the code (bare: the default name)", NULL, O_NN, OURS },
-	{ "dialect", VALUE, "=<d>", "Library members in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's; its common symbols' places too)", NULL, O_DIALECT, OURS },
+	{ "dialect", VALUE, "=<d>", "Library members and pointer tables in the order of ucc (Ultra C's l68, default) or c32 (C 3.2's: the archive's)", NULL, O_DIALECT, OURS },
 	{ "namepad", VALUE, "=<hex>", "The byte after an odd-length module name (default 00)", NULL, O_NAMEPAD, OURS },
 	{ "dbgversion", VALUE, "=<n>", "With -g, the .dbg's word after the magic (default: 3 Ultra C style, 0 C 3.2's)", NULL, O_DBGVERSION, OURS },
 	{ "stbnamepad", VALUE, "=<hex>", "With -g, the byte after the symbol module's odd-length name (default 00)", NULL, O_STBNAMEPAD, OURS },
@@ -954,11 +954,18 @@ static char *write_script(const char *base, long align, int plain, const char *d
 		fprintf(fp, "    %s%s%s :%s {", outs[i].sect, align > 2 && files != NULL ? " ." : "", outs[i].flags, sub);
 		if (i == 0 && commons != NULL) {
 			/* each input's vsect, then the commons it is the first to
-			 * define; the rest (libgcc's members) after them */
+			 * define, padded together for -b= as sect_inputs pads (Ultra
+			 * C's l68, measured 2026-11-05); the rest (libgcc's members)
+			 * after them */
 			for (int k = 0; k < commons->bss.n; k++) {
 				fprintf(fp, "\n        \"%s\"(.bss .bss.*)", commons->bss.v[k]);
 				if (commons->sects.v[k][0] != '\0')
 					fprintf(fp, " \"%s\"(%s)", commons->object, commons->sects.v[k]);
+				int padded = 0;
+				for (int f = 0; files != NULL && align > 2 && f < files->n && !padded; f++)
+					padded = strcmp(files->v[f], commons->bss.v[k]) == 0;
+				if (padded)
+					fprintf(fp, " . += (%ld - . %% %ld) %% %ld;", align, align, align);
 			}
 			fprintf(fp, "\n        *(.bss .bss.*)\n   ");
 		} else
@@ -1020,18 +1027,20 @@ static int cinput_find(const struct cinput *in, int n, const char *key)
 	return -1;
 }
 
-/* C 3.2's l68 allocates the common symbols (ROF definitions of type 0x0100,
- * their value the size: what the ROF-writing GCCs of the 1990s made of C's
- * tentative definitions and C++'s static members) with the uninitialized
- * data of the first psect that defines them, in link order: each psect's
- * block is its vsect, then the commons it is the first to define, in its
- * order of definitions, each at the next multiple of 4 from the block's
- * start; the block ends at the last one's end, rounded up to even (measured
- * 2026-11-05 on the map, l68 -m -s, of a 301-psect program: every psect as
- * that; and on small links). Not copied: when a psect has a common that a
- * later psect defines, l68 puts its other new commons at the block's offset
- * 1, over its vsect, and the block keeps the vsect's size (a bug: they share
- * storage). GNU ld puts all commons after all .bss instead. Here: a probe link
+/* Both Microware linkers allocate the common symbols (ROF definitions of type
+ * 0x0100, their value the size: what the ROF-writing GCCs of the 1990s made
+ * of C's tentative definitions and C++'s static members) with the
+ * uninitialized data of the first psect that defines them, in link order:
+ * each psect's block is its vsect, then the commons it is the first to
+ * define, in its order of definitions, each at the next multiple of 4 from
+ * the block's start; the block ends at the last one's end, rounded up to
+ * even (measured 2026-11-05: C 3.2's l68 on the map, l68 -m -s, of a
+ * 301-psect program, every psect as that, and on small links; Ultra C's on
+ * that program's link, byte-identical, and on small links, also with -b=4).
+ * Not copied: when a psect has a common that a later psect defines, C 3.2's
+ * l68 puts its other new commons at the block's offset 1, over its vsect,
+ * and the block keeps the vsect's size (a bug: they share storage; Ultra C's
+ * doesn't). GNU ld puts all commons after all .bss instead. Here: a probe link
  * (LINK, the full command, with its map in MAP) gives the inputs in link order
  * and their .bss sizes, nm their commons in their order; an assembled object
  * defines each common once, in a section per input, padded so, and the script
@@ -1382,7 +1391,6 @@ int main(int argc, char **argv)
 	int biased = !st.raw && (type == 0x01 || type == 0x0B);
 	args_add(&l.link, write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw,
 				       pad_each ? &files : NULL, NULL));
-	args_free(&files);
 	for (int i = 0; pad_each && i < nroot_members; i++)
 		add_input(&l.link, members_path(i));
 	for (int i = 0; !pad_each && i < objects.n; i++) {
@@ -1402,17 +1410,19 @@ int main(int argc, char **argv)
 	args_free(&libs);
 	args_free(&order);
 	args_add(&l.link, "-lgcc");
-	/* C 3.2's placement of common symbols (Ultra C's l68 not measured yet):
-	 * the script again, with them, and their definitions as an input */
+	/* The Microware linkers' placement of common symbols (Ultra C's l68's
+	 * the same: measured 2026-11-05): the script again, with them, and
+	 * their definitions as an input */
 	struct commons commons = { 0 };
-	if (st.c32 && !os9_dry_run && place_commons(&l.link, map, &commons) == 0) {
+	if (!os9_dry_run && place_commons(&l.link, map, &commons) == 0) {
 		free(l.link.v[script_arg]);
 		l.link.v[script_arg] = write_script(base, st.align, !st.ansi, biased ? "-0x8000" : "0", st.raw,
-						    NULL, &commons);
+						    pad_each ? &files : NULL, &commons);
 		add_input(&l.link, commons.object);
 		args_free(&commons.bss);
 		args_free(&commons.sects);
 	}
+	args_free(&files);
 	free(base);
 
 	char *elf = concat(output, ".elf", NULL);

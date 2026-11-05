@@ -30,7 +30,7 @@ suitably linked ELF file (see "The ELF input").
 | `--entry=none` | no entry point, whatever `__os9_entry` says |
 | `--name-pad-zeros=N` | N zero bytes after the name (as `l68 -x=` pads a trap library) |
 | `--ld-map=FILE` | GNU `ld`'s map of the link, for the order of the pointer tables and the jump table |
-| `--ld-ranks=FILE` | lines `RANK PATH`: the rank of each input (the `-l=` library it came from, numbered from 1; others 0), for the jump table's order |
+| `--ld-ranks=FILE` | lines `RANK PATH`: the rank of each input (the `-l=` library it came from, numbered from 1; others 0), for the jump table's order and Ultra C's order of the pointer tables |
 | `--name-pad-byte=HH` | the byte after an odd-length module name (default 00) |
 | `--stb-name-pad-byte=HH` | the same after the symbol module's name |
 | `--irefs-pad=HEX` | bytes after the pointer tables, before the CRC |
