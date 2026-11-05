@@ -1027,6 +1027,33 @@ static int cinput_find(const struct cinput *in, int n, const char *key)
 	return -1;
 }
 
+/* Whether the inputs of LINK (the full command; of archives all members) may
+ * have common symbols: nm on all of them at once. If nm fails, yes. */
+static int any_commons(const struct args *link)
+{
+	struct args argv = { 0 };
+	args_add(&argv, NM);
+	args_add(&argv, "-p");
+	for (int i = 0; i < link->n; i++) {
+		if (strcmp(link->v[i], "-T") == 0)
+			i++;
+		else if (link->v[i][0] != '-')
+			args_add(&argv, link->v[i]);
+	}
+	char *out = os9_temp(".nm");
+	int status = os9_run(&argv, out, os9_temp(".log"));
+	args_free(&argv);
+	FILE *fp = status == 0 ? fopen(out, "r") : NULL;
+	if (fp == NULL)
+		return 1;
+	char line[4096], fld[3][1024];
+	int found = 0;
+	while (!found && fgets(line, sizeof line, fp) != NULL)
+		found = sscanf(line, "%1023s %1023s %1023s", fld[0], fld[1], fld[2]) == 3 && strcmp(fld[1], "C") == 0;
+	fclose(fp);
+	return found;
+}
+
 /* Both Microware linkers allocate the common symbols (ROF definitions of type
  * 0x0100, their value the size: what the ROF-writing GCCs of the 1990s made
  * of C's tentative definitions and C++'s static members) with the
@@ -1049,6 +1076,8 @@ static int cinput_find(const struct cinput *in, int n, const char *key)
  * Returns 0 with C filled in, or -1 when there are no commons. */
 static int place_commons(const struct args *link, const char *map, struct commons *c)
 {
+	if (!any_commons(link))
+		return -1;
 	struct args argv = { 0 };
 	args_add(&argv, GCC);
 	args_append(&argv, link);

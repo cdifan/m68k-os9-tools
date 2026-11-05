@@ -70,3 +70,17 @@ link b ca.o cb.o cc.o cd.o -b=4 -t=os9_68k -n=b
 linked b
 has_bytes b "41ee8000 41ee8004 41ee8008 41ee801c 41ee8018 41ee8020 41ee8028 4e75"
 has_bytes b "41ee8024 4e75"
+# the first link and nm's reading of each object only with commons among the inputs: this link
+# has them, one without links once
+link v ca.o cb.o cc.o cd.o -v -n=v
+linked v
+[ "$(grep -c -- '-Wl,-Map=' v.log)" = 2 ] || why="$why with commons: $(grep -c -- '-Wl,-Map=' v.log) links;"
+src s <<'EOF2'
+ psect s,$101,$8000,1,0,e
+e rts
+ ends
+EOF2
+asm s
+link n s.o -v -n=n
+linked n
+[ "$(grep -c -- '-Wl,-Map=' n.log)" = 1 ] || why="$why without commons: $(grep -c -- '-Wl,-Map=' n.log) links;"
