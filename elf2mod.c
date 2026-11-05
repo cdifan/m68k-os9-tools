@@ -479,7 +479,36 @@ typedef struct coderef {
 	uint32_t addr; // in .text
 	int type;      // R_68K_32, R_68K_16, R_68K_8
 	bfd_vma value; // the label's VMA plus the addend
+	const char *name; // the symbol's
 } CodeRef;
+
+// Whether the 16-bit field at P, at offset ADDR in the code, looks like the
+// displacement of a (d16,A6) operand. A code label there is a mistake, not a
+// dc.w: the data area doesn't hold it, and the field gets its module offset.
+// Read-only data defined in one object and addressed as data from another
+// comes out so. Going by the words before the field, so a data word that
+// looks like such an instruction also matches: hence only a warning.
+static int a6_displacement(const unsigned char *p, uint32_t addr) {
+	if(addr & 1) return 0;
+	unsigned w2 = addr >= 2 ? p[-2] << 8 | p[-1] : 0;
+	unsigned w4 = addr >= 4 ? p[-4] << 8 | p[-3] : 0;
+	unsigned w6 = addr >= 6 ? p[-6] << 8 | p[-5] : 0;
+	const unsigned d16a6 = 0x2E; // mode 5, register 6
+	if((w2 & 0x3F) == d16a6) {
+		switch(w2 >> 12) {
+		case 1: case 2: case 3: // move, source
+		case 4:                 // lea, pea, jsr, jmp, tst, clr, ...
+		case 8: case 9: case 0xB: case 0xC: case 0xD: // or, sub, cmp, and, add
+			return 1;
+		}
+	}
+	// move, destination, with a source without extension words
+	if(w2 >> 12 >= 1 && w2 >> 12 <= 3 && (w2 & 0x0FC0) == 0x0D40) return 1;
+	// after an immediate: a word (cmpi.b, btst, ...) or a long (cmpi.l)
+	if(w4 >> 12 == 0 && (w4 & 0x3F) == d16a6 && (w4 & 0xC0) != 0x80 && !(w4 & 0x0100)) return 1;
+	if(w6 >> 12 == 0 && (w6 & 0x3F) == d16a6 && (w6 & 0xC0) == 0x80 && !(w6 & 0x0100)) return 1;
+	return 0;
+}
 
 size_t make_idrefs(Vec *vec, IdRef *refs, size_t nrefs, int for_text) {
 	size_t iblock = vec_space(vec, 4);
@@ -1005,7 +1034,8 @@ int main(int argc, char *argv[]) {
 		                                || rel->howto->type == 3 /* R_68K_8 */)) {
 			// a code label's module offset (see CodeRef), checked when set
 			crefs = realloc(crefs, (ncrefs + 1) * sizeof(CodeRef));
-			crefs[ncrefs++] = (CodeRef){ rel->address, rel->howto->type, bfd_asymbol_value(rel->sym_ptr_ptr[0]) + rel->addend };
+			crefs[ncrefs++] = (CodeRef){ rel->address, rel->howto->type, bfd_asymbol_value(rel->sym_ptr_ptr[0]) + rel->addend,
+			                             bfd_asymbol_name(rel->sym_ptr_ptr[0]) };
 			continue;
 		}
 		int constant =bfd_is_abs_section(ssec) || ssec == data || ssec == bss || (ssec && (ssec == rdata || ssec == rbss));
@@ -1135,6 +1165,13 @@ int main(int argc, char *argv[]) {
 	if(!bfd_get_section_contents(abfd, text, vec->buf + itext, 0, tsize)) {
 		bfd_perror("could not read .text");
 		return 1;
+	}
+	// Before any field changes: the words before them are the original ones.
+	for(size_t i = 0; i < ncrefs; i++) {
+		CodeRef *c = &crefs[i];
+		if(c->type == 2 /* R_68K_16 */ && a6_displacement((unsigned char*)vec->buf + itext + c->addr, c->addr)) {
+			printf("warning: %s(a6) at .text+%08x: a code label as an a6-relative operand\n", c->name, c->addr);
+		}
 	}
 	// Absolute references from the code to code labels: their module offsets.
 	for(size_t i = 0; i < ncrefs; i++) {
