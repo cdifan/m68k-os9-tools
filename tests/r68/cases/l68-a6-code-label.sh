@@ -3,6 +3,7 @@
 # also where the labels before it read like an instruction, and neither does a code label as an
 # immediate.
 # fixed: 216de38 2026-11-06 elf2mod: warn about a code label as an a6-relative operand
+# fixed: f6dcab1 2026-11-06 elf2mod: the a6 warning sees relocated words and more reads
 src ca <<'EOF'
  psect ca,$101,$8000,1,0,e
 e pea tab(a6)
