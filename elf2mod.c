@@ -482,17 +482,31 @@ typedef struct coderef {
 	const char *name; // the symbol's
 } CodeRef;
 
-// Whether the 16-bit field at P, at offset ADDR in the code, looks like the
+// The word in the code BACK bytes before ADDR, as a candidate for an opcode: 0
+// (no instruction with a memory operand) outside the code, and where a
+// relocation applies, which no opcode word has: in a table of dc.w label the
+// neighbours are label offsets, and $006E or $00AE read like ori on (d16,A6).
+static unsigned opcode_word(const unsigned char *text, const unsigned char *relocated, uint32_t addr, unsigned back) {
+	if(addr < back) return 0;
+	addr -= back;
+	if(relocated[addr] || relocated[addr + 1]) return 0;
+	return text[addr] << 8 | text[addr + 1];
+}
+
+// Whether the 16-bit field at offset ADDR in the code looks like the
 // displacement of a (d16,A6) operand. A code label there is a mistake, not a
 // dc.w: the data area doesn't hold it, and the field gets its module offset.
 // Read-only data defined in one object and addressed as data from another
-// comes out so. Going by the words before the field, so a data word that
-// looks like such an instruction also matches: hence only a warning.
-static int a6_displacement(const unsigned char *p, uint32_t addr) {
+// comes out so, and that is only read: of the instructions with words between
+// the opcode and the field, those that write aren't looked for, as they would
+// be a mistake anyway and each form more matches more data. Going by the words
+// before the field, so plain data words that look like such an instruction
+// also match: hence only a warning.
+static int a6_displacement(const unsigned char *text, const unsigned char *relocated, uint32_t addr) {
 	if(addr & 1) return 0;
-	unsigned w2 = addr >= 2 ? p[-2] << 8 | p[-1] : 0;
-	unsigned w4 = addr >= 4 ? p[-4] << 8 | p[-3] : 0;
-	unsigned w6 = addr >= 6 ? p[-6] << 8 | p[-5] : 0;
+	unsigned w2 = opcode_word(text, relocated, addr, 2);
+	unsigned w4 = opcode_word(text, relocated, addr, 4);
+	unsigned w6 = opcode_word(text, relocated, addr, 6);
 	const unsigned d16a6 = 0x2E; // mode 5, register 6
 	if((w2 & 0x3F) == d16a6) {
 		switch(w2 >> 12) {
@@ -503,10 +517,18 @@ static int a6_displacement(const unsigned char *p, uint32_t addr) {
 		}
 	}
 	// move, destination, with a source without extension words
-	if(w2 >> 12 >= 1 && w2 >> 12 <= 3 && (w2 & 0x0FC0) == 0x0D40) return 1;
-	// after an immediate: a word (cmpi.b, btst, ...) or a long (cmpi.l)
-	if(w4 >> 12 == 0 && (w4 & 0x3F) == d16a6 && (w4 & 0xC0) != 0x80 && !(w4 & 0x0100)) return 1;
-	if(w6 >> 12 == 0 && (w6 & 0x3F) == d16a6 && (w6 & 0xC0) == 0x80 && !(w6 & 0x0100)) return 1;
+	if(w2 >> 12 >= 1 && w2 >> 12 <= 3 && (w2 & 0x0FC0) == 0x0D40 && (w2 & 0x38) < 0x28) return 1;
+	if((w2 & 0xF1FF) == 0x012E) return 1; // btst Dn
+	if((w2 & 0xF1BF) == 0x010E) return 1; // movep to a register
+	if((w4 & 0xFFBF) == 0x4CAE) return 1; // movem to registers, after the mask
+	// after an immediate: a word (cmpi.b, btst, bclr, ...) or a long (cmpi.l);
+	// the bit instructions take bits 7-6 for which one, not for the size
+	for(int back = 4; back <= 6; back += 2) {
+		unsigned w = back == 4 ? w4 : w6;
+		int bit = (w & 0x0F00) == 0x0800;
+		int lng = !bit && (w & 0xC0) == 0x80;
+		if(w >> 12 == 0 && (w & 0x3F) == d16a6 && !(w & 0x0100) && lng == (back == 6)) return 1;
+	}
 	return 0;
 }
 
@@ -1167,12 +1189,18 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 	// Before any field changes: the words before them are the original ones.
+	unsigned char *relocated = calloc(tsize + 2, 1); // by byte: a relocation applies
+	for(long i = 0; i < ntrels; i++) {
+		size_t n = bfd_get_reloc_size(trels[i]->howto);
+		for(size_t k = 0; k < n && trels[i]->address + k < tsize; k++) relocated[trels[i]->address + k] = 1;
+	}
 	for(size_t i = 0; i < ncrefs; i++) {
 		CodeRef *c = &crefs[i];
-		if(c->type == 2 /* R_68K_16 */ && a6_displacement((unsigned char*)vec->buf + itext + c->addr, c->addr)) {
+		if(c->type == 2 /* R_68K_16 */ && a6_displacement((unsigned char*)vec->buf + itext, relocated, c->addr)) {
 			printf("warning: %s(a6) at .text+%08x: a code label as an a6-relative operand\n", c->name, c->addr);
 		}
 	}
+	free(relocated);
 	// Absolute references from the code to code labels: their module offsets.
 	for(size_t i = 0; i < ncrefs; i++) {
 		CodeRef *c = &crefs[i];
